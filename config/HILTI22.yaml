@@ -31,10 +31,10 @@ time_offset:
 preprocess:
   hilti_en: true
   point_filter_num: 1
-  filter_size_surf: 0.25 # 0.2
+  filter_size_surf: 0.1 # 0.2
   lidar_type: 5 # HesaiXT32
   scan_line: 32
-  blind: 0.6 # 0.1 0.3
+  blind: 0.6 # 0.1 0.3 0.6
  
 vio:
   max_iterations: 5
@@ -62,18 +62,20 @@ lio:
   dept_err: 0.02
   beam_err: 0.05
   min_eigen_value: 0.0001 # 0.0025
-  voxel_size: 1
+  voxel_size: 0.4
   max_layer: 2
-  max_points_num: 64
+  max_points_num: 100
   layer_init_num: [5, 5, 5, 5, 5]
-  capacity: 100000  # LRU缓存容量, 越大占用内存越多 (0 = 禁用LRU缓存)
+  capacity: 0  # LRU缓存容量, 越大占用内存越多 (0 = 禁用LRU缓存)
   rf_enhance_en: true
  
 # Pillar Voxel 参数配置
 pillar_voxel:
   pillar_voxel_en: true
-  min_adjacent_num: 2      # 相邻地面体素数量阈值
+  min_adjacent_num: 3      # 相邻地面体素数量阈值
   elevation_axis: "-z"  # 可选值: "x", "-x", "y", "-y", "z", "-z"
+  ground_height_angle_check_en: true  # 是否启用基于高度角的地面点过滤
+  ground_height_angle_threshold: 5.0  # 高度角阈值（度），超过此阈值不认为是地面点
 
 local_map: 
   map_sliding_en: false
@@ -81,12 +83,12 @@ local_map:
   sliding_thresh: 8
 
 uav:
-  imu_rate_odom: false
+  imu_rate_odom: true
   gravity_align_en: false
 
 publish:
-  dense_map_en: true
-  pub_effect_en: true
+  dense_map_en: false
+  pub_effect_en: false
   pub_plane_en: false
   pub_body_en: false  # 是否发布body坐标系下的点云
   pub_voxel_points_en: true
@@ -94,8 +96,8 @@ publish:
   blind_rgb_points: 0.0
 
 evo:
-  seq_name: "exp02_construction_multilevel"
-  pose_output_en: true
+  seq_name: "exp21_outside_building"
+  pose_output_en: false
 
 lidar_save:
   save_en: false

@@ -2,7 +2,7 @@ common:
   img_topic: "/left/image_raw"
   lid_topic: "/os1_cloud_node1/points"
   imu_topic: "/imu/imu"
-  img_en: 1
+  img_en: 0
   lidar_en: 1
   ros_driver_bug_fix: false
 
@@ -64,7 +64,7 @@ lio:
 pillar_voxel:
   pillar_voxel_en: true
   min_adjacent_num: 2      # 相邻地面体素数量阈值
-  elevation_axis: "z"  # 可选值: "x", "-x", "y", "-y", "z", "-z"
+  elevation_axis: "-z"  # 可选值: "x", "-x", "y", "-y", "z", "-z"
 
 local_map: 
   map_sliding_en: false
@@ -73,7 +73,7 @@ local_map:
 
 uav:
   imu_rate_odom: true
-  gravity_align_en: true
+  gravity_align_en: false
 
 publish:
   dense_map_en: true

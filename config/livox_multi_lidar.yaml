@@ -59,15 +59,17 @@ lio:
   voxel_size: 1 # 体素底图尺寸
   max_layer: 2
   max_points_num: 64
-  layer_init_num: [1, 1, 1, 1, 1]
+  layer_init_num: [5, 5, 5, 5, 5]
   sigma_num: 3
-  capacity: 100000  # LRU缓存容量, 越大占用内存越多 (0 = 禁用LRU缓存)
+  capacity: 0  # LRU缓存容量, 越大占用内存越多 (0 = 禁用LRU缓存)
 
 # Pillar Voxel 参数配置
 pillar_voxel:
   pillar_voxel_en: true
-  min_adjacent_num: 2     # 相邻地面体素数量阈值
+  min_adjacent_num: 3     # 相邻地面体素数量阈值
   elevation_axis: "z"  # 可选值: "x", "-x", "y", "-y", "z", "-z"
+  ground_height_angle_check_en: true  # 是否启用基于高度角的地面点过滤
+  ground_height_angle_threshold: 5.0  # 高度角阈值（度），超过此阈值不认为是地面点
 
 local_map: 
   map_sliding_en: false

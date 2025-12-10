@@ -67,6 +67,8 @@ void loadVoxelConfig(ros::NodeHandle &nh, VoxelMapConfig &voxel_config)
   nh.param<std::string>("pillar_voxel/elevation_axis", voxel_config.elevation_axis_, "z");
   nh.param<bool>("pillar_voxel/pillar_voxel_en", voxel_config.pillar_voxel_en_, false);
   nh.param<int>("pillar_voxel/min_adjacent_num", voxel_config.min_adjacent_num_, 3);
+  nh.param<bool>("pillar_voxel/ground_height_angle_check_en", voxel_config.ground_height_angle_check_en_, false);
+  nh.param<double>("pillar_voxel/ground_height_angle_threshold", voxel_config.ground_height_angle_threshold_, 30.0);
 
   nh.param<bool>("lio/rf_enhance_en", voxel_config.rf_enhance_en_, false);
 }
@@ -689,37 +691,6 @@ void VoxelMapManager::UpdateGroundFlagForColumn(const VOXEL_COLUMN_LOCATION &col
   // 只有当柱子中有多于一个体素时，才进行地面体素标记
   if (column_voxels.size() > 1)
   { 
-    // // 步骤1：找到最低的体素
-    // auto bottom_voxel = column_voxels.begin()->second;
-    // for (auto &voxel_pair : column_voxels) {
-    //   double current_height = voxel_pair.second->voxel_center_[elevation_axis_index_] * elevation_multiplier_;
-    //   double bottom_height = bottom_voxel->voxel_center_[elevation_axis_index_] * elevation_multiplier_;
-
-    //   if (current_height < bottom_height) {
-    //     bottom_voxel = voxel_pair.second;
-    //   }
-    // }
-
-    // // 步骤2：检查最低体素上方是否有其他体素
-    // double bottom_height = bottom_voxel->voxel_center_[elevation_axis_index_] * elevation_multiplier_;
-    // bool has_upper_voxel = false;
-
-    // for (auto &voxel_pair : column_voxels) {
-    //   if (voxel_pair.second == bottom_voxel) continue;
-
-    //   double current_height = voxel_pair.second->voxel_center_[elevation_axis_index_] * elevation_multiplier_;
-
-    //   if (current_height > bottom_height && current_height <= bottom_height + config_setting_.max_voxel_size_ / (2 ^ config_setting_.max_layer_)) {
-    //     has_upper_voxel = true;
-    //     break;
-    //   }
-    // }
-
-    // // 步骤3：根据结果标记
-    // if (!has_upper_voxel) {
-    //   bottom_voxel->is_ground_voxel_ = true;
-    // }
-
     // 找到指定轴上最小值的体素作为地面体素
     auto bottom_voxel = column_voxels.begin()->second;
     bool ground_voxel = false;
@@ -731,7 +702,7 @@ void VoxelMapManager::UpdateGroundFlagForColumn(const VOXEL_COLUMN_LOCATION &col
       const double bottom_height = bottom_voxel->voxel_center_[elevation_axis_index_] * elevation_multiplier_;
       // double sensor_height = state_.pos_end[elevation_axis_index_] * elevation_multiplier_;
 
-      if (current_height < bottom_height) {
+      if (current_height <= bottom_height) {
         bottom_voxel = voxel_pair.second;
         ground_voxel = true;
 
@@ -750,6 +721,7 @@ void VoxelMapManager::UpdateGroundFlagForColumn(const VOXEL_COLUMN_LOCATION &col
   else {// 对于单个体素的情况
     auto single_voxel = column_voxels.begin()->second;
     single_voxel->is_isolated_voxel_ = true;
+    single_voxel->is_ground_voxel_ = true;
   }
 }
 
@@ -1431,6 +1403,37 @@ void VoxelMapManager::clearMemOutOfMap(const int& x_max,const int& x_min,const i
 int VoxelMapManager::hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const VOXEL_LOCATION &current_pos)
 {
   int adjacent_ground_count = 0;
+
+  // 如果启用了高度角检查，先检查当前体素的高度角
+  if (config_setting_.ground_height_angle_check_en_) {
+    // 计算传感器到当前体素中心的高度角
+    double sensor_height = state_.pos_end[elevation_axis_index_] * elevation_multiplier_;
+    double voxel_height = current_octo->voxel_center_[elevation_axis_index_] * elevation_multiplier_;
+
+    // 计算水平距离（忽略高程轴）
+    double horizontal_distance = 0.0;
+    for (int i = 0; i < 3; i++) {
+      if (i != elevation_axis_index_) {
+        double diff = current_octo->voxel_center_[i] - state_.pos_end[i];
+        horizontal_distance += diff * diff;
+      }
+    }
+    horizontal_distance = sqrt(horizontal_distance);
+
+    // 计算高度差
+    double height_diff = voxel_height - sensor_height;
+
+    // 计算高度角（度）
+    double height_angle = 0.0;
+    if (horizontal_distance > 1e-6) { // 避免除零
+      height_angle = atan(height_diff / horizontal_distance) * 180.0 / M_PI;
+    }
+
+    // 检查高度角是否超过阈值，如果超过直接返回0
+    if (height_angle > config_setting_.ground_height_angle_threshold_) {
+      return 0;
+    }
+  }
 
   for (const auto& voxel_offset : precomputed_neighbor_offsets_) {
     

@@ -59,6 +59,10 @@ typedef struct VoxelMapConfig
   // config for pillow voxel
   bool pillar_voxel_en_;
   int min_adjacent_num_;  // 相邻地面体素数量阈值
+  
+  // config for ground voxel height angle filtering
+  bool ground_height_angle_check_en_;  // 是否启用基于高度角的地面点过滤
+  double ground_height_angle_threshold_;  // 高度角阈值（度），超过此阈值不认为是地面点
 
   int capacity;
 
