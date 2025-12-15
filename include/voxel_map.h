@@ -59,7 +59,8 @@ typedef struct VoxelMapConfig
   // config for pillow voxel
   bool pillar_voxel_en_;
   int min_adjacent_num_;  // 相邻地面体素数量阈值
-  
+  int pillar_max_capacity_;  // 每个体素柱最大容量限制
+
   // config for ground voxel height angle filtering
   bool ground_height_angle_check_en_;  // 是否启用基于高度角的地面点过滤
   double ground_height_angle_threshold_;  // 高度角阈值（度），超过此阈值不认为是地面点
@@ -340,6 +341,10 @@ private:
   void RegisterVoxelToColumn(const VOXEL_LOCATION &position, VoxelOctoTree *voxel);
   void UnregisterVoxelFromColumn(const VOXEL_LOCATION &position);
   void UpdateGroundFlagForColumn(const VOXEL_COLUMN_LOCATION &column_key, std::map<int64_t, VoxelOctoTree *> &column_voxels);
+
+  // 体素柱容量管理
+  bool ManagePillarCapacity(const VOXEL_LOCATION &position, VoxelOctoTree *voxel);
+  void RemoveFirstNonGroundVoxel(const VOXEL_COLUMN_LOCATION &column_key, std::map<int64_t, VoxelOctoTree *> &column_voxels);
 
   int hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const VOXEL_LOCATION &current_pos);
 

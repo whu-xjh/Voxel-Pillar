@@ -21,7 +21,7 @@ Preprocess::Preprocess() : feature_enabled(0), lidar_type(AVIA), blind(0.01), po
   N_SCANS = 6;
   group_size = 8;
   disA = 0.01;
-  disA = 0.1; // B?
+  disB = 0.1; // B?
   p2l_ratio = 225;
   limit_maxmid = 6.25;
   limit_midmin = 6.25;

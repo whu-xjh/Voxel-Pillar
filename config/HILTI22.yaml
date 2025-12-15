@@ -28,10 +28,10 @@ time_offset:
   img_time_offset: 0.0
   exposure_time_init: 0.0
 
-preprocess:
+preprocess: 
   hilti_en: true
   point_filter_num: 1
-  filter_size_surf: 0.1 # 0.2
+  filter_size_surf: 0.2 # 0.2
   lidar_type: 5 # HesaiXT32
   scan_line: 32
   blind: 0.6 # 0.1 0.3 0.6
@@ -73,6 +73,7 @@ lio:
 pillar_voxel:
   pillar_voxel_en: true
   min_adjacent_num: 3      # 相邻地面体素数量阈值
+  pillar_max_capacity: 10  # 每个体素柱最大容量限制（体素数量）
   elevation_axis: "-z"  # 可选值: "x", "-x", "y", "-y", "z", "-z"
   ground_height_angle_check_en: true  # 是否启用基于高度角的地面点过滤
   ground_height_angle_threshold: 5.0  # 高度角阈值（度），超过此阈值不认为是地面点
@@ -97,7 +98,7 @@ publish:
 
 evo:
   seq_name: "exp21_outside_building"
-  pose_output_en: false
+  pose_output_en: true
 
 lidar_save:
   save_en: false

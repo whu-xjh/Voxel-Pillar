@@ -67,6 +67,7 @@ void loadVoxelConfig(ros::NodeHandle &nh, VoxelMapConfig &voxel_config)
   nh.param<std::string>("pillar_voxel/elevation_axis", voxel_config.elevation_axis_, "z");
   nh.param<bool>("pillar_voxel/pillar_voxel_en", voxel_config.pillar_voxel_en_, false);
   nh.param<int>("pillar_voxel/min_adjacent_num", voxel_config.min_adjacent_num_, 3);
+  nh.param<int>("pillar_voxel/pillar_max_capacity", voxel_config.pillar_max_capacity_, 20);
   nh.param<bool>("pillar_voxel/ground_height_angle_check_en", voxel_config.ground_height_angle_check_en_, false);
   nh.param<double>("pillar_voxel/ground_height_angle_threshold", voxel_config.ground_height_angle_threshold_, 30.0);
 
@@ -745,6 +746,11 @@ void VoxelMapManager::RegisterVoxelToColumn(const VOXEL_LOCATION &position, Voxe
   column_voxels[elevation_key] = voxel;
 
   UpdateGroundFlagForColumn(column_key, column_voxels);
+
+  // 体素柱容量管理
+  if (config_setting_.pillar_max_capacity_ > 0 && !voxel->is_isolated_voxel_) {
+    ManagePillarCapacity(position, voxel);
+  }
 }
 
 void VoxelMapManager::UnregisterVoxelFromColumn(const VOXEL_LOCATION &position)
@@ -1456,4 +1462,73 @@ int VoxelMapManager::hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const V
   }
 
   return adjacent_ground_count; // 返回相邻的地面体素数量
+}
+
+// 体素柱容量管理函数
+bool VoxelMapManager::ManagePillarCapacity(const VOXEL_LOCATION &position, VoxelOctoTree *voxel)
+{
+  if (!config_setting_.pillar_voxel_en_ || config_setting_.pillar_max_capacity_ <= 0) {
+    return true; // 未启用容量限制
+  }
+
+  VOXEL_COLUMN_LOCATION column_key = GetColumnLocation(position);
+  auto column_iter = column_voxels_.find(column_key);
+  if (column_iter == column_voxels_.end()) {
+    return true; // 体素柱不存在，无需管理
+  }
+
+  auto &column_voxels = column_iter->second;
+
+  // 检查体素柱是否超过容量限制
+  if (column_voxels.size() > config_setting_.pillar_max_capacity_) {
+    // 超出容量，移除第一个非地面体素
+    RemoveFirstNonGroundVoxel(column_key, column_voxels);
+    return false; // 表示进行了容量管理
+  }
+
+  return true; // 容量正常
+}
+
+void VoxelMapManager::RemoveFirstNonGroundVoxel(const VOXEL_COLUMN_LOCATION &column_key, std::map<int64_t, VoxelOctoTree *> &column_voxels)
+{
+  // 遍历体素柱，寻找第一个非地面体素
+  for (auto it = column_voxels.begin(); it != column_voxels.end(); ++it) {
+    VoxelOctoTree *voxel = it->second;
+    if (voxel != nullptr && !voxel->is_ground_voxel_) {
+      // 找到第一个非地面体素，需要将其从整个系统中移除
+      int64_t elevation_key = it->first;
+
+      // 构建体素的完整位置信息
+      VOXEL_LOCATION voxel_loc;
+      if (elevation_axis_index_ == 0) {
+        voxel_loc = VOXEL_LOCATION(elevation_key, column_key.axis2, column_key.axis1);
+      } else if (elevation_axis_index_ == 1) {
+        voxel_loc = VOXEL_LOCATION(column_key.axis1, elevation_key, column_key.axis2);
+      } else {
+        voxel_loc = VOXEL_LOCATION(column_key.axis1, column_key.axis2, elevation_key);
+      }
+
+      // 从主体素地图中移除该体素
+      auto voxel_map_iter = voxel_map_.find(voxel_loc);
+      if (voxel_map_iter != voxel_map_.end()) {
+        // 从LRU缓存中移除
+        auto cache_iter = voxel_map_iter->second;
+        if (cache_iter != voxel_map_cache_.end()) {
+          voxel_map_cache_.erase(cache_iter);
+        }
+
+        // 删除体素对象
+        delete voxel_map_iter->second->second;
+        voxel_map_.erase(voxel_map_iter);
+      }
+
+      // 从体素柱中移除
+      column_voxels.erase(it);
+
+      // 重新更新地面标志
+      UpdateGroundFlagForColumn(column_key, column_voxels);
+
+      break; // 只移除一个非地面体素后就退出
+    }
+  }
 }
