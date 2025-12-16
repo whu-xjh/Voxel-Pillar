@@ -623,174 +623,6 @@ void VoxelMapManager::TransformLidar(const Eigen::Matrix3d rot, const Eigen::Vec
   }
 }
 
-// 根据高程方向计算柱的位置
-VOXEL_COLUMN_LOCATION VoxelMapManager::GetColumnLocation(const VOXEL_LOCATION &position) const
-{
-  int64_t axis1, axis2;
-
-  // 根据高程方向选择两个非高程轴作为柱的坐标
-  if (elevation_axis_index_ == 0) { // 高程方向是x轴，柱由y,z组成
-    axis1 = position.y;
-    axis2 = position.z;
-  } else if (elevation_axis_index_ == 1) { // 高程方向是y轴，柱由x,z组成
-    axis1 = position.x;
-    axis2 = position.z;
-  } else { // 高程方向是z轴，柱由x,y组成
-    axis1 = position.x;
-    axis2 = position.y;
-  }
-
-  return VOXEL_COLUMN_LOCATION(axis1, axis2);
-}
-
-void VoxelMapManager::initHorizontalNeighborOffsets()
-{
-  precomputed_neighbor_offsets_.clear();
-
-  // 8邻域偏移量 (排除中心点)
-  const std::vector<std::pair<int, int>> all_offsets = {
-    {-1, -1}, {-1, 0}, {-1, 1},
-    {0, -1},           {0, 1},
-    {1, -1},  {1, 0},  {1, 1}
-  };
-
-  // 根据高程轴方向预计算完整的3D偏移量
-  precomputed_neighbor_offsets_.reserve(8);
-  for (const auto& offset : all_offsets) {
-    VOXEL_LOCATION voxel_offset;
-    switch (elevation_axis_index_) {
-      case 0: // 高程方向是x轴，水平面是yz平面
-        voxel_offset.x = 0;
-        voxel_offset.y = offset.first;
-        voxel_offset.z = offset.second;
-        break;
-      case 1: // 高程方向是y轴，水平面是xz平面
-        voxel_offset.x = offset.first;
-        voxel_offset.y = 0;
-        voxel_offset.z = offset.second;
-        break;
-      default: // 高程方向是z轴，水平面是xy平面
-        voxel_offset.x = offset.first;
-        voxel_offset.y = offset.second;
-        voxel_offset.z = 0;
-        break;
-    }
-    precomputed_neighbor_offsets_.push_back(voxel_offset);
-  }
-}
-
-void VoxelMapManager::UpdateGroundFlagForColumn(const VOXEL_COLUMN_LOCATION &column_key,
-                                                std::map<int64_t, VoxelOctoTree *> &column_voxels)
-{
-  // 重置所有体素的地面标志
-  for (auto &voxel_pair : column_voxels)
-  {
-    voxel_pair.second->is_ground_voxel_ = false;
-    voxel_pair.second->is_isolated_voxel_ = false;
-  }
-
-  // 只有当柱子中有多于一个体素时，才进行地面体素标记
-  if (column_voxels.size() > 1)
-  { 
-    // 找到指定轴上最小值的体素作为地面体素
-    auto bottom_voxel = column_voxels.begin()->second;
-    bool ground_voxel = false;
-    bool upper_voxel = false;
-
-    for (auto &voxel_pair : column_voxels)
-    {
-      const double current_height = voxel_pair.second->voxel_center_[elevation_axis_index_] * elevation_multiplier_;
-      const double bottom_height = bottom_voxel->voxel_center_[elevation_axis_index_] * elevation_multiplier_;
-      // double sensor_height = state_.pos_end[elevation_axis_index_] * elevation_multiplier_;
-
-      if (current_height <= bottom_height) {
-        bottom_voxel = voxel_pair.second;
-        ground_voxel = true;
-
-        if (bottom_height <= current_height + config_setting_.max_voxel_size_)
-        {
-          upper_voxel = true;
-        }
-      }
-    }
-
-    // 只有找到有效地面体素并且没有上方体素时才标记
-    if (ground_voxel && !upper_voxel) {
-      bottom_voxel->is_ground_voxel_ = true;
-    }
-  }
-  else {// 对于单个体素的情况
-    auto single_voxel = column_voxels.begin()->second;
-    single_voxel->is_isolated_voxel_ = true;
-    single_voxel->is_ground_voxel_ = true;
-  }
-}
-
-void VoxelMapManager::RegisterVoxelToColumn(const VOXEL_LOCATION &position, VoxelOctoTree *voxel)
-{
-  if (voxel == nullptr)
-  {
-    return;
-  }
-  VOXEL_COLUMN_LOCATION column_key = GetColumnLocation(position);
-  auto &column_voxels = column_voxels_[column_key];
-  // 使用高程轴的坐标作为键
-  int64_t elevation_key;
-  if (elevation_axis_index_ == 0) {
-    elevation_key = position.x;
-  } else if (elevation_axis_index_ == 1) {
-    elevation_key = position.y;
-  } else {
-    elevation_key = position.z;
-  }
-  column_voxels[elevation_key] = voxel;
-
-  UpdateGroundFlagForColumn(column_key, column_voxels);
-
-  // 体素柱容量管理
-  if (config_setting_.pillar_max_capacity_ > 0 && !voxel->is_isolated_voxel_) {
-    ManagePillarCapacity(position, voxel);
-  }
-}
-
-void VoxelMapManager::UnregisterVoxelFromColumn(const VOXEL_LOCATION &position)
-{
-  VOXEL_COLUMN_LOCATION column_key = GetColumnLocation(position);
-  auto column_iter = column_voxels_.find(column_key);
-  if (column_iter == column_voxels_.end())
-  {
-    return;
-  }
-  auto &column_voxels = column_iter->second;
-  // 使用高程轴的坐标作为键
-  int64_t elevation_key;
-  if (elevation_axis_index_ == 0) {
-    elevation_key = position.x;
-  } else if (elevation_axis_index_ == 1) {
-    elevation_key = position.y;
-  } else {
-    elevation_key = position.z;
-  }
-  auto voxel_iter = column_voxels.find(elevation_key);
-  if (voxel_iter != column_voxels.end())
-  {
-    column_voxels.erase(voxel_iter);
-  }
-  if (column_voxels.empty())
-  {
-    column_voxels_.erase(column_iter);
-  }
-  else
-  {
-    UpdateGroundFlagForColumn(column_key, column_voxels);
-  }
-}
-
-void VoxelMapManager::ClearPillarVoxels()
-{
-  column_voxels_.clear();
-}
-
 // LRU
 // 仅在系统首次运行时执行，用于构建初始体素地图，为后续ICP配准提供参考
 void VoxelMapManager::BuildVoxelMap()
@@ -1464,71 +1296,193 @@ int VoxelMapManager::hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const V
   return adjacent_ground_count; // 返回相邻的地面体素数量
 }
 
+// 根据高程方向计算柱的位置
+VOXEL_COLUMN_LOCATION VoxelMapManager::GetColumnLocation(const VOXEL_LOCATION &position) const
+{
+  int64_t axis1, axis2;
+
+  // 根据高程方向选择两个非高程轴作为柱的坐标
+  if (elevation_axis_index_ == 0) { // 高程方向是x轴，柱由y,z组成
+    axis1 = position.y;
+    axis2 = position.z;
+  } else if (elevation_axis_index_ == 1) { // 高程方向是y轴，柱由x,z组成
+    axis1 = position.x;
+    axis2 = position.z;
+  } else { // 高程方向是z轴，柱由x,y组成
+    axis1 = position.x;
+    axis2 = position.y;
+  }
+
+  return VOXEL_COLUMN_LOCATION(axis1, axis2);
+}
+
+void VoxelMapManager::initHorizontalNeighborOffsets()
+{
+  precomputed_neighbor_offsets_.clear();
+
+  // 8邻域偏移量 (排除中心点)
+  const std::vector<std::pair<int, int>> all_offsets = {
+    {-1, -1}, {-1, 0}, {-1, 1},
+    {0, -1},           {0, 1},
+    {1, -1},  {1, 0},  {1, 1}
+  };
+
+  // 根据高程轴方向预计算完整的3D偏移量
+  precomputed_neighbor_offsets_.reserve(8);
+  for (const auto& offset : all_offsets) {
+    VOXEL_LOCATION voxel_offset;
+    switch (elevation_axis_index_) {
+      case 0: // 高程方向是x轴，水平面是yz平面
+        voxel_offset.x = 0;
+        voxel_offset.y = offset.first;
+        voxel_offset.z = offset.second;
+        break;
+      case 1: // 高程方向是y轴，水平面是xz平面
+        voxel_offset.x = offset.first;
+        voxel_offset.y = 0;
+        voxel_offset.z = offset.second;
+        break;
+      default: // 高程方向是z轴，水平面是xy平面
+        voxel_offset.x = offset.first;
+        voxel_offset.y = offset.second;
+        voxel_offset.z = 0;
+        break;
+    }
+    precomputed_neighbor_offsets_.push_back(voxel_offset);
+  }
+}
+
+void VoxelMapManager::RegisterVoxelToColumn(const VOXEL_LOCATION &position, VoxelOctoTree *voxel)
+{
+  if (voxel == nullptr)
+  {
+    return;
+  }
+  VOXEL_COLUMN_LOCATION column_key = GetColumnLocation(position);
+  auto &column_voxels = column_voxels_[column_key];
+  // 使用高程轴的坐标作为键
+  int64_t elevation_key;
+  if (elevation_axis_index_ == 0) {
+    elevation_key = position.x;
+  } else if (elevation_axis_index_ == 1) {
+    elevation_key = position.y;
+  } else {
+    elevation_key = position.z;
+  }
+  column_voxels[elevation_key] = voxel;
+
+  UpdateGroundFlagForColumn(column_key, column_voxels);
+
+  // 体素柱容量管理
+  if (config_setting_.pillar_max_capacity_ > 0 && !voxel->is_isolated_voxel_) {
+    ManagePillarCapacity(column_voxels, voxel);
+  }
+}
+
+void VoxelMapManager::UnregisterVoxelFromColumn(const VOXEL_LOCATION &position)
+{
+  VOXEL_COLUMN_LOCATION column_key = GetColumnLocation(position);
+  auto column_iter = column_voxels_.find(column_key);
+  if (column_iter == column_voxels_.end())
+  {
+    return;
+  }
+  auto &column_voxels = column_iter->second;
+  // 使用高程轴的坐标作为键
+  int64_t elevation_key;
+  if (elevation_axis_index_ == 0) {
+    elevation_key = position.x;
+  } else if (elevation_axis_index_ == 1) {
+    elevation_key = position.y;
+  } else {
+    elevation_key = position.z;
+  }
+  auto voxel_iter = column_voxels.find(elevation_key);
+  if (voxel_iter != column_voxels.end())
+  {
+    column_voxels.erase(voxel_iter);
+  }
+  if (column_voxels.empty())
+  {
+    column_voxels_.erase(column_iter);
+  }
+  else
+  {
+    UpdateGroundFlagForColumn(column_key, column_voxels);
+  }
+}
+
+void VoxelMapManager::ClearPillarVoxels()
+{
+  column_voxels_.clear();
+}
+
+void VoxelMapManager::UpdateGroundFlagForColumn(const VOXEL_COLUMN_LOCATION &column_key,
+                                                std::map<int64_t, VoxelOctoTree *> &column_voxels)
+{
+  // 重置所有体素的地面标志
+  for (auto &voxel_pair : column_voxels)
+  {
+    voxel_pair.second->is_ground_voxel_ = false;
+    voxel_pair.second->is_isolated_voxel_ = false;
+  }
+
+  // 只有当柱子中有多于一个体素时，才进行地面体素标记
+  if (column_voxels.size() > 1)
+  { 
+    // 找到指定轴上最小值的体素作为地面体素
+    auto bottom_voxel = column_voxels.begin()->second;
+    bool ground_voxel = false;
+    bool upper_voxel = false;
+
+    for (auto &voxel_pair : column_voxels)
+    {
+      const double current_height = voxel_pair.second->voxel_center_[elevation_axis_index_] * elevation_multiplier_;
+      const double bottom_height = bottom_voxel->voxel_center_[elevation_axis_index_] * elevation_multiplier_;
+      // double sensor_height = state_.pos_end[elevation_axis_index_] * elevation_multiplier_;
+
+      if (current_height <= bottom_height) {
+        bottom_voxel = voxel_pair.second;
+        ground_voxel = true;
+
+        if (bottom_height <= current_height + config_setting_.max_voxel_size_)
+        {
+          upper_voxel = true;
+        }
+      }
+    }
+
+    // 只有找到有效地面体素并且没有上方体素时才标记
+    if (ground_voxel && !upper_voxel) {
+      bottom_voxel->is_ground_voxel_ = true;
+    }
+  }
+  else {// 对于单个体素的情况
+    auto single_voxel = column_voxels.begin()->second;
+    single_voxel->is_isolated_voxel_ = true;
+    single_voxel->is_ground_voxel_ = true;
+  }
+}
+
 // 体素柱容量管理函数
-bool VoxelMapManager::ManagePillarCapacity(const VOXEL_LOCATION &position, VoxelOctoTree *voxel)
+bool VoxelMapManager::ManagePillarCapacity(std::map<int64_t, VoxelOctoTree *> &column_voxels, VoxelOctoTree *voxel)
 {
   if (!config_setting_.pillar_voxel_en_ || config_setting_.pillar_max_capacity_ <= 0) {
     return true; // 未启用容量限制
   }
 
-  VOXEL_COLUMN_LOCATION column_key = GetColumnLocation(position);
-  auto column_iter = column_voxels_.find(column_key);
-  if (column_iter == column_voxels_.end()) {
-    return true; // 体素柱不存在，无需管理
-  }
-
-  auto &column_voxels = column_iter->second;
-
   // 检查体素柱是否超过容量限制
   if (column_voxels.size() > config_setting_.pillar_max_capacity_) {
-    // 超出容量，移除第一个非地面体素
-    RemoveFirstNonGroundVoxel(column_key, column_voxels);
+    for (auto &voxel_pair : column_voxels)
+    {
+      if (!voxel_pair.second->is_ground_voxel_)
+      {
+        column_voxels.erase(voxel_pair.first);
+        break; // 只移除一个非地面体素后就退出
+      }
+    }
     return false; // 表示进行了容量管理
   }
 
   return true; // 容量正常
-}
-
-void VoxelMapManager::RemoveFirstNonGroundVoxel(const VOXEL_COLUMN_LOCATION &column_key, std::map<int64_t, VoxelOctoTree *> &column_voxels)
-{
-  // 遍历体素柱，寻找第一个非地面体素
-  for (auto it = column_voxels.begin(); it != column_voxels.end(); ++it) {
-    VoxelOctoTree *voxel = it->second;
-    if (voxel != nullptr && !voxel->is_ground_voxel_) {
-      // 找到第一个非地面体素，需要将其从整个系统中移除
-      int64_t elevation_key = it->first;
-
-      // 构建体素的完整位置信息
-      VOXEL_LOCATION voxel_loc;
-      if (elevation_axis_index_ == 0) {
-        voxel_loc = VOXEL_LOCATION(elevation_key, column_key.axis2, column_key.axis1);
-      } else if (elevation_axis_index_ == 1) {
-        voxel_loc = VOXEL_LOCATION(column_key.axis1, elevation_key, column_key.axis2);
-      } else {
-        voxel_loc = VOXEL_LOCATION(column_key.axis1, column_key.axis2, elevation_key);
-      }
-
-      // 从主体素地图中移除该体素
-      auto voxel_map_iter = voxel_map_.find(voxel_loc);
-      if (voxel_map_iter != voxel_map_.end()) {
-        // 从LRU缓存中移除
-        auto cache_iter = voxel_map_iter->second;
-        if (cache_iter != voxel_map_cache_.end()) {
-          voxel_map_cache_.erase(cache_iter);
-        }
-
-        // 删除体素对象
-        delete voxel_map_iter->second->second;
-        voxel_map_.erase(voxel_map_iter);
-      }
-
-      // 从体素柱中移除
-      column_voxels.erase(it);
-
-      // 重新更新地面标志
-      UpdateGroundFlagForColumn(column_key, column_voxels);
-
-      break; // 只移除一个非地面体素后就退出
-    }
-  }
 }

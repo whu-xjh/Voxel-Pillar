@@ -332,20 +332,15 @@ public:
   void ClearPillarVoxels();
 
 private:
-  // 初始化水平面邻域偏移量查询表
+
+  // 体素柱相关函数
   void initHorizontalNeighborOffsets();
-
-  // 根据高程方向计算柱的位置
   VOXEL_COLUMN_LOCATION GetColumnLocation(const VOXEL_LOCATION &position) const;
-
   void RegisterVoxelToColumn(const VOXEL_LOCATION &position, VoxelOctoTree *voxel);
   void UnregisterVoxelFromColumn(const VOXEL_LOCATION &position);
   void UpdateGroundFlagForColumn(const VOXEL_COLUMN_LOCATION &column_key, std::map<int64_t, VoxelOctoTree *> &column_voxels);
-
-  // 体素柱容量管理
-  bool ManagePillarCapacity(const VOXEL_LOCATION &position, VoxelOctoTree *voxel);
+  bool ManagePillarCapacity(std::map<int64_t, VoxelOctoTree *> &column_voxels, VoxelOctoTree *voxel);
   void RemoveFirstNonGroundVoxel(const VOXEL_COLUMN_LOCATION &column_key, std::map<int64_t, VoxelOctoTree *> &column_voxels);
-
   int hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const VOXEL_LOCATION &current_pos);
 
   void GetUpdatePlane(const VoxelOctoTree *current_octo, const int pub_max_voxel_layer, std::vector<VoxelPlane> &plane_list);
