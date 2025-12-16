@@ -25,6 +25,7 @@ which is included as part of this source code package.
 #include <thread>
 #include <unistd.h>
 #include <unordered_map>
+#include <unordered_set>
 #include <stack>
 #include <memory>
 #include <visualization_msgs/Marker.h>
@@ -237,7 +238,9 @@ public:
   std::list<std::pair<VOXEL_LOCATION, VoxelOctoTree*>> voxel_map_cache_;
   std::unordered_map<VOXEL_LOCATION, std::list<std::pair<VOXEL_LOCATION, VoxelOctoTree*>>::iterator> voxel_map_;
 
+  // Pillar_voxel相关
   std::unordered_map<VOXEL_COLUMN_LOCATION, std::map<int64_t, VoxelOctoTree *>> column_voxels_;
+  std::unordered_set<VOXEL_COLUMN_LOCATION> current_pillars_;
 
   PointCloudXYZI::Ptr feats_undistort_;
   PointCloudXYZI::Ptr feats_down_body_;
@@ -339,8 +342,11 @@ private:
   void RegisterVoxelToColumn(const VOXEL_LOCATION &position, VoxelOctoTree *voxel);
   void UnregisterVoxelFromColumn(const VOXEL_LOCATION &position);
   void UpdateGroundFlagForColumn(const VOXEL_COLUMN_LOCATION &column_key, std::map<int64_t, VoxelOctoTree *> &column_voxels);
-  bool ManagePillarCapacity(std::map<int64_t, VoxelOctoTree *> &column_voxels, VoxelOctoTree *voxel);
-  void RemoveFirstNonGroundVoxel(const VOXEL_COLUMN_LOCATION &column_key, std::map<int64_t, VoxelOctoTree *> &column_voxels);
+  void ManagePillarCapacity(std::map<int64_t, VoxelOctoTree *> &column_voxels, VoxelOctoTree *voxel);
+
+  // 批量管理pillar，只保留地面体素
+  void BatchCleanPillarVoxels();  // 每帧后清理，只保留每个pillar的地面体素
+
   int hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const VOXEL_LOCATION &current_pos);
 
   void GetUpdatePlane(const VoxelOctoTree *current_octo, const int pub_max_voxel_layer, std::vector<VoxelPlane> &plane_list);

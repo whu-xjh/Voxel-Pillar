@@ -811,6 +811,11 @@ void VoxelMapManager::UpdateVoxelMap(const std::vector<pointWithVar> &input_poin
       voxel_map_cache_.pop_back();
     }
   }
+
+  // 只保留每个pillar的地面体素（类LRU缓存管理）
+  if (config_setting_.pillar_voxel_en_) {
+    BatchCleanPillarVoxels();
+  }
 }
 
 // 为每个点云寻找对应的平面,并计算点到平面的距离，用于ICP配准
@@ -1248,26 +1253,25 @@ int VoxelMapManager::hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const V
     double sensor_height = state_.pos_end[elevation_axis_index_] * elevation_multiplier_;
     double voxel_height = current_octo->voxel_center_[elevation_axis_index_] * elevation_multiplier_;
 
-    // 计算水平距离（忽略高程轴）
-    double horizontal_distance = 0.0;
+    // 计算距离
+    double distance = 0.0;
     for (int i = 0; i < 3; i++) {
-      if (i != elevation_axis_index_) {
-        double diff = current_octo->voxel_center_[i] - state_.pos_end[i];
-        horizontal_distance += diff * diff;
-      }
+      double diff = current_octo->voxel_center_[i] - state_.pos_end[i];
+      distance += diff * diff;
     }
-    horizontal_distance = sqrt(horizontal_distance);
+    distance = sqrt(distance);
 
     // 计算高度差
     double height_diff = voxel_height - sensor_height;
 
     // 计算高度角（度）
     double height_angle = 0.0;
-    if (horizontal_distance > 1e-6) { // 避免除零
-      height_angle = atan(height_diff / horizontal_distance) * 180.0 / M_PI;
+    if (distance > 1e-6) { // 避免除零
+      height_angle = asin(height_diff / distance) * 180.0 / M_PI;
     }
 
     // 检查高度角是否超过阈值，如果超过直接返回0
+    // 注意：height_diff已经考虑了elevation_multiplier_，所以不需要取绝对值
     if (height_angle > config_setting_.ground_height_angle_threshold_) {
       return 0;
     }
@@ -1284,6 +1288,7 @@ int VoxelMapManager::hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const V
 
     // 在voxel_map中查找相邻体素
     auto iter = voxel_map_.find(adjacent_pos);
+    
     if (iter != voxel_map_.end()) {
       // VoxelOctoTree *adjacent_voxel = iter->second;
       VoxelOctoTree *adjacent_voxel = iter->second->second; // 修改这里
@@ -1360,18 +1365,22 @@ void VoxelMapManager::RegisterVoxelToColumn(const VOXEL_LOCATION &position, Voxe
   }
   VOXEL_COLUMN_LOCATION column_key = GetColumnLocation(position);
   auto &column_voxels = column_voxels_[column_key];
-  // 使用高程轴的坐标作为键
+
+  // 使用高程坐标作为键
   int64_t elevation_key;
   if (elevation_axis_index_ == 0) {
-    elevation_key = position.x;
+    elevation_key = position.x * elevation_multiplier_;
   } else if (elevation_axis_index_ == 1) {
-    elevation_key = position.y;
+    elevation_key = position.y * elevation_multiplier_;
   } else {
-    elevation_key = position.z;
+    elevation_key = position.z * elevation_multiplier_;
   }
   column_voxels[elevation_key] = voxel;
 
   UpdateGroundFlagForColumn(column_key, column_voxels);
+
+  // 记录当前帧更新的pillar
+  current_pillars_.insert(column_key);
 
   // 体素柱容量管理
   if (config_setting_.pillar_max_capacity_ > 0 && !voxel->is_isolated_voxel_) {
@@ -1388,14 +1397,15 @@ void VoxelMapManager::UnregisterVoxelFromColumn(const VOXEL_LOCATION &position)
     return;
   }
   auto &column_voxels = column_iter->second;
-  // 使用高程轴的坐标作为键
+  
+  // 使用高程坐标作为键
   int64_t elevation_key;
   if (elevation_axis_index_ == 0) {
-    elevation_key = position.x;
+    elevation_key = position.x * elevation_multiplier_;
   } else if (elevation_axis_index_ == 1) {
-    elevation_key = position.y;
+    elevation_key = position.y * elevation_multiplier_;
   } else {
-    elevation_key = position.z;
+    elevation_key = position.z * elevation_multiplier_;
   }
   auto voxel_iter = column_voxels.find(elevation_key);
   if (voxel_iter != column_voxels.end())
@@ -1415,6 +1425,7 @@ void VoxelMapManager::UnregisterVoxelFromColumn(const VOXEL_LOCATION &position)
 void VoxelMapManager::ClearPillarVoxels()
 {
   column_voxels_.clear();
+  current_pillars_.clear();
 }
 
 void VoxelMapManager::UpdateGroundFlagForColumn(const VOXEL_COLUMN_LOCATION &column_key,
@@ -1427,62 +1438,109 @@ void VoxelMapManager::UpdateGroundFlagForColumn(const VOXEL_COLUMN_LOCATION &col
     voxel_pair.second->is_isolated_voxel_ = false;
   }
 
-  // 只有当柱子中有多于一个体素时，才进行地面体素标记
-  if (column_voxels.size() > 1)
-  { 
-    // 找到指定轴上最小值的体素作为地面体素
-    auto bottom_voxel = column_voxels.begin()->second;
-    bool ground_voxel = false;
-    bool upper_voxel = false;
-
-    for (auto &voxel_pair : column_voxels)
-    {
-      const double current_height = voxel_pair.second->voxel_center_[elevation_axis_index_] * elevation_multiplier_;
-      const double bottom_height = bottom_voxel->voxel_center_[elevation_axis_index_] * elevation_multiplier_;
-      // double sensor_height = state_.pos_end[elevation_axis_index_] * elevation_multiplier_;
-
-      if (current_height <= bottom_height) {
-        bottom_voxel = voxel_pair.second;
-        ground_voxel = true;
-
-        if (bottom_height <= current_height + config_setting_.max_voxel_size_)
-        {
-          upper_voxel = true;
-        }
-      }
-    }
-
-    // 只有找到有效地面体素并且没有上方体素时才标记
-    if (ground_voxel && !upper_voxel) {
-      bottom_voxel->is_ground_voxel_ = true;
-    }
-  }
-  else {// 对于单个体素的情况
+  // 处理单个体素的情况
+  if (column_voxels.size() == 1) {
     auto single_voxel = column_voxels.begin()->second;
     single_voxel->is_isolated_voxel_ = true;
     single_voxel->is_ground_voxel_ = true;
+    return;
   }
+  else{
+    // 多个体素的情况：由于std::map按高程值自动排序，begin()就是最低的体素
+    // 找到指定轴上最小值的，并没有邻近上方体素的体素作为地面体素
+    auto bottom_iter = column_voxels.begin();
+    auto second_iter = std::next(bottom_iter);
+
+    VoxelOctoTree* bottom_voxel = bottom_iter->second;
+    VoxelOctoTree* second_voxel = second_iter->second;
+
+    // 计算两个体素的高度差
+    double bottom_height = bottom_voxel->voxel_center_[elevation_axis_index_] * elevation_multiplier_;
+    double second_height = second_voxel->voxel_center_[elevation_axis_index_] * elevation_multiplier_;
+    double height_diff = second_height - bottom_height;
+
+    // 如果高度差小于设定体素大小，则认为有邻近上方体素
+    if (height_diff <= config_setting_.max_voxel_size_) {
+      bottom_voxel->is_ground_voxel_ = false;
+    }
+    else{
+      bottom_voxel->is_ground_voxel_ = true;
+    }
+  }
+  
 }
 
 // 体素柱容量管理函数
-bool VoxelMapManager::ManagePillarCapacity(std::map<int64_t, VoxelOctoTree *> &column_voxels, VoxelOctoTree *voxel)
+void VoxelMapManager::ManagePillarCapacity(std::map<int64_t, VoxelOctoTree *> &column_voxels, VoxelOctoTree *voxel)
 {
   if (!config_setting_.pillar_voxel_en_ || config_setting_.pillar_max_capacity_ <= 0) {
-    return true; // 未启用容量限制
+    return; // 未启用容量限制
   }
 
   // 检查体素柱是否超过容量限制
-  if (column_voxels.size() > config_setting_.pillar_max_capacity_) {
+  if (column_voxels.size() > config_setting_.pillar_max_capacity_) 
+  {
     for (auto &voxel_pair : column_voxels)
     {
-      if (!voxel_pair.second->is_ground_voxel_)
-      {
-        column_voxels.erase(voxel_pair.first);
-        break; // 只移除一个非地面体素后就退出
+      auto iter = column_voxels.begin();
+      ++iter; // 跳过地面体素
+  
+      // 删除超出容量限制的体素
+      while (iter != column_voxels.end() && column_voxels.size() > config_setting_.pillar_max_capacity_) {
+        iter = column_voxels.erase(iter); // 删除并指向下一个
       }
     }
-    return false; // 表示进行了容量管理
+  }
+}
+
+// 批量清理pillar体素，只保留当前帧更新的pillar中的地面体素
+void VoxelMapManager::BatchCleanPillarVoxels()
+{
+  if (!config_setting_.pillar_voxel_en_ || current_pillars_.empty()) {
+    current_pillars_.clear();
+    return;
   }
 
-  return true; // 容量正常
+  int cleaned_pillars = 0;
+  int removed_voxels = 0;
+
+  // 遍历当前帧更新的pillar
+  for (const auto& column_key : current_pillars_) {
+    auto column_iter = column_voxels_.find(column_key);
+    if (column_iter == column_voxels_.end()) {
+      continue;
+    }
+
+    auto &column_voxels = column_iter->second;
+
+    // 如果柱子为空或只有一个体素，跳过
+    if (column_voxels.size() <= 1) {
+      continue;
+    }
+
+    // 保存第一个体素（地面体素）
+    auto first_iter = column_voxels.begin();
+    VoxelOctoTree* ground_voxel = first_iter->second;
+
+    // 删除除地面体素外的所有体素
+    auto iter = std::next(first_iter); // 从第二个体素开始
+    while (iter != column_voxels.end()) {
+      removed_voxels++;
+      iter = column_voxels.erase(iter); // 删除并指向下一个
+    }
+
+    // 重新标记地面体素（确保标志正确）
+    ground_voxel->is_ground_voxel_ = true;
+    ground_voxel->is_isolated_voxel_ = false;
+
+    cleaned_pillars++;
+  }
+
+  // 清空当前帧记录，为下一帧做准备
+  current_pillars_.clear();
+
+  // if (cleaned_pillars > 0) {
+  //   std::cout << "[Pillar] Cleaned " << cleaned_pillars << " current pillars, removed "
+  //             << removed_voxels << " non-ground voxels" << std::endl;
+  // }
 }
