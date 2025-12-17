@@ -814,7 +814,7 @@ void VoxelMapManager::UpdateVoxelMap(const std::vector<pointWithVar> &input_poin
 
   // 只保留每个pillar的地面体素（类LRU缓存管理）
   if (config_setting_.pillar_voxel_en_) {
-    BatchCleanPillarVoxels();
+    clearPillars();
   }
 }
 
@@ -868,7 +868,7 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
       bool is_surface = false; // 标记是否为非平面点
       double prob = 0; // 存储点到平面的概率值
 
-      if (config_setting_.pillar_voxel_en_)
+      if (config_setting_.pillar_voxel_en_ && (current_octo->is_ground_voxel_ || current_octo->is_isolated_voxel_))
       { 
         if (hasAdjacentGroundVoxel(current_octo, position) >= config_setting_.min_adjacent_num_)
         { 
@@ -879,10 +879,6 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
         else
         {
           current_octo->is_ground_voxel_ = false;
-        }
-
-        if (current_octo->is_isolated_voxel_)
-        {
           continue;
         }
       }
@@ -1243,36 +1239,41 @@ void VoxelMapManager::clearMemOutOfMap(const int& x_max,const int& x_min,const i
   // std::cout<<RED<<"[DEBUG]: Delete "<<delete_voxel_cout<<" voxels using "<<delete_time<<" s"<<RESET<<"\n";
 }
 
+bool VoxelMapManager::checkHeightAngle(const VoxelOctoTree *current_octo)
+{
+  // 计算传感器到当前体素中心的高度角
+  double sensor_height = state_.pos_end[elevation_axis_index_] * elevation_multiplier_;
+  double voxel_height = current_octo->voxel_center_[elevation_axis_index_] * elevation_multiplier_;
+
+  // 计算距离
+  double distance = 0.0;
+  for (int i = 0; i < 3; i++) {
+    double diff = current_octo->voxel_center_[i] - state_.pos_end[i];
+    distance += diff * diff;
+  }
+  distance = sqrt(distance);
+
+  // 计算高度差
+  double height_diff = voxel_height - sensor_height;
+
+  // 计算高度角（度）
+  double height_angle = 0.0;
+  if (distance > 1e-6) { // 避免除零
+    height_angle = asin(height_diff / distance) * 180.0 / M_PI;
+  }
+
+  // 检查高度角是否超过阈值
+  // 注意：height_diff已经考虑了elevation_multiplier_，所以不需要取绝对值
+  return height_angle <= config_setting_.ground_height_angle_threshold_;
+}
+
 int VoxelMapManager::hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const VOXEL_LOCATION &current_pos)
 {
   int adjacent_ground_count = 0;
 
   // 如果启用了高度角检查，先检查当前体素的高度角
   if (config_setting_.ground_height_angle_check_en_) {
-    // 计算传感器到当前体素中心的高度角
-    double sensor_height = state_.pos_end[elevation_axis_index_] * elevation_multiplier_;
-    double voxel_height = current_octo->voxel_center_[elevation_axis_index_] * elevation_multiplier_;
-
-    // 计算距离
-    double distance = 0.0;
-    for (int i = 0; i < 3; i++) {
-      double diff = current_octo->voxel_center_[i] - state_.pos_end[i];
-      distance += diff * diff;
-    }
-    distance = sqrt(distance);
-
-    // 计算高度差
-    double height_diff = voxel_height - sensor_height;
-
-    // 计算高度角（度）
-    double height_angle = 0.0;
-    if (distance > 1e-6) { // 避免除零
-      height_angle = asin(height_diff / distance) * 180.0 / M_PI;
-    }
-
-    // 检查高度角是否超过阈值，如果超过直接返回0
-    // 注意：height_diff已经考虑了elevation_multiplier_，所以不需要取绝对值
-    if (height_angle > config_setting_.ground_height_angle_threshold_) {
+    if (!checkHeightAngle(current_octo)) {
       return 0;
     }
   }
@@ -1397,7 +1398,7 @@ void VoxelMapManager::UnregisterVoxelFromColumn(const VOXEL_LOCATION &position)
     return;
   }
   auto &column_voxels = column_iter->second;
-  
+
   // 使用高程坐标作为键
   int64_t elevation_key;
   if (elevation_axis_index_ == 0) {
@@ -1461,13 +1462,12 @@ void VoxelMapManager::UpdateGroundFlagForColumn(const VOXEL_COLUMN_LOCATION &col
 
     // 如果高度差小于设定体素大小，则认为有邻近上方体素
     if (height_diff <= config_setting_.max_voxel_size_) {
-      bottom_voxel->is_ground_voxel_ = false;
+      bottom_voxel->is_ground_voxel_ = true;
     }
     else{
       bottom_voxel->is_ground_voxel_ = true;
     }
   }
-  
 }
 
 // 体素柱容量管理函数
@@ -1494,7 +1494,7 @@ void VoxelMapManager::ManagePillarCapacity(std::map<int64_t, VoxelOctoTree *> &c
 }
 
 // 批量清理pillar体素，只保留当前帧更新的pillar中的地面体素
-void VoxelMapManager::BatchCleanPillarVoxels()
+void VoxelMapManager::clearPillars()
 {
   if (!config_setting_.pillar_voxel_en_ || current_pillars_.empty()) {
     current_pillars_.clear();
@@ -1528,10 +1528,6 @@ void VoxelMapManager::BatchCleanPillarVoxels()
       removed_voxels++;
       iter = column_voxels.erase(iter); // 删除并指向下一个
     }
-
-    // 重新标记地面体素（确保标志正确）
-    ground_voxel->is_ground_voxel_ = true;
-    ground_voxel->is_isolated_voxel_ = false;
 
     cleaned_pillars++;
   }

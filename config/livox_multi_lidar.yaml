@@ -66,9 +66,10 @@ lio:
 # Pillar Voxel 参数配置
 pillar_voxel:
   pillar_voxel_en: true
-  min_adjacent_num: 3     # 相邻地面体素数量阈值
+  min_adjacent_num: 2     # 相邻地面体素数量阈值
+  pillar_max_capacity: 0 # 每个体素柱最大容量限制（体素数量）
   elevation_axis: "z"  # 可选值: "x", "-x", "y", "-y", "z", "-z"
-  ground_height_angle_check_en: true  # 是否启用基于高度角的地面点过滤
+  ground_height_angle_check_en: false  # 是否启用基于高度角的地面点过滤
   ground_height_angle_threshold: 5.0  # 高度角阈值（度），超过此阈值不认为是地面点
 
 local_map: 
@@ -79,7 +80,6 @@ local_map:
 uav:
   imu_rate_odom: true
   gravity_align_en: true
-
 publish:
   dense_map_en: true
   pub_effect_en: true
@@ -103,7 +103,7 @@ lidar_save:
   # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
 
 external_imu:
-  enable: true # 是否启用外置IMU
+  enable: false # 是否启用外置IMU
   external_imu_init_frame : 30  # 用于外置IMU初始化的帧数
   time_offset: 0  # 外置IMU时间偏移(秒)
   buffer_size: 100000  # external IMU buffer大小

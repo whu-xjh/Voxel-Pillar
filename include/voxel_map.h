@@ -343,10 +343,8 @@ private:
   void UnregisterVoxelFromColumn(const VOXEL_LOCATION &position);
   void UpdateGroundFlagForColumn(const VOXEL_COLUMN_LOCATION &column_key, std::map<int64_t, VoxelOctoTree *> &column_voxels);
   void ManagePillarCapacity(std::map<int64_t, VoxelOctoTree *> &column_voxels, VoxelOctoTree *voxel);
-
-  // 批量管理pillar，只保留地面体素
-  void BatchCleanPillarVoxels();  // 每帧后清理，只保留每个pillar的地面体素
-
+  void clearPillars();  // 每帧后清理，只保留每个pillar的地面体素
+  bool checkHeightAngle(const VoxelOctoTree *current_octo);
   int hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const VOXEL_LOCATION &current_pos);
 
   void GetUpdatePlane(const VoxelOctoTree *current_octo, const int pub_max_voxel_layer, std::vector<VoxelPlane> &plane_list);
