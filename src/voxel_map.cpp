@@ -868,7 +868,7 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
       bool is_surface = false; // 标记是否为非平面点
       double prob = 0; // 存储点到平面的概率值
 
-      if (config_setting_.pillar_voxel_en_ && (current_octo->is_ground_voxel_ || current_octo->is_isolated_voxel_))
+      if (config_setting_.pillar_voxel_en_)
       { 
         if (hasAdjacentGroundVoxel(current_octo, position) >= config_setting_.min_adjacent_num_)
         { 
@@ -879,6 +879,10 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
         else
         {
           current_octo->is_ground_voxel_ = false;
+        }
+
+        if (current_octo->is_isolated_voxel_)
+        {
           continue;
         }
       }
@@ -1462,7 +1466,7 @@ void VoxelMapManager::UpdateGroundFlagForColumn(const VOXEL_COLUMN_LOCATION &col
 
     // 如果高度差小于设定体素大小，则认为有邻近上方体素
     if (height_diff <= config_setting_.max_voxel_size_) {
-      bottom_voxel->is_ground_voxel_ = true;
+      bottom_voxel->is_ground_voxel_ = false;
     }
     else{
       bottom_voxel->is_ground_voxel_ = true;
