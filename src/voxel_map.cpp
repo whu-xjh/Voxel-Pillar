@@ -72,6 +72,7 @@ void loadVoxelConfig(ros::NodeHandle &nh, VoxelMapConfig &voxel_config)
   nh.param<double>("pillar_voxel/ground_height_angle_threshold", voxel_config.ground_height_angle_threshold_, 30.0);
 
   nh.param<bool>("lio/rf_enhance_en", voxel_config.rf_enhance_en_, false);
+  nh.param<bool>("lio/intensity_fusion_en", voxel_config.intensity_fusion_en_, false);
 }
 
 void VoxelOctoTree::init_plane(const std::vector<pointWithVar> &points, VoxelPlane *plane)
@@ -84,19 +85,23 @@ void VoxelOctoTree::init_plane(const std::vector<pointWithVar> &points, VoxelPla
   plane->points_size_ = points.size(); // 点云数量
   plane->radius_ = 0; // 平面半径
   plane->mean_intensity_ = 0.0f; // 平面平均强度
+  plane->latest_intensity_ = static_cast<double>(points.back().intensity); // 最新点强度
 
   // 2.计算点云的协方差矩阵和中心点
   // 协方差举证描述点云在三个方向上的分布情况
   double intensity_sum = 0.0; // 累加强度值
+  double intensity_variance = 0.0; // 累加强度方差值
   for (auto pv : points)
   {
     plane->covariance_ += pv.point_w * pv.point_w.transpose(); // 累加点云的外积矩阵
     plane->center_ += pv.point_w; // 累加点云位置
     intensity_sum += static_cast<double>(pv.intensity); // 累加强度值
+    intensity_variance += (static_cast<double>(pv.intensity) - plane->mean_intensity_) * (static_cast<double>(pv.intensity) - plane->mean_intensity_);
   }
   plane->center_ = plane->center_ / plane->points_size_; // 计算点云的质心
-  plane->mean_intensity_ = static_cast<float>(intensity_sum / static_cast<double>(plane->points_size_)); // 计算平均强度
   plane->covariance_ = plane->covariance_ / plane->points_size_ - plane->center_ * plane->center_.transpose(); // 计算点云的协方差矩阵
+  plane->mean_intensity_ = static_cast<float>(intensity_sum / static_cast<double>(plane->points_size_)); // 计算平均强度
+  plane->intensity_std_ = sqrt(intensity_variance / static_cast<double>(plane->points_size_)); // 计算强度标准差
   
   // 3.特征值分解，提取平面法向量和其他参数
   // 特征值代表三个主方向的方差
@@ -283,9 +288,10 @@ void VoxelOctoTree::cut_octo_tree()
   }
 }
 
+// 更新八叉树结构，插入新的点云数据
 void VoxelOctoTree::UpdateOctoTree(const pointWithVar &pv)
 {
-  if (!init_octo_)
+  if (!init_octo_) // 八叉树未初始化，直接添加点云
   {
     new_points_++;
     temp_points_.push_back(pv);
@@ -293,7 +299,7 @@ void VoxelOctoTree::UpdateOctoTree(const pointWithVar &pv)
   }
   else
   {
-    if (plane_ptr_->is_plane_)
+    if (plane_ptr_->is_plane_) // 当前体素已经是平面,增量更新,定期更新平面参数
     {
       if (update_enable_)
       {
@@ -304,7 +310,7 @@ void VoxelOctoTree::UpdateOctoTree(const pointWithVar &pv)
           init_plane(temp_points_, plane_ptr_);
           new_points_ = 0;
         }
-        if (temp_points_.size() >= max_points_num_)
+        if (temp_points_.size() >= max_points_num_) // 达到最大点云数，停止更新
         {
           update_enable_ = false;
           std::vector<pointWithVar>().swap(temp_points_);
@@ -312,9 +318,9 @@ void VoxelOctoTree::UpdateOctoTree(const pointWithVar &pv)
         }
       }
     }
-    else
+    else // 当前体素不是平面，继续向下划分八叉树
     {
-      if (layer_ < max_layer_)
+      if (layer_ < max_layer_) // 未达到最大层数，可继续划分
       {
         int xyz[3] = {0, 0, 0};
         if (pv.point_w[0] > voxel_center_[0]) { xyz[0] = 1; }
@@ -333,7 +339,7 @@ void VoxelOctoTree::UpdateOctoTree(const pointWithVar &pv)
           leaves_[leafnum]->UpdateOctoTree(pv);
         }
       }
-      else
+      else // 达到最大层数，作为叶子节点处理
       {
         if (update_enable_)
         {
@@ -994,11 +1000,30 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
       J_nq.block<1, 3>(0, 3) = -plane.normal_;
       double sigma_l = J_nq * plane.plane_var_ * J_nq.transpose();
       sigma_l += plane.normal_.transpose() * pv.var * plane.normal_;
-      if (dis_to_plane < sigma_num * sqrt(sigma_l)) { is_surface = true; } // 如果点到平面的距离小,则认为该点为平面点
       if (dis_to_plane < sigma_num * sqrt(sigma_l))
-      {
+      { 
+        is_surface = true; // 如果点到平面的距离小,则认为该点为平面点
         is_sucess = true;
+
         double this_prob = 1.0 / (sqrt(sigma_l)) * exp(-0.5 * dis_to_plane * dis_to_plane / sigma_l);
+
+        // 根据配置决定是否启用三维强度概率融合
+        if (config_setting_.intensity_fusion_en_) 
+        {
+          double mean_intensity_diff = static_cast<double>(pv.intensity) - plane.mean_intensity_;
+          double mean_intensity_prob = 1.0 / (sqrt(2.0 * M_PI) * plane.intensity_std_) *
+                                        exp(-0.5 * mean_intensity_diff * mean_intensity_diff / (plane.intensity_std_ *
+                                        plane.intensity_std_));
+          this_prob *= mean_intensity_prob; // 考虑空间距离和强度差异的概率
+
+          double latest_intensity_diff = static_cast<double>(pv.intensity) - plane.latest_intensity_;
+          double latest_intensity_prob = 1.0 / (sqrt(2.0 * M_PI) * plane.intensity_std_) *
+                                        exp(-0.5 * latest_intensity_diff * latest_intensity_diff / (plane.intensity_std_ *
+                                        plane.intensity_std_));
+
+          this_prob *= latest_intensity_prob; // 综合考虑空间距离和强度差异的概率
+        }
+
         if (this_prob > prob) // 当点可能在多个平面找到匹配时,选择概率最大的那个平面
         {
           prob = this_prob;

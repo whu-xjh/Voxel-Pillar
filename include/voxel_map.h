@@ -69,6 +69,7 @@ typedef struct VoxelMapConfig
   int capacity;
 
   bool rf_enhance_en_;
+  bool intensity_fusion_en_;  // 是否启用三维强度概率融合
 
 } VoxelMapConfig;
 
@@ -107,6 +108,8 @@ typedef struct VoxelPlane
   int id_ = 0;
   bool is_update_ = false;
   double mean_intensity_ = 0.0f;
+  double latest_intensity_ = 0.0f;
+  double intensity_std_ = 1.0f;
   VoxelPlane()
   {
     plane_var_ = Eigen::Matrix<double, 6, 6>::Zero();
