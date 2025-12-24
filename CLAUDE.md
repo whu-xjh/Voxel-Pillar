@@ -8,24 +8,23 @@ This is **fast_livo** (package name), a high-speed LiDAR-Inertial Odometry syste
 
 ## Build System
 
-This is a ROS Catkin workspace using standard catkin build system:
+This is a ROS Catkin workspace. Build from the catkin workspace root:
 
 ```bash
-# Build the workspace (from HighSpeed-LIO-main directory)
 cd /home/xjh/Doc/highspeed-lio/catkin_ws
 catkin_make
-
-# Source the workspace
 source devel/setup.bash
+```
 
-# For development with debugging support
+For development with debugging:
+```bash
 catkin_make -DCMAKE_BUILD_TYPE=Debug
 ```
 
 The CMakeLists.txt includes architecture-specific optimizations:
-- ARM (32/64-bit): Native CPU optimizations with NEON support
-- x86-64: Conservative optimizations to avoid compiler crashes
-- Automatic multi-threading configuration based on CPU core count
+- ARM (32/64-bit): Native CPU optimizations with NEON support (`-mcpu=native -mtune=native`)
+- x86-64: Conservative optimizations (`-O2 -march=native`) to avoid compiler crashes
+- Automatic multi-threading configuration based on CPU core count (`MP_EN` flag)
 
 ## Key Dependencies
 
@@ -36,27 +35,6 @@ The CMakeLists.txt includes architecture-specific optimizations:
 
 ## Core Architecture
 
-### Executables and Libraries
-The build creates two main executables and four shared libraries:
-
-**Executables:**
-- `fastlivo_mapping`: Main LIO/VIO mapping node
-- `livox_multi_lidar`: Multi-LiDAR data merger
-
-**Libraries:**
-- `laser_mapping` (src/LIVMapper.cpp): Main fusion logic and state management
-- `vio` (src/vio.cpp): Visual-Inertial Odometry with feature tracking
-- `lio` (src/voxel_map.cpp): Voxel-based mapping with efficient octree structure
-- `pre` (src/preprocess.cpp): Point cloud preprocessing and filtering
-- `imu_proc` (src/IMU_Processing.cpp): IMU processing, bias estimation, external IMU integration
-
-### Main Components
-- **LIVMapper** (`src/LIVMapper.cpp`): Core LiDAR-IMU fusion handling multi-sensor data
-- **VoxelMapManager** (`src/voxel_map.cpp`): Efficient voxel octree with LRU caching and neighbor search
-- **IMU_Processing** (`src/IMU_Processing.cpp`): High-frequency (250Hz) IMU propagation and bias estimation
-- **Multi-LiDAR Handler** (`src/livox_multi_lidar.cpp`): Real-time multi-LiDAR data fusion and synchronization
-- **VIO Module** (`src/vio.cpp`): Visual-inertial odometry with feature tracking (optional)
-
 ### Key Features
 - **Multi-Sensor Fusion**: LiDAR-Inertial-Visual with seamless switching between pure LIO and VIO modes
 - **External IMU Integration**: Covariance-based fusion with configurable initialization periods
@@ -64,6 +42,13 @@ The build creates two main executables and four shared libraries:
 - **Voxel-Based Mapping**: Efficient octree structure with LRU caching for memory management
 - **Multi-LiDAR Support**: Real-time heterogeneous LiDAR sensor fusion and synchronization
 - **Architecture Optimization**: Native CPU optimizations for ARM and x86 with automatic multi-threading
+
+### Data Flow Architecture
+1. **Multi-LiDAR Merger** (`livox_multi_lidar` node) fuses multiple Livox LiDAR point clouds into single topic
+2. **Preprocessing** (`pre` library) filters and voxelizes point cloud data
+3. **IMU Processing** (`imu_proc` library) propagates state at 250Hz and estimates biases
+4. **LIO/VIO Fusion** (`laser_mapping` library) performs LiDAR-inertial or visual-inertial odometry
+5. **Voxel Mapping** (`lio` library) maintains efficient octree map with LRU caching
 
 ## Configuration
 
@@ -91,15 +76,14 @@ roslaunch fast_livo mapping_livox_multi_lidar.launch
 
 # Terminal 2: Play rosbag data
 rosbag play your_multi_lidar.bag
-
-# Terminal 3: Optional - Test external IMU integration
-python3 scripts/test_external_imu.py
 ```
 
 ### Debugging and Development
-The launch file contains commented debugging prefixes:
+The launch file (`launch/mapping_livox_multi_lidar.launch:29-30`) contains commented debugging prefixes:
 - `launch-prefix="gdb -ex run --args"` for GDB debugging
 - `launch-prefix="valgrind --leak-check=full"` for memory leak detection
+
+Uncomment and add to the `<node>` tag to enable debugging.
 
 ### Available Launch Files
 - `mapping_livox_multi_lidar.launch`: Multi-LiDAR setup with external IMU support
@@ -107,55 +91,82 @@ The launch file contains commented debugging prefixes:
 - `mapping_mid360.launch`: Livox Mid360 configuration
 - `mapping_hesaixt32_hilti22.launch`: Hesai XT32 + Hilti dataset setup
 - `mapping_kitti.launch`: KITTI dataset configuration
+- `mapping_ouster_ntu.launch`: Ouster NTU dataset configuration
 
-### Data Topics
+### Data Topics (from livox_multi_lidar.yaml)
 - **LiDAR**: `/livox/multi_lidar` (merged multi-LiDAR data)
-- **IMU**: `/livox/imu_192_168_1_159` (default internal IMU)
-- **External IMU**: `/novatel/oem7/odom` (external IMU odometry)
-- **Camera**: `/alphasense/cam0/image_raw` (optional, used in VIO mode)
+- **IMU**: `/livox/imu_192_168_1_159` (default internal IMU from LiDAR 159)
+- **External IMU**: `/novatel/oem7/odom` (external IMU odometry, enabled in config)
+- **Camera**: `/left_camera/image` (optional, used in VIO mode)
 - **Odometry**: `/aft_mapped_to_init` (fused odometry output)
+
+The multi-LiDAR merger (`livox_multi_lidar` node) merges three Livox LiDARs:
+- `/livox/lidar_192_168_1_159`
+- `/livox/lidar_192_168_1_160`
+- `/livox/lidar_192_168_1_161`
 
 ## Code Structure
 
-### Header Organization
-- `include/`: Core header files
-  - `LIVMapper.h`: Main mapper class with external IMU integration
-  - `voxel_map.h`: Voxel octree structure and LRU cache management
-  - `IMU_Processing.h`: IMU processing with external IMU support
-  - `common_lib.h`: Common data structures and utilities
-  - `utils/`: Mathematical utilities (SO3, types, color)
+### Source Organization
+- `src/main.cpp`: Entry point for fastlivo_mapping
+- `src/LIVMapper.cpp`, `include/LIVMapper.h`: Core LiDAR-IMU fusion handling multi-sensor data
+- `src/voxel_map.cpp`, `include/voxel_map.h`: Efficient voxel octree with LRU caching and neighbor search
+- `src/IMU_Processing.cpp`, `include/IMU_Processing.h`: High-frequency (250Hz) IMU propagation and bias estimation with external IMU support
+- `src/vio.cpp`, `include/vio.h`: Visual-inertial odometry with feature tracking (optional)
+- `src/preprocess.cpp`, `include/preprocess.h`: Point cloud preprocessing and filtering
+- `src/livox_multi_lidar.cpp`: Multi-LiDAR data merger (standalone executable)
+- `src/frame.cpp`, `include/frame.h`: VIO frame management
+- `src/visual_point.cpp`, `include/visual_point.h`: VIO feature point handling
+- `src/imu_filter.cpp`: IMU filtering utilities
 
-### Source Files
-- `src/main.cpp`: Entry point
-- `src/LIVMapper.cpp`: Main fusion logic
-- `src/voxel_map.cpp`: Voxel mapping implementation
-- `src/IMU_Processing.cpp`: IMU processing and bias estimation
-- `src/preprocess.cpp`: Point cloud preprocessing
-- `src/livox_multi_lidar.cpp`: Multi-LiDAR data handling
-
-### Launch Files
-- `launch/mapping_livox_multi_lidar.launch`: Main mapping launch file
+### Header Files
+- `include/common_lib.h`: Common data structures and utilities
+- `include/feature.h`: Feature detection definitions
+- `utils/`: Mathematical utilities (SO3, types, color)
 
 ## Development Notes
 
 **Architecture & Performance:**
 - C++17 standard with CPU architecture-specific optimizations (ARM NEON, x86 native)
-- Automatic multi-threading configuration based on CPU core count
+- Automatic multi-threading configuration based on CPU core count (`MP_EN` and `MP_PROC_NUM` defines)
 - OpenMP support for parallel processing when available
 - Optional mimalloc integration for improved memory allocation
 
 **Sensor Integration:**
-- Covariance-based external IMU fusion with configurable initialization periods
-- Time synchronization handles offsets between heterogeneous sensors
-- Seamless switching between pure LIO and VIO modes
-- Multi-LiDAR calibration and real-time data fusion
+- Covariance-based external IMU fusion with configurable initialization periods (`external_imu_init_frame`)
+- Time synchronization handles offsets between heterogeneous sensors (`imu_time_offset`, `img_time_offset`)
+- Seamless switching between pure LIO and VIO modes (`img_en` flag)
+- Multi-LiDAR calibration and real-time data fusion via extrinsic parameters
 
 **Memory Management:**
-- Efficient voxel octree with LRU caching for memory-constrained environments
+- Efficient voxel octree with LRU caching (`lio/capacity`: 100000 voxels, 0 = disable)
+- VIO feature map LRU cache (`vio/capacity`: 0 = disable)
 - LAStools integration for point cloud processing (optional)
 - Architecture-specific compile flags for optimal performance
 
-## Data Processing and Scripts
+**Pillar Voxel System:**
+- Ground detection using pillar voxels (`pillar_voxel/pillar_voxel_en`)
+- Configurable elevation axis and ground height angle threshold
+- Adjacent voxel count threshold for ground classification
+
+## Key Configuration Parameters
+
+**External IMU (config/livox_multi_lidar.yaml:108-115):**
+- `external_imu/enable`: Enable external IMU fusion
+- `external_imu/external_imu_init_frame`: Frames for external IMU initialization (default: 30)
+- `external_imu/time_offset`: Time offset for external IMU (seconds)
+- `external_imu/external_R`, `external_T`: Extrinsic calibration between IMUs
+
+**Voxel Mapping (config/livox_multi_lidar.yaml:54-65):**
+- `lio/voxel_size`: Voxel map resolution (default: 1.0 meter)
+- `lio/capacity`: LRU cache capacity (default: 100000, 0 = disable)
+- `lio/intensity_fusion_en`: Enable intensity-based fusion
+
+**Multi-LiDAR System:**
+- Input topics configurable in launch file (lines 9-11)
+- Extrinsic calibration in `extrin_calib` section (lines 10-16)
+
+## Scripts and Tools
 
 **Testing:**
 - `scripts/test_external_imu.py`: External IMU integration validation
@@ -163,9 +174,9 @@ The launch file contains commented debugging prefixes:
 - `scripts/colmap_output.sh`: COLMAP integration for visual reconstruction
 
 **Dataset Configurations:**
-- HILTI22: Hesai XT32 + Hilti industrial dataset
-- NTU_VIRAL: NTU viral dataset with visual-inertial data
-- MARS_LVIG: MARS LiDAR-Visual-Inertial-GPS dataset
+- HILTI22 (`config/HILTI22.yaml`): Hesai XT32 + Hilti industrial dataset
+- NTU_VIRAL (`config/NTU_VIRAL.yaml`): NTU viral dataset with visual-inertial data
+- MARS_LVIG (`config/MARS_LVIG.yaml`): MARS LiDAR-Visual-Inertial-GPS dataset
 
 **Log and Results:**
 - `Log/guide.md`: Dataset processing guidelines

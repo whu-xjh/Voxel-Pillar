@@ -90,20 +90,27 @@ void VoxelOctoTree::init_plane(const std::vector<pointWithVar> &points, VoxelPla
   // 2.计算点云的协方差矩阵和中心点
   // 协方差举证描述点云在三个方向上的分布情况
   double intensity_sum = 0.0; // 累加强度值
-  double intensity_variance = 0.0; // 累加强度方差值
+  
   for (auto pv : points)
   {
     plane->covariance_ += pv.point_w * pv.point_w.transpose(); // 累加点云的外积矩阵
     plane->center_ += pv.point_w; // 累加点云位置
     intensity_sum += static_cast<double>(pv.intensity); // 累加强度值
-    intensity_variance += (static_cast<double>(pv.intensity) - plane->mean_intensity_) * (static_cast<double>(pv.intensity) - plane->mean_intensity_);
   }
   plane->center_ = plane->center_ / plane->points_size_; // 计算点云的质心
   plane->covariance_ = plane->covariance_ / plane->points_size_ - plane->center_ * plane->center_.transpose(); // 计算点云的协方差矩阵
   plane->mean_intensity_ = static_cast<float>(intensity_sum / static_cast<double>(plane->points_size_)); // 计算平均强度
+
+  // 3.计算强度方差
+  double intensity_variance = 0.0; 
+  for (auto pv : points)
+  {
+    double diff = static_cast<double>(pv.intensity) - plane->mean_intensity_;
+    intensity_variance += diff * diff;
+  }
   plane->intensity_std_ = sqrt(intensity_variance / static_cast<double>(plane->points_size_)); // 计算强度标准差
   
-  // 3.特征值分解，提取平面法向量和其他参数
+  // 4.特征值分解，提取平面法向量和其他参数
   // 特征值代表三个主方向的方差
   /*
   - λ₁ (最大)：点云在第一主方向上的方差，表示点云的最大扩展范围
@@ -134,7 +141,7 @@ void VoxelOctoTree::init_plane(const std::vector<pointWithVar> &points, VoxelPla
   // && evalsReal(evalsMid) > 0.05
   //&& evalsReal(evalsMid) > 0.01
   
-  // 4.根据最小特征值判断是否为平面
+  // 5.根据最小特征值判断是否为平面
   if (evalsReal(evalsMin) < planer_threshold_)
   {
     // 当点云在第三主方向上的分布显著小于其他两个方向时，认为这些点构成一个平面
@@ -1010,11 +1017,11 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
         // 根据配置决定是否启用三维强度概率融合
         if (config_setting_.intensity_fusion_en_) 
         {
-          double mean_intensity_diff = static_cast<double>(pv.intensity) - plane.mean_intensity_;
-          double mean_intensity_prob = 1.0 / (sqrt(2.0 * M_PI) * plane.intensity_std_) *
-                                        exp(-0.5 * mean_intensity_diff * mean_intensity_diff / (plane.intensity_std_ *
-                                        plane.intensity_std_));
-          this_prob *= mean_intensity_prob; // 考虑空间距离和强度差异的概率
+          // double mean_intensity_diff = static_cast<double>(pv.intensity) - plane.mean_intensity_;
+          // double mean_intensity_prob = 1.0 / (sqrt(2.0 * M_PI) * plane.intensity_std_) *
+          //                               exp(-0.5 * mean_intensity_diff * mean_intensity_diff / (plane.intensity_std_ *
+          //                               plane.intensity_std_));
+          // this_prob *= mean_intensity_prob; // 考虑空间距离和强度差异的概率
 
           double latest_intensity_diff = static_cast<double>(pv.intensity) - plane.latest_intensity_;
           double latest_intensity_prob = 1.0 / (sqrt(2.0 * M_PI) * plane.intensity_std_) *
@@ -1268,69 +1275,6 @@ void VoxelMapManager::clearMemOutOfMap(const int& x_max,const int& x_min,const i
   // std::cout<<RED<<"[DEBUG]: Delete "<<delete_voxel_cout<<" voxels using "<<delete_time<<" s"<<RESET<<"\n";
 }
 
-bool VoxelMapManager::checkHeightAngle(const VoxelOctoTree *current_octo)
-{
-  // 计算传感器到当前体素中心的高度角
-  double sensor_height = state_.pos_end[elevation_axis_index_] * elevation_multiplier_;
-  double voxel_height = current_octo->voxel_center_[elevation_axis_index_] * elevation_multiplier_;
-
-  // 计算距离
-  double distance = 0.0;
-  for (int i = 0; i < 3; i++) {
-    double diff = current_octo->voxel_center_[i] - state_.pos_end[i];
-    distance += diff * diff;
-  }
-  distance = sqrt(distance);
-
-  // 计算高度差
-  double height_diff = voxel_height - sensor_height;
-
-  // 计算高度角（度）
-  double height_angle = 0.0;
-  if (distance > 1e-6) { // 避免除零
-    height_angle = asin(height_diff / distance) * 180.0 / M_PI;
-  }
-
-  // 检查高度角是否超过阈值
-  // 注意：height_diff已经考虑了elevation_multiplier_，所以不需要取绝对值
-  return height_angle <= config_setting_.ground_height_angle_threshold_;
-}
-
-int VoxelMapManager::hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const VOXEL_LOCATION &current_pos)
-{
-  int adjacent_ground_count = 0;
-
-  // 如果启用了高度角检查，先检查当前体素的高度角
-  if (config_setting_.ground_height_angle_check_en_) {
-    if (!checkHeightAngle(current_octo)) {
-      return 0;
-    }
-  }
-
-  for (const auto& voxel_offset : precomputed_neighbor_offsets_) {
-    
-    // 计算相邻体素的位置
-    VOXEL_LOCATION adjacent_pos = {
-      current_pos.x + voxel_offset.x,
-      current_pos.y + voxel_offset.y,
-      current_pos.z + voxel_offset.z
-    };
-
-    // 在voxel_map中查找相邻体素
-    auto iter = voxel_map_.find(adjacent_pos);
-    
-    if (iter != voxel_map_.end()) {
-      // VoxelOctoTree *adjacent_voxel = iter->second;
-      VoxelOctoTree *adjacent_voxel = iter->second->second; // 修改这里
-      if (adjacent_voxel && adjacent_voxel->is_ground_voxel_) {
-        adjacent_ground_count++;
-      }
-    }
-  }
-
-  return adjacent_ground_count; // 返回相邻的地面体素数量
-}
-
 // 根据高程方向计算柱的位置
 VOXEL_COLUMN_LOCATION VoxelMapManager::GetColumnLocation(const VOXEL_LOCATION &position) const
 {
@@ -1472,8 +1416,13 @@ void VoxelMapManager::UpdateGroundFlagForColumn(const VOXEL_COLUMN_LOCATION &col
   if (column_voxels.size() == 1) {
     auto single_voxel = column_voxels.begin()->second;
     single_voxel->is_isolated_voxel_ = true;
-    single_voxel->is_ground_voxel_ = true;
-    return;
+
+    if (!config_setting_.ground_height_angle_check_en_ || checkHeightAngle(single_voxel)) {
+      single_voxel->is_ground_voxel_ = true;
+    }
+    else{
+      single_voxel->is_ground_voxel_ = false;
+    }
   }
   else{
     // 多个体素的情况：由于std::map按高程值自动排序，begin()就是最低的体素
@@ -1490,13 +1439,96 @@ void VoxelMapManager::UpdateGroundFlagForColumn(const VOXEL_COLUMN_LOCATION &col
     double height_diff = second_height - bottom_height;
 
     // 如果高度差小于设定体素大小，则认为有邻近上方体素
-    if (height_diff <= config_setting_.max_voxel_size_) {
+    if (height_diff <= (config_setting_.max_voxel_size_)) {
       bottom_voxel->is_ground_voxel_ = false;
     }
-    else{
+    else if(config_setting_.ground_height_angle_check_en_ && !checkHeightAngle(bottom_voxel)) {
+      bottom_voxel->is_ground_voxel_ = false;
+    }
+    else {
       bottom_voxel->is_ground_voxel_ = true;
     }
   }
+}
+
+bool VoxelMapManager::checkHeightAngle(const VoxelOctoTree *current_octo)
+{
+  // 计算传感器到当前体素中心的高度角
+  double sensor_height = state_.pos_end[elevation_axis_index_] * elevation_multiplier_;
+  double voxel_height = current_octo->voxel_center_[elevation_axis_index_] * elevation_multiplier_;
+
+  // 计算距离
+  double distance = 0.0;
+  for (int i = 0; i < 3; i++) {
+    if (i == elevation_axis_index_) {
+      continue; // 跳过高程轴
+    }
+    double diff = current_octo->voxel_center_[i] - state_.pos_end[i];
+    distance += diff * diff;
+  }
+  distance = sqrt(distance);
+
+  // 计算高度差
+  double height_diff = voxel_height - sensor_height;
+
+  // 计算高度角（度）
+  double height_angle = 0.0;
+  if (distance > 1e-9) { // 避免除零
+    height_angle = atan(height_diff / distance) * 180.0 / M_PI;
+  }
+
+  return height_angle <= config_setting_.ground_height_angle_threshold_;
+}
+
+int VoxelMapManager::hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const VOXEL_LOCATION &current_pos)
+{
+  int adjacent_ground_count = 0;
+
+  // 获取当前体素的高程坐标
+  int64_t current_elevation;
+  if (elevation_axis_index_ == 0) {
+    current_elevation = current_pos.x;
+  } else if (elevation_axis_index_ == 1) {
+    current_elevation = current_pos.y;
+  } else {
+    current_elevation = current_pos.z;
+  }
+
+  for (const auto& voxel_offset : precomputed_neighbor_offsets_) {
+
+    // 计算相邻体素的位置（只使用水平方向的偏移）
+    VOXEL_LOCATION adjacent_pos = {
+      current_pos.x + voxel_offset.x,
+      current_pos.y + voxel_offset.y,
+      current_pos.z + voxel_offset.z
+    };
+
+    // 计算相邻体素的柱位置
+    VOXEL_COLUMN_LOCATION adjacent_column = GetColumnLocation(adjacent_pos);
+
+    // 在 column_voxels_ 中查找相邻柱
+    auto column_iter = column_voxels_.find(adjacent_column);
+
+    if (column_iter != column_voxels_.end() && !column_iter->second.empty()) {
+      // 获取该柱的第一个体素（高程最小的体素）
+      VoxelOctoTree *first_voxel = column_iter->second.begin()->second;
+
+      if (first_voxel && first_voxel->is_ground_voxel_) {
+        // 获取第一个体素的高程坐标
+        int64_t first_elevation_key = column_iter->second.begin()->first;
+        int64_t first_elevation = first_elevation_key * elevation_multiplier_;
+
+        // 计算高差的绝对值
+        int64_t height_diff = std::abs(current_elevation - first_elevation);
+
+        if (height_diff <= current_octo->quater_length_) {
+          adjacent_ground_count++;
+        }
+      }
+    }
+  }
+
+  return adjacent_ground_count;
 }
 
 // 体素柱容量管理函数
@@ -1506,18 +1538,13 @@ void VoxelMapManager::ManagePillarCapacity(std::map<int64_t, VoxelOctoTree *> &c
     return; // 未启用容量限制
   }
 
-  // 检查体素柱是否超过容量限制
-  if (column_voxels.size() > config_setting_.pillar_max_capacity_) 
+  if (column_voxels.size() > config_setting_.pillar_max_capacity_)
   {
-    for (auto &voxel_pair : column_voxels)
-    {
-      auto iter = column_voxels.begin();
-      ++iter; // 跳过地面体素
-  
-      // 删除超出容量限制的体素
-      while (iter != column_voxels.end() && column_voxels.size() > config_setting_.pillar_max_capacity_) {
-        iter = column_voxels.erase(iter); // 删除并指向下一个
-      }
+    auto iter = column_voxels.begin();
+    ++iter;
+
+    while (iter != column_voxels.end() && column_voxels.size() > config_setting_.pillar_max_capacity_) {
+      iter = column_voxels.erase(iter);
     }
   }
 }
@@ -1569,3 +1596,4 @@ void VoxelMapManager::clearPillars()
   //             << removed_voxels << " non-ground voxels" << std::endl;
   // }
 }
+

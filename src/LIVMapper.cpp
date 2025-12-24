@@ -1656,19 +1656,19 @@ void LIVMapper::publish_voxel_points(const ros::Publisher &pubGroundCloud,
     {
       found_voxels++;
 
-      if (voxel->is_ground_voxel_)
-      {
-        ground_voxels++;
-        ground_cloud->points.push_back(point);
-      }
-
       if (voxel->is_surface_voxel_)
       {
         effective_voxels++;
         surface_cloud->points.push_back(point);
       }
 
-      if (voxel->is_isolated_voxel_)
+      if (voxel->is_ground_voxel_ && !voxel->is_isolated_voxel_)
+      {
+        ground_voxels++;
+        ground_cloud->points.push_back(point);
+      }
+
+      if (voxel->is_isolated_voxel_ && !voxel->is_ground_voxel_)
       {
         isolated_voxels++;
         isolated_cloud->points.push_back(point);

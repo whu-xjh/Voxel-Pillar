@@ -186,7 +186,7 @@ public:
   int new_points_;
   bool init_octo_;
   bool update_enable_;
-  bool is_ground_voxel_ = false;
+  bool is_ground_voxel_ = false; 
   bool is_isolated_voxel_ = false;
   bool is_surface_voxel_ = false;
 
