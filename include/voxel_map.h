@@ -54,9 +54,6 @@ typedef struct VoxelMapConfig
   bool map_sliding_en;
   int half_map_size;
 
-  // config for elevation axis specification
-  std::string elevation_axis_;
-
   // config for pillow voxel
   bool pillar_voxel_en_;
   int min_adjacent_num_;  // 相邻地面体素数量阈值
@@ -129,14 +126,14 @@ public:
   bool operator==(const VOXEL_LOCATION &other) const { return (x == other.x && y == other.y && z == other.z); }
 };
 
-class VOXEL_COLUMN_LOCATION
+class PILLAR_LOCATION
 {
 public:
   int64_t axis1, axis2; // 两个非高程方向的坐标
 
-  VOXEL_COLUMN_LOCATION(int64_t v1 = 0, int64_t v2 = 0) : axis1(v1), axis2(v2) {}
+  PILLAR_LOCATION(int64_t v1 = 0, int64_t v2 = 0) : axis1(v1), axis2(v2) {}
 
-  bool operator==(const VOXEL_COLUMN_LOCATION &other) const { return (axis1 == other.axis1 && axis2 == other.axis2); }
+  bool operator==(const PILLAR_LOCATION &other) const { return (axis1 == other.axis1 && axis2 == other.axis2); }
 };
 
 // Hash value
@@ -152,9 +149,9 @@ template <> struct hash<VOXEL_LOCATION>
   }
 };
 
-template <> struct hash<VOXEL_COLUMN_LOCATION>
+template <> struct hash<PILLAR_LOCATION>
 {
-  int64_t operator()(const VOXEL_COLUMN_LOCATION &s) const
+  int64_t operator()(const PILLAR_LOCATION &s) const
   {
     using std::hash;
     using std::size_t;
@@ -186,13 +183,14 @@ public:
   int new_points_;
   bool init_octo_;
   bool update_enable_;
-  bool is_ground_voxel_ = false; 
+  bool is_ground_voxel_ = false;
   bool is_isolated_voxel_ = false;
   bool is_surface_voxel_ = false;
+  bool is_confirmed_ground_voxel_ = false;
 
   VoxelOctoTree(int max_layer, int layer, int points_size_threshold, int max_points_num, float planer_threshold)
       : max_layer_(max_layer), layer_(layer), points_size_threshold_(points_size_threshold), max_points_num_(max_points_num),
-        planer_threshold_(planer_threshold), is_ground_voxel_(false), is_isolated_voxel_(false), is_surface_voxel_(false)
+        planer_threshold_(planer_threshold), is_ground_voxel_(false), is_isolated_voxel_(false), is_surface_voxel_(false), is_confirmed_ground_voxel_(false)
   {
     temp_points_.clear();
     octo_state_ = 0;
@@ -242,8 +240,8 @@ public:
   std::unordered_map<VOXEL_LOCATION, std::list<std::pair<VOXEL_LOCATION, VoxelOctoTree*>>::iterator> voxel_map_;
 
   // Pillar_voxel相关
-  std::unordered_map<VOXEL_COLUMN_LOCATION, std::map<int64_t, VoxelOctoTree *>> column_voxels_;
-  std::unordered_set<VOXEL_COLUMN_LOCATION> current_pillars_;
+  std::unordered_map<PILLAR_LOCATION, std::map<int64_t, VoxelOctoTree *>> pillars_;
+  std::unordered_set<PILLAR_LOCATION> current_pillars_;
 
   PointCloudXYZI::Ptr feats_undistort_;
   PointCloudXYZI::Ptr feats_down_body_;
@@ -269,11 +267,7 @@ public:
   std::vector<pointWithVar> pv_list_;
   std::vector<PointToPlane> ptpl_list_;
 
-  // 高程方向配置
-  int elevation_axis_index_;  // 0=x, 1=y, 2=z
-  double elevation_multiplier_; // 1.0 or -1.0
-
-  // 3D邻域偏移量
+  // 邻域偏移量
   std::vector<VOXEL_LOCATION> precomputed_neighbor_offsets_;
 
   // LRU缓存相关函数
@@ -286,31 +280,6 @@ public:
     feats_undistort_.reset(new PointCloudXYZI());
     feats_down_body_.reset(new PointCloudXYZI());
     feats_down_world_.reset(new PointCloudXYZI());
-
-    // 初始化高程方向
-    if (config_setting.elevation_axis_ == "x") {
-      elevation_axis_index_ = 0;
-      elevation_multiplier_ = 1.0;
-    } else if (config_setting.elevation_axis_ == "-x") {
-      elevation_axis_index_ = 0;
-      elevation_multiplier_ = -1.0;
-    } else if (config_setting.elevation_axis_ == "y") {
-      elevation_axis_index_ = 1;
-      elevation_multiplier_ = 1.0;
-    } else if (config_setting.elevation_axis_ == "-y") {
-      elevation_axis_index_ = 1;
-      elevation_multiplier_ = -1.0;
-    } else if (config_setting.elevation_axis_ == "z") {
-      elevation_axis_index_ = 2;
-      elevation_multiplier_ = 1.0;
-    } else if (config_setting.elevation_axis_ == "-z") {
-      elevation_axis_index_ = 2;
-      elevation_multiplier_ = -1.0;
-    } else {
-      // 默认为z轴
-      elevation_axis_index_ = 2;
-      elevation_multiplier_ = 1.0;
-    }
 
     // 初始化水平面8邻域偏移量查询表
     initHorizontalNeighborOffsets();
@@ -341,14 +310,14 @@ private:
 
   // 体素柱相关函数
   void initHorizontalNeighborOffsets();
-  VOXEL_COLUMN_LOCATION GetColumnLocation(const VOXEL_LOCATION &position) const;
-  void RegisterVoxelToColumn(const VOXEL_LOCATION &position, VoxelOctoTree *voxel);
-  void UnregisterVoxelFromColumn(const VOXEL_LOCATION &position);
-  void UpdateGroundFlagForColumn(const VOXEL_COLUMN_LOCATION &column_key, std::map<int64_t, VoxelOctoTree *> &column_voxels);
-  void ManagePillarCapacity(std::map<int64_t, VoxelOctoTree *> &column_voxels, VoxelOctoTree *voxel);
+  PILLAR_LOCATION GetPillarLocation(const VOXEL_LOCATION &position) const;
+  void RegisterVoxelToPillar(const VOXEL_LOCATION &position, VoxelOctoTree *voxel);
+  void UnregisterVoxelFromPillar(const VOXEL_LOCATION &position);
+  void UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_key, std::map<int64_t, VoxelOctoTree *> &pillar_voxels);
+  void ManagePillarCapacity(std::map<int64_t, VoxelOctoTree *> &pillar_voxels, VoxelOctoTree *voxel);
   void clearPillars();  // 每帧后清理，只保留每个pillar的地面体素
   bool checkHeightAngle(const VoxelOctoTree *current_octo);
-  int hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const VOXEL_LOCATION &current_pos);
+  bool hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const VOXEL_LOCATION &current_pos);
 
   void GetUpdatePlane(const VoxelOctoTree *current_octo, const int pub_max_voxel_layer, std::vector<VoxelPlane> &plane_list);
 

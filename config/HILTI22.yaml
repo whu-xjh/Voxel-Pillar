@@ -34,7 +34,7 @@ preprocess:
   filter_size_surf: 0.2 # 0.2
   lidar_type: 5 # HesaiXT32
   scan_line: 32
-  blind: 0.6 # 0.1 0.3 0.6
+  blind: 0.3 # 0.1 0.3 0.6
  
 vio:
   max_iterations: 5
@@ -74,13 +74,12 @@ lio:
 pillar_voxel:
   pillar_voxel_en: true
   min_adjacent_num: 3      # 相邻地面体素数量阈值
-  pillar_max_capacity: 0 # 每个体素柱最大容量限制（体素数量）
-  elevation_axis: "z"  # 可选值: "x", "-x", "y", "-y", "z", "-z"
+  pillar_max_capacity: 10  # 每个体素柱最大容量限制（体素数量）
   ground_height_angle_check_en: true  # 是否启用基于高度角的地面点过滤
   ground_height_angle_threshold: 2.5  # 高度角阈值（度），超过此阈值不认为是地面点
 
 local_map: 
-  map_sliding_en: false·
+  map_sliding_en: false
   half_map_size: 1000
   sliding_thresh: 8
 

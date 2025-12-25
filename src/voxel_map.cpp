@@ -64,7 +64,6 @@ void loadVoxelConfig(ros::NodeHandle &nh, VoxelMapConfig &voxel_config)
   nh.param<int>("local_map/half_map_size", voxel_config.half_map_size, 100);
   nh.param<double>("local_map/sliding_thresh", voxel_config.sliding_thresh, 8);
 
-  nh.param<std::string>("pillar_voxel/elevation_axis", voxel_config.elevation_axis_, "z");
   nh.param<bool>("pillar_voxel/pillar_voxel_en", voxel_config.pillar_voxel_en_, false);
   nh.param<int>("pillar_voxel/min_adjacent_num", voxel_config.min_adjacent_num_, 3);
   nh.param<int>("pillar_voxel/pillar_max_capacity", voxel_config.pillar_max_capacity_, 20);
@@ -706,7 +705,7 @@ void VoxelMapManager::BuildVoxelMap()
       // voxel_map_[position]->new_points_++;
       // voxel_map_[position]->layer_init_num_ = layer_init_num;
       // if (config_setting_.pillar_voxel_en_) {
-      //   RegisterVoxelToColumn(position, voxel_map_[position]);
+      //   RegisterVoxelToPillar(position, voxel_map_[position]);
       // }
 
       voxel_map_cache_.emplace_front(position, octo_tree); // 修改这里
@@ -719,7 +718,7 @@ void VoxelMapManager::BuildVoxelMap()
       voxel_map_cache_.begin()->second->new_points_++;
       voxel_map_cache_.begin()->second->layer_init_num_ = layer_init_num;
       if (config_setting_.pillar_voxel_en_) {
-        RegisterVoxelToColumn(position, voxel_map_cache_.begin()->second);
+        RegisterVoxelToPillar(position, voxel_map_cache_.begin()->second);
       }
     }
   }
@@ -786,7 +785,7 @@ void VoxelMapManager::UpdateVoxelMap(const std::vector<pointWithVar> &input_poin
       // voxel_map_[position]->voxel_center_[2] = (0.5 + position.z) * voxel_size;
       // voxel_map_[position]->UpdateOctoTree(p_v);
       // if (config_setting_.pillar_voxel_en_) {
-      //   RegisterVoxelToColumn(position, voxel_map_[position]);
+      //   RegisterVoxelToPillar(position, voxel_map_[position]);
       // }
 
       // 修改这里
@@ -804,7 +803,7 @@ void VoxelMapManager::UpdateVoxelMap(const std::vector<pointWithVar> &input_poin
       
       // 处理柱状体素
       if (config_setting_.pillar_voxel_en_) {
-        RegisterVoxelToColumn(position, octo_tree);
+        RegisterVoxelToPillar(position, octo_tree);
       }
     }
   }
@@ -818,7 +817,7 @@ void VoxelMapManager::UpdateVoxelMap(const std::vector<pointWithVar> &input_poin
       auto last_key = voxel_map_cache_.back().first;
       // 从柱状体素中注销
       if (config_setting_.pillar_voxel_en_) {
-        UnregisterVoxelFromColumn(last_key);
+        UnregisterVoxelFromPillar(last_key);
       }
       voxel_map_.erase(last_key);
       voxel_map_cache_.pop_back();
@@ -882,11 +881,16 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
       double prob = 0; // 存储点到平面的概率值
 
       if (config_setting_.pillar_voxel_en_)
-      { 
-        if (hasAdjacentGroundVoxel(current_octo, position) >= config_setting_.min_adjacent_num_)
-        { 
+      {
+        if (current_octo->is_confirmed_ground_voxel_) {
+          continue;
+        }
+
+        if (hasAdjacentGroundVoxel(current_octo, position))
+        {
           current_octo->is_ground_voxel_ = true;
           current_octo->is_isolated_voxel_ = false;
+          current_octo->is_confirmed_ground_voxel_ = true;
           continue;
         }
         else
@@ -1257,7 +1261,7 @@ void VoxelMapManager::clearMemOutOfMap(const int& x_max,const int& x_min,const i
       // VoxelOctoTree *voxel_ptr = it->second;
       VoxelOctoTree *voxel_ptr = it->second->second; // 修改这里
       if(config_setting_.pillar_voxel_en_){
-        UnregisterVoxelFromColumn(remove_loc);
+        UnregisterVoxelFromPillar(remove_loc);
       }
       delete voxel_ptr;
 
@@ -1275,146 +1279,102 @@ void VoxelMapManager::clearMemOutOfMap(const int& x_max,const int& x_min,const i
   // std::cout<<RED<<"[DEBUG]: Delete "<<delete_voxel_cout<<" voxels using "<<delete_time<<" s"<<RESET<<"\n";
 }
 
-// 根据高程方向计算柱的位置
-VOXEL_COLUMN_LOCATION VoxelMapManager::GetColumnLocation(const VOXEL_LOCATION &position) const
+// 计算柱的位置（固定高程方向为z轴，柱由x,y组成）
+PILLAR_LOCATION VoxelMapManager::GetPillarLocation(const VOXEL_LOCATION &position) const
 {
-  int64_t axis1, axis2;
-
-  // 根据高程方向选择两个非高程轴作为柱的坐标
-  if (elevation_axis_index_ == 0) { // 高程方向是x轴，柱由y,z组成
-    axis1 = position.y;
-    axis2 = position.z;
-  } else if (elevation_axis_index_ == 1) { // 高程方向是y轴，柱由x,z组成
-    axis1 = position.x;
-    axis2 = position.z;
-  } else { // 高程方向是z轴，柱由x,y组成
-    axis1 = position.x;
-    axis2 = position.y;
-  }
-
-  return VOXEL_COLUMN_LOCATION(axis1, axis2);
+  // 固定高程方向为z轴，柱由x,y坐标组成
+  return PILLAR_LOCATION(position.x, position.y);
 }
 
 void VoxelMapManager::initHorizontalNeighborOffsets()
 {
   precomputed_neighbor_offsets_.clear();
 
-  // 8邻域偏移量 (排除中心点)
+  // 8邻域偏移量 (固定高程方向为z轴，水平面是xy平面)
   const std::vector<std::pair<int, int>> all_offsets = {
     {-1, -1}, {-1, 0}, {-1, 1},
     {0, -1},           {0, 1},
     {1, -1},  {1, 0},  {1, 1}
   };
 
-  // 根据高程轴方向预计算完整的3D偏移量
   precomputed_neighbor_offsets_.reserve(8);
   for (const auto& offset : all_offsets) {
     VOXEL_LOCATION voxel_offset;
-    switch (elevation_axis_index_) {
-      case 0: // 高程方向是x轴，水平面是yz平面
-        voxel_offset.x = 0;
-        voxel_offset.y = offset.first;
-        voxel_offset.z = offset.second;
-        break;
-      case 1: // 高程方向是y轴，水平面是xz平面
-        voxel_offset.x = offset.first;
-        voxel_offset.y = 0;
-        voxel_offset.z = offset.second;
-        break;
-      default: // 高程方向是z轴，水平面是xy平面
-        voxel_offset.x = offset.first;
-        voxel_offset.y = offset.second;
-        voxel_offset.z = 0;
-        break;
-    }
+    voxel_offset.x = offset.first;
+    voxel_offset.y = offset.second;
+    voxel_offset.z = 0; // z轴为高程方向，不参与邻域计算
     precomputed_neighbor_offsets_.push_back(voxel_offset);
   }
 }
 
-void VoxelMapManager::RegisterVoxelToColumn(const VOXEL_LOCATION &position, VoxelOctoTree *voxel)
+void VoxelMapManager::RegisterVoxelToPillar(const VOXEL_LOCATION &position, VoxelOctoTree *voxel)
 {
   if (voxel == nullptr)
   {
     return;
   }
-  VOXEL_COLUMN_LOCATION column_key = GetColumnLocation(position);
-  auto &column_voxels = column_voxels_[column_key];
+  PILLAR_LOCATION pillar_key = GetPillarLocation(position);
+  auto &pillar_voxels = pillars_[pillar_key];
 
-  // 使用高程坐标作为键
-  int64_t elevation_key;
-  if (elevation_axis_index_ == 0) {
-    elevation_key = position.x * elevation_multiplier_;
-  } else if (elevation_axis_index_ == 1) {
-    elevation_key = position.y * elevation_multiplier_;
-  } else {
-    elevation_key = position.z * elevation_multiplier_;
-  }
-  column_voxels[elevation_key] = voxel;
+  // 使用z坐标作为高程键（固定高程方向为z轴）
+  pillar_voxels[position.z] = voxel;
 
-  UpdateGroundFlagForColumn(column_key, column_voxels);
+  UpdateGroundFlagForPillar(pillar_key, pillar_voxels);
 
   // 记录当前帧更新的pillar
-  current_pillars_.insert(column_key);
+  current_pillars_.insert(pillar_key);
 
   // 体素柱容量管理
   if (config_setting_.pillar_max_capacity_ > 0 && !voxel->is_isolated_voxel_) {
-    ManagePillarCapacity(column_voxels, voxel);
+    ManagePillarCapacity(pillar_voxels, voxel);
   }
 }
 
-void VoxelMapManager::UnregisterVoxelFromColumn(const VOXEL_LOCATION &position)
+void VoxelMapManager::UnregisterVoxelFromPillar(const VOXEL_LOCATION &position)
 {
-  VOXEL_COLUMN_LOCATION column_key = GetColumnLocation(position);
-  auto column_iter = column_voxels_.find(column_key);
-  if (column_iter == column_voxels_.end())
+  PILLAR_LOCATION pillar_key = GetPillarLocation(position);
+  auto pillar_iter = pillars_.find(pillar_key);
+  if (pillar_iter == pillars_.end())
   {
     return;
   }
-  auto &column_voxels = column_iter->second;
+  auto &pillar_voxels = pillar_iter->second;
 
-  // 使用高程坐标作为键
-  int64_t elevation_key;
-  if (elevation_axis_index_ == 0) {
-    elevation_key = position.x * elevation_multiplier_;
-  } else if (elevation_axis_index_ == 1) {
-    elevation_key = position.y * elevation_multiplier_;
-  } else {
-    elevation_key = position.z * elevation_multiplier_;
-  }
-  auto voxel_iter = column_voxels.find(elevation_key);
-  if (voxel_iter != column_voxels.end())
+  // 使用z坐标作为高程键（固定高程方向为z轴）
+  auto voxel_iter = pillar_voxels.find(position.z);
+  if (voxel_iter != pillar_voxels.end())
   {
-    column_voxels.erase(voxel_iter);
+    pillar_voxels.erase(voxel_iter);
   }
-  if (column_voxels.empty())
+  if (pillar_voxels.empty())
   {
-    column_voxels_.erase(column_iter);
+    pillars_.erase(pillar_iter);
   }
   else
   {
-    UpdateGroundFlagForColumn(column_key, column_voxels);
+    UpdateGroundFlagForPillar(pillar_key, pillar_voxels);
   }
 }
 
 void VoxelMapManager::ClearPillarVoxels()
 {
-  column_voxels_.clear();
+  pillars_.clear();
   current_pillars_.clear();
 }
 
-void VoxelMapManager::UpdateGroundFlagForColumn(const VOXEL_COLUMN_LOCATION &column_key,
-                                                std::map<int64_t, VoxelOctoTree *> &column_voxels)
+void VoxelMapManager::UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_key,
+                                                std::map<int64_t, VoxelOctoTree *> &pillar_voxels)
 {
   // 重置所有体素的地面标志
-  for (auto &voxel_pair : column_voxels)
+  for (auto &voxel_pair : pillar_voxels)
   {
     voxel_pair.second->is_ground_voxel_ = false;
     voxel_pair.second->is_isolated_voxel_ = false;
   }
 
   // 处理单个体素的情况
-  if (column_voxels.size() == 1) {
-    auto single_voxel = column_voxels.begin()->second;
+  if (pillar_voxels.size() == 1) {
+    auto single_voxel = pillar_voxels.begin()->second;
     single_voxel->is_isolated_voxel_ = true;
 
     if (!config_setting_.ground_height_angle_check_en_ || checkHeightAngle(single_voxel)) {
@@ -1426,16 +1386,16 @@ void VoxelMapManager::UpdateGroundFlagForColumn(const VOXEL_COLUMN_LOCATION &col
   }
   else{
     // 多个体素的情况：由于std::map按高程值自动排序，begin()就是最低的体素
-    // 找到指定轴上最小值的，并没有邻近上方体素的体素作为地面体素
-    auto bottom_iter = column_voxels.begin();
+    // 找到z轴上最小值的，并没有邻近上方体素的体素作为地面体素
+    auto bottom_iter = pillar_voxels.begin();
     auto second_iter = std::next(bottom_iter);
 
     VoxelOctoTree* bottom_voxel = bottom_iter->second;
     VoxelOctoTree* second_voxel = second_iter->second;
 
-    // 计算两个体素的高度差
-    double bottom_height = bottom_voxel->voxel_center_[elevation_axis_index_] * elevation_multiplier_;
-    double second_height = second_voxel->voxel_center_[elevation_axis_index_] * elevation_multiplier_;
+    // 计算两个体素的z轴高度差
+    double bottom_height = bottom_voxel->voxel_center_[2];
+    double second_height = second_voxel->voxel_center_[2];
     double height_diff = second_height - bottom_height;
 
     // 如果高度差小于设定体素大小，则认为有邻近上方体素
@@ -1453,50 +1413,37 @@ void VoxelMapManager::UpdateGroundFlagForColumn(const VOXEL_COLUMN_LOCATION &col
 
 bool VoxelMapManager::checkHeightAngle(const VoxelOctoTree *current_octo)
 {
-  // 计算传感器到当前体素中心的高度角
-  double sensor_height = state_.pos_end[elevation_axis_index_] * elevation_multiplier_;
-  double voxel_height = current_octo->voxel_center_[elevation_axis_index_] * elevation_multiplier_;
+  // 计算传感器到当前体素中心的高度角（固定z轴为高程方向）
+  double sensor_height = state_.pos_end[2];
+  double voxel_height = current_octo->voxel_center_[2];
 
-  // 计算距离
-  double distance = 0.0;
-  for (int i = 0; i < 3; i++) {
-    if (i == elevation_axis_index_) {
-      continue; // 跳过高程轴
-    }
-    double diff = current_octo->voxel_center_[i] - state_.pos_end[i];
-    distance += diff * diff;
-  }
-  distance = sqrt(distance);
+  // 计算水平距离（xy平面）
+  double dx = current_octo->voxel_center_[0] - state_.pos_end[0];
+  double dy = current_octo->voxel_center_[1] - state_.pos_end[1];
+  double horizontal_distance = sqrt(dx * dx + dy * dy);
 
   // 计算高度差
   double height_diff = voxel_height - sensor_height;
 
   // 计算高度角（度）
   double height_angle = 0.0;
-  if (distance > 1e-9) { // 避免除零
-    height_angle = atan(height_diff / distance) * 180.0 / M_PI;
+  if (horizontal_distance > 1e-9) { // 避免除零
+    height_angle = atan(height_diff / horizontal_distance) * 180.0 / M_PI;
   }
 
   return height_angle <= config_setting_.ground_height_angle_threshold_;
 }
 
-int VoxelMapManager::hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const VOXEL_LOCATION &current_pos)
+bool VoxelMapManager::hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const VOXEL_LOCATION &current_pos)
 {
   int adjacent_ground_count = 0;
 
-  // 获取当前体素的高程坐标
-  int64_t current_elevation;
-  if (elevation_axis_index_ == 0) {
-    current_elevation = current_pos.x;
-  } else if (elevation_axis_index_ == 1) {
-    current_elevation = current_pos.y;
-  } else {
-    current_elevation = current_pos.z;
-  }
+  // 当前体素的z坐标（固定高程方向为z轴）
+  int64_t current_elevation = current_pos.z;
 
   for (const auto& voxel_offset : precomputed_neighbor_offsets_) {
 
-    // 计算相邻体素的位置（只使用水平方向的偏移）
+    // 计算相邻体素的位置（只使用水平方向xy的偏移）
     VOXEL_LOCATION adjacent_pos = {
       current_pos.x + voxel_offset.x,
       current_pos.y + voxel_offset.y,
@@ -1504,47 +1451,47 @@ int VoxelMapManager::hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const V
     };
 
     // 计算相邻体素的柱位置
-    VOXEL_COLUMN_LOCATION adjacent_column = GetColumnLocation(adjacent_pos);
+    PILLAR_LOCATION adjacent_pillar = GetPillarLocation(adjacent_pos);
 
-    // 在 column_voxels_ 中查找相邻柱
-    auto column_iter = column_voxels_.find(adjacent_column);
+    // 在 pillars_ 中查找相邻柱
+    auto pillar_iter = pillars_.find(adjacent_pillar);
 
-    if (column_iter != column_voxels_.end() && !column_iter->second.empty()) {
+    if (pillar_iter != pillars_.end() && !pillar_iter->second.empty()) {
       // 获取该柱的第一个体素（高程最小的体素）
-      VoxelOctoTree *first_voxel = column_iter->second.begin()->second;
+      VoxelOctoTree *first_voxel = pillar_iter->second.begin()->second;
 
       if (first_voxel && first_voxel->is_ground_voxel_) {
-        // 获取第一个体素的高程坐标
-        int64_t first_elevation_key = column_iter->second.begin()->first;
-        int64_t first_elevation = first_elevation_key * elevation_multiplier_;
-
-        // 计算高差的绝对值
-        int64_t height_diff = std::abs(current_elevation - first_elevation);
+        // 计算高程差的绝对值
+        int64_t height_diff = std::abs(current_elevation - pillar_iter->second.begin()->first);
 
         if (height_diff <= current_octo->quater_length_) {
           adjacent_ground_count++;
+        }
+
+        if (adjacent_ground_count >= config_setting_.min_adjacent_num_){
+          return true;
         }
       }
     }
   }
 
-  return adjacent_ground_count;
+  return false;
 }
 
 // 体素柱容量管理函数
-void VoxelMapManager::ManagePillarCapacity(std::map<int64_t, VoxelOctoTree *> &column_voxels, VoxelOctoTree *voxel)
+void VoxelMapManager::ManagePillarCapacity(std::map<int64_t, VoxelOctoTree *> &pillar_voxels, VoxelOctoTree *voxel)
 {
   if (!config_setting_.pillar_voxel_en_ || config_setting_.pillar_max_capacity_ <= 0) {
     return; // 未启用容量限制
   }
 
-  if (column_voxels.size() > config_setting_.pillar_max_capacity_)
+  if (pillar_voxels.size() > config_setting_.pillar_max_capacity_)
   {
-    auto iter = column_voxels.begin();
+    auto iter = pillar_voxels.begin();
     ++iter;
 
-    while (iter != column_voxels.end() && column_voxels.size() > config_setting_.pillar_max_capacity_) {
-      iter = column_voxels.erase(iter);
+    while (iter != pillar_voxels.end() && pillar_voxels.size() > config_setting_.pillar_max_capacity_) {
+      iter = pillar_voxels.erase(iter);
     }
   }
 }
@@ -1561,28 +1508,28 @@ void VoxelMapManager::clearPillars()
   int removed_voxels = 0;
 
   // 遍历当前帧更新的pillar
-  for (const auto& column_key : current_pillars_) {
-    auto column_iter = column_voxels_.find(column_key);
-    if (column_iter == column_voxels_.end()) {
+  for (const auto& pillar_key : current_pillars_) {
+    auto pillar_iter = pillars_.find(pillar_key);
+    if (pillar_iter == pillars_.end()) {
       continue;
     }
 
-    auto &column_voxels = column_iter->second;
+    auto &pillar_voxels = pillar_iter->second;
 
     // 如果柱子为空或只有一个体素，跳过
-    if (column_voxels.size() <= 1) {
+    if (pillar_voxels.size() <= 1) {
       continue;
     }
 
     // 保存第一个体素（地面体素）
-    auto first_iter = column_voxels.begin();
+    auto first_iter = pillar_voxels.begin();
     VoxelOctoTree* ground_voxel = first_iter->second;
 
     // 删除除地面体素外的所有体素
     auto iter = std::next(first_iter); // 从第二个体素开始
-    while (iter != column_voxels.end()) {
+    while (iter != pillar_voxels.end()) {
       removed_voxels++;
-      iter = column_voxels.erase(iter); // 删除并指向下一个
+      iter = pillar_voxels.erase(iter); // 删除并指向下一个
     }
 
     cleaned_pillars++;
