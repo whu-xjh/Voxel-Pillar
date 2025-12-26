@@ -1376,12 +1376,9 @@ void VoxelMapManager::UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_ke
   if (pillar_voxels.size() == 1) {
     auto single_voxel = pillar_voxels.begin()->second;
     single_voxel->is_isolated_voxel_ = true;
-
-    if (!config_setting_.ground_height_angle_check_en_ || checkHeightAngle(single_voxel)) {
+    
+    if (config_setting_.ground_height_angle_check_en_ && checkHeightAngle(single_voxel)) {
       single_voxel->is_ground_voxel_ = true;
-    }
-    else{
-      single_voxel->is_ground_voxel_ = false;
     }
   }
   else{
@@ -1399,14 +1396,15 @@ void VoxelMapManager::UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_ke
     double height_diff = second_height - bottom_height;
 
     // 如果高度差小于设定体素大小，则认为有邻近上方体素
-    if (height_diff <= (config_setting_.max_voxel_size_)) {
+    if (height_diff <= (bottom_voxel->quater_length_ * 2) && (height_diff > 0)) {
       bottom_voxel->is_ground_voxel_ = false;
     }
-    else if(config_setting_.ground_height_angle_check_en_ && !checkHeightAngle(bottom_voxel)) {
-      bottom_voxel->is_ground_voxel_ = false;
-    }
-    else {
+    else{
       bottom_voxel->is_ground_voxel_ = true;
+    }
+    // 进行高度角检查
+    if(config_setting_.ground_height_angle_check_en_ && !checkHeightAngle(bottom_voxel)) {
+      bottom_voxel->is_ground_voxel_ = false;
     }
   }
 }
@@ -1464,7 +1462,7 @@ bool VoxelMapManager::hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const 
         // 计算高程差的绝对值
         int64_t height_diff = std::abs(current_elevation - pillar_iter->second.begin()->first);
 
-        if (height_diff <= current_octo->quater_length_) {
+        if (height_diff <= current_octo->quater_length_ * 2) { // 高程差在允许范围内
           adjacent_ground_count++;
         }
 
