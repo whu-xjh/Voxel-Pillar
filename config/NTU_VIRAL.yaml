@@ -22,7 +22,7 @@ time_offset:
   exposure_time_init: 0.0
 
 preprocess:
-  point_filter_num: 3
+  point_filter_num: 1
   filter_size_surf: 0.1
   lidar_type: 3 # Ouster
   scan_line: 16
@@ -66,6 +66,7 @@ pillar_voxel:
   pillar_voxel_en: true
   min_adjacent_num: 1      # 相邻地面体素数量阈值
   pillar_max_capacity: 0  # 每个体素柱最大容量限制（体素数量）
+  neighbor_search_type: 1  # 邻域搜索类型: 0=8邻域, 1=24邻域
   ground_height_angle_check_en: true  # 是否启用基于高度角的地面点过滤
   ground_height_angle_threshold: 0  # 高度角阈值（度），超过此阈值不认为是地面点
 
@@ -79,7 +80,7 @@ uav:
   gravity_align_en: true
 
 publish:
-  dense_map_en: true
+  dense_map_en: false
   pub_effect_en: false
   pub_plane_en: false
   pub_body_en: false  # 是否发布body坐标系下的点云
@@ -88,7 +89,7 @@ publish:
   blind_rgb_points: 0.0
 
 evo:
-  seq_name: "eee_01"
+  seq_name: "tnp_01"
   pose_output_en: true
 
 pcd_save:

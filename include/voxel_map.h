@@ -58,6 +58,7 @@ typedef struct VoxelMapConfig
   bool pillar_voxel_en_;
   int min_adjacent_num_;  // 相邻地面体素数量阈值
   int pillar_max_capacity_;  // 每个体素柱最大容量限制
+  int neighbor_search_type_;  // 邻域搜索类型: 0=8邻域, 1=24邻域
 
   // config for ground voxel height angle filtering
   bool ground_height_angle_check_en_;  // 是否启用基于高度角的地面点过滤

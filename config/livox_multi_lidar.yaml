@@ -1,6 +1,6 @@
 common:
   img_topic: "/left_camera/image"
-  lid_topic: "/livox/multi_lidar"  # 使用合并后的LiDAR话题
+  lid_topic: "/livox/lidar"  # 使用合并后的LiDAR话题
   imu_topic: "/livox/imu_192_168_1_159"  # 默认使用159的IMU
   external_imu_topic: "/novatel/oem7/odom"  # 如果有外置IMU，可以在这里设置话题
   img_en: 0
@@ -22,7 +22,7 @@ time_offset:
 
 preprocess:
   point_filter_num: 1
-  filter_size_surf: 0.5 # 体素滤波大小
+  filter_size_surf: 0.25 # 体素滤波大小
   lidar_type: 1 # Livox Avia LiDAR
   scan_line: 6 # Avia: 6, Mid360: 4
   blind: 0.8
@@ -61,15 +61,17 @@ lio:
   max_points_num: 100
   layer_init_num: [5, 5, 5, 5, 5]
   sigma_num: 3
-  capacity: 100000  # LRU缓存容量, 越大占用内存越多 (0 = 禁用LRU缓存)
+  capacity: 0  # LRU缓存容量, 越大占用内存越多 (0 = 禁用LRU缓存)
   rf_enhance_en: true
   intensity_fusion_en: true  # 是否启用三维强度概率融合 (几何距离+强度差异)
  
 # Pillar Voxel 参数配置
 pillar_voxel:
   pillar_voxel_en: true
+  pub_voxel_points_en: true
   min_adjacent_num: 2     # 相邻地面体素数量阈值
-  pillar_max_capacity: 10 # 每个体素柱最大容量限制（体素数量）
+  pillar_max_capacity: 0 # 每个体素柱最大容量限制（体素数量）
+  neighbor_search_type: 0  # 邻域搜索类型: 0=8邻域, 1=24邻域
   ground_height_angle_check_en: true  # 是否启用基于高度角的地面点过滤
   ground_height_angle_threshold: 0  # 高度角阈值（度），超过此阈值不认为是地面点
 
@@ -92,8 +94,8 @@ publish:
   blind_rgb_points: 0.0
 
 evo:
-  seq_name: "CBD_Building_01"
-  pose_output_en: false
+  seq_name: "shanxi_01"
+  pose_output_en: true
 
 lidar_save:
   save_en: false
@@ -105,10 +107,10 @@ lidar_save:
   # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
 
 external_imu:
-  enable: false # 是否启用外置IMU
+  enable: true # 是否启用外置IMU
   external_imu_init_frame : 30  # 用于外置IMU初始化的帧数
   time_offset: 0  # 外置IMU时间偏移(秒)
   buffer_size: 100000  # external IMU buffer大小
   external_R : [0, 0, -1, 1, 0, 0, 0, -1, 0]
   external_T : [0, 0, 0]
-  external_imu_only: true # 是否
+  external_imu_only: false # 是否

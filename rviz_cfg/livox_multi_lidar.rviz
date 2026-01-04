@@ -91,7 +91,7 @@ Visualization Manager:
           Color: 239; 41; 41
           Color Transformer: FlatColor
           Decay Time: 0
-          Enabled: true
+          Enabled: false
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -102,11 +102,11 @@ Visualization Manager:
           Size (Pixels): 2
           Size (m): 0.009999999776482582
           Style: Points
-          Topic: /cloud_ground
+          Topic: /cloud_registered
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: false
-          Value: true
+          Value: false
         - Alpha: 0.05000000074505806
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
@@ -117,10 +117,10 @@ Visualization Manager:
           Channel Name: intensity
           Class: rviz/PointCloud2
           Color: 186; 189; 182
-          Color Transformer: FlatColor
+          Color Transformer: Intensity
           Decay Time: 30
           Enabled: true
-          Invert Rainbow: false
+          Invert Rainbow: true
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
           Name: surround
@@ -547,7 +547,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 136.02444458007812
+      Distance: 50.685272216796875
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -555,17 +555,17 @@ Visualization Manager:
         Value: false
       Field of View: 0.7853981852531433
       Focal Point:
-        X: 0
-        Y: 0
-        Z: 0
+        X: 6.4427924156188965
+        Y: 3.932131767272949
+        Z: -7.4917521476745605
       Focal Shape Fixed Size: false
       Focal Shape Size: 0.05000000074505806
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.5697963237762451
+      Pitch: 0.7697969079017639
       Target Frame: aft_mapped
-      Yaw: 3.6803994178771973
+      Yaw: 3.7103965282440186
     Saved:
       - Class: rviz/Orbit
         Distance: 117.53474426269531

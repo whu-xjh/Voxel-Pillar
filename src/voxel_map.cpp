@@ -67,6 +67,7 @@ void loadVoxelConfig(ros::NodeHandle &nh, VoxelMapConfig &voxel_config)
   nh.param<bool>("pillar_voxel/pillar_voxel_en", voxel_config.pillar_voxel_en_, false);
   nh.param<int>("pillar_voxel/min_adjacent_num", voxel_config.min_adjacent_num_, 3);
   nh.param<int>("pillar_voxel/pillar_max_capacity", voxel_config.pillar_max_capacity_, 20);
+  nh.param<int>("pillar_voxel/neighbor_search_type", voxel_config.neighbor_search_type_, 0);
   nh.param<bool>("pillar_voxel/ground_height_angle_check_en", voxel_config.ground_height_angle_check_en_, false);
   nh.param<double>("pillar_voxel/ground_height_angle_threshold", voxel_config.ground_height_angle_threshold_, 30.0);
 
@@ -882,9 +883,9 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
 
       if (config_setting_.pillar_voxel_en_)
       {
-        if (current_octo->is_confirmed_ground_voxel_) {
-          continue;
-        }
+        // if (current_octo->is_confirmed_ground_voxel_) {
+        //   continue;
+        // }
 
         if (hasAdjacentGroundVoxel(current_octo, position))
         {
@@ -1290,20 +1291,40 @@ void VoxelMapManager::initHorizontalNeighborOffsets()
 {
   precomputed_neighbor_offsets_.clear();
 
-  // 8邻域偏移量 (固定高程方向为z轴，水平面是xy平面)
-  const std::vector<std::pair<int, int>> all_offsets = {
-    {-1, -1}, {-1, 0}, {-1, 1},
-    {0, -1},           {0, 1},
-    {1, -1},  {1, 0},  {1, 1}
-  };
+  if (config_setting_.neighbor_search_type_ == 0) {
+    // 8邻域偏移量 (固定高程方向为z轴，水平面是xy平面)
+    const std::vector<std::pair<int, int>> all_offsets = {
+      {-1, -1}, {-1, 0}, {-1, 1},
+      {0, -1},           {0, 1},
+      {1, -1},  {1, 0},  {1, 1}
+    };
 
-  precomputed_neighbor_offsets_.reserve(8);
-  for (const auto& offset : all_offsets) {
-    VOXEL_LOCATION voxel_offset;
-    voxel_offset.x = offset.first;
-    voxel_offset.y = offset.second;
-    voxel_offset.z = 0; // z轴为高程方向，不参与邻域计算
-    precomputed_neighbor_offsets_.push_back(voxel_offset);
+    precomputed_neighbor_offsets_.reserve(8);
+    for (const auto& offset : all_offsets) {
+      VOXEL_LOCATION voxel_offset;
+      voxel_offset.x = offset.first;
+      voxel_offset.y = offset.second;
+      voxel_offset.z = 0;
+      precomputed_neighbor_offsets_.push_back(voxel_offset);
+    }
+  } else if (config_setting_.neighbor_search_type_ == 1) {
+    // 24邻域偏移量 (扩展到距离为2的邻居)
+    const std::vector<std::pair<int, int>> all_offsets = {
+      {-2, -2}, {-2, -1}, {-2, 0}, {-2, 1}, {-2, 2},
+      {-1, -2}, {-1, -1}, {-1, 0}, {-1, 1}, {-1, 2},
+      {0, -2},  {0, -1},           {0, 1},  {0, 2},
+      {1, -2},  {1, -1},  {1, 0},  {1, 1},  {1, 2},
+      {2, -2},  {2, -1},  {2, 0},  {2, 1},  {2, 2}
+    };
+
+    precomputed_neighbor_offsets_.reserve(24);
+    for (const auto& offset : all_offsets) {
+      VOXEL_LOCATION voxel_offset;
+      voxel_offset.x = offset.first;
+      voxel_offset.y = offset.second;
+      voxel_offset.z = 0;
+      precomputed_neighbor_offsets_.push_back(voxel_offset);
+    }
   }
 }
 
@@ -1402,6 +1423,7 @@ void VoxelMapManager::UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_ke
     else{
       bottom_voxel->is_ground_voxel_ = true;
     }
+
     // 进行高度角检查
     if(config_setting_.ground_height_angle_check_en_ && !checkHeightAngle(bottom_voxel)) {
       bottom_voxel->is_ground_voxel_ = false;
