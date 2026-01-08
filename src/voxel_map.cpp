@@ -1386,7 +1386,7 @@ void VoxelMapManager::ClearPillarVoxels()
 void VoxelMapManager::UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_key,
                                                 std::map<int64_t, VoxelOctoTree *> &pillar_voxels)
 {
-  // 重置所有体素的地面标志
+  // 重置所有体素的地面标志（已确认的地面体素除外）
   for (auto &voxel_pair : pillar_voxels)
   {
     voxel_pair.second->is_ground_voxel_ = false;
@@ -1406,21 +1406,34 @@ void VoxelMapManager::UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_ke
     // 多个体素的情况：由于std::map按高程值自动排序，begin()就是最低的体素
     // 找到z轴上最小值的，并没有邻近上方体素的体素作为地面体素
     auto bottom_iter = pillar_voxels.begin();
-    auto second_iter = std::next(bottom_iter);
-
     VoxelOctoTree* bottom_voxel = bottom_iter->second;
-    VoxelOctoTree* second_voxel = second_iter->second;
-
-    // 计算两个体素的z轴高度差
     double bottom_height = bottom_voxel->voxel_center_[2];
-    double second_height = second_voxel->voxel_center_[2];
-    double height_diff = second_height - bottom_height;
 
-    // 如果高度差小于设定体素大小，则认为有邻近上方体素
-    if (height_diff <= (bottom_voxel->quater_length_ * 2) && (height_diff > 0)) {
-      bottom_voxel->is_ground_voxel_ = false;
+    // 找到第一个高程严格高于bottom_voxel的体素
+    VoxelOctoTree* first_higher_voxel = nullptr;
+    for (auto iter = std::next(bottom_iter); iter != pillar_voxels.end(); ++iter) {
+      double current_height = iter->second->voxel_center_[2];
+      if (current_height > bottom_height) {
+        first_higher_voxel = iter->second;
+        break;
+      }
     }
-    else{
+
+    // 如果找到邻近上方体素，判断高度差
+    if (first_higher_voxel != nullptr) {
+      double higher_height = first_higher_voxel->voxel_center_[2];
+      double height_diff = higher_height - bottom_height;
+
+      // 如果高度差小于设定体素大小，则认为有邻近上方体素
+      if (height_diff <= config_setting_.max_voxel_size_) {
+        bottom_voxel->is_ground_voxel_ = false;
+      }
+      else {
+        bottom_voxel->is_ground_voxel_ = true;
+      }
+    }
+    else {
+      // 没有找到更高体素，说明所有体素高度相同，bottom_voxel是地面体素
       bottom_voxel->is_ground_voxel_ = true;
     }
 
@@ -1484,7 +1497,7 @@ bool VoxelMapManager::hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const 
         // 计算高程差的绝对值
         int64_t height_diff = std::abs(current_elevation - pillar_iter->second.begin()->first);
 
-        if (height_diff <= current_octo->quater_length_ * 2) { // 高程差在允许范围内
+        if (height_diff <= config_setting_.max_voxel_size_) { // 高程差在允许范围内
           adjacent_ground_count++;
         }
 
