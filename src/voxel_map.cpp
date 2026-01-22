@@ -883,15 +883,10 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
 
       if (config_setting_.pillar_voxel_en_)
       {
-        // if (current_octo->is_confirmed_ground_voxel_) {
-        //   continue;
-        // }
-
         if (hasAdjacentGroundVoxel(current_octo, position))
         {
           current_octo->is_ground_voxel_ = true;
           current_octo->is_isolated_voxel_ = false;
-          current_octo->is_confirmed_ground_voxel_ = true;
           continue;
         }
         else
@@ -1386,7 +1381,7 @@ void VoxelMapManager::ClearPillarVoxels()
 void VoxelMapManager::UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_key,
                                                 std::map<int64_t, VoxelOctoTree *> &pillar_voxels)
 {
-  // 重置所有体素的地面标志（已确认的地面体素除外）
+  // 重置所有体素的地面标志
   for (auto &voxel_pair : pillar_voxels)
   {
     voxel_pair.second->is_ground_voxel_ = false;
@@ -1415,8 +1410,8 @@ void VoxelMapManager::UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_ke
       double current_height = iter->second->voxel_center_[2];
       if (current_height > bottom_height) {
         first_higher_voxel = iter->second;
-        break;
-      }
+        break;                                                                
+      }                           
     }
 
     // 如果找到邻近上方体素，判断高度差

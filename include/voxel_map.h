@@ -187,11 +187,10 @@ public:
   bool is_ground_voxel_ = false;
   bool is_isolated_voxel_ = false;
   bool is_surface_voxel_ = false;
-  bool is_confirmed_ground_voxel_ = false;
 
   VoxelOctoTree(int max_layer, int layer, int points_size_threshold, int max_points_num, float planer_threshold)
       : max_layer_(max_layer), layer_(layer), points_size_threshold_(points_size_threshold), max_points_num_(max_points_num),
-        planer_threshold_(planer_threshold), is_ground_voxel_(false), is_isolated_voxel_(false), is_surface_voxel_(false), is_confirmed_ground_voxel_(false)
+        planer_threshold_(planer_threshold), is_ground_voxel_(false), is_isolated_voxel_(false), is_surface_voxel_(false)
   {
     temp_points_.clear();
     octo_state_ = 0;
