@@ -75,7 +75,6 @@ uav:
 publish:
   dense_map_en: true
   pub_effect_point_en: true 
-  pub_voxel_points_en: true
   pub_plane_en: false
   pub_scan_num: 1
   blind_rgb_points: 0.0

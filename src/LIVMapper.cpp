@@ -52,7 +52,10 @@ LIVMapper::LIVMapper(ros::NodeHandle &nh)
   pcl_wait_save_intensity.reset(new PointCloudXYZI());
   laserCloudWorldRGB_shared.reset(new PointCloudXYZRGB());
   ptpl_list_wait_save.clear();
+
+  loadPillarVoxelConfig(nh, pillar_config);
   voxelmap_manager.reset(new VoxelMapManager(voxel_config, voxel_map_));
+  voxelmap_manager->pillar_map_.init(pillar_config, pillar_config.voxel_size_);
   vio_manager.reset(new VIOManager());
   root_dir = ROOT_DIR;
   initializeFiles();
@@ -134,7 +137,6 @@ void LIVMapper::readParameters(ros::NodeHandle &nh)
   nh.param<double>("publish/blind_rgb_points", blind_rgb_points, 0.01);
   nh.param<int>("publish/pub_scan_num", pub_scan_num, 1);
   nh.param<bool>("publish/pub_effect_en", pub_effect_en, false);
-  nh.param<bool>("publish/pub_voxel_points_en", pub_voxel_points_en, false);
   nh.param<bool>("publish/dense_map_en", dense_map_en, false);
   nh.param<bool>("publish/pub_cloud_body", pub_body_en, false);
 
@@ -272,8 +274,6 @@ void LIVMapper::initializeSubscribersAndPublishers(ros::NodeHandle &nh, image_tr
   pubLaserCloudEffect = nh.advertise<sensor_msgs::PointCloud2>("/cloud_effected", 100);
   pubLaserCloudMap = nh.advertise<sensor_msgs::PointCloud2>("/Laser_map", 100);
   pubGroundCloud = nh.advertise<sensor_msgs::PointCloud2>("/cloud_ground", 100);
-  pubSurfaceCloud = nh.advertise<sensor_msgs::PointCloud2>("/cloud_surface", 100);
-  pubNonSurfaceCloud = nh.advertise<sensor_msgs::PointCloud2>("/cloud_non_surface", 100);
   pubIsolatedCloud = nh.advertise<sensor_msgs::PointCloud2>("/cloud_isolated", 100);
   pubOdomAftMapped = nh.advertise<nav_msgs::Odometry>("/aft_mapped_to_init", 10);
   pubPath = nh.advertise<nav_msgs::Path>("/path", 10);
@@ -462,13 +462,25 @@ void LIVMapper::handleLIO()
   // double t_tran2 = omp_get_wtime();
   // printf("transformLidar time: %f\n", t_tran2 - t_tran1);
 
-  // voxelmap_manager->ClearPillarVoxels(); // 清除体素地图中的柱状体素
-
   // 首次运行时构建体素地图,基于八叉树结构
   if (!lidar_map_inited)
   {
     lidar_map_inited = true;
     voxelmap_manager->BuildVoxelMap();
+  }
+
+  double t_pillar1 = 0.0, t_pillar2 = 0.0;
+  if (pillar_config.pillar_voxel_en_)
+  {
+    t_pillar1 = omp_get_wtime();
+    voxelmap_manager->pillar_map_.BuildPillarMap(feats_down_world);
+    voxelmap_manager->pillar_map_.GroundDetection(_state.pos_end);
+    std::vector<Eigen::Vector3d> seed_points = voxelmap_manager->pillar_map_.AdjacentCheck();
+    voxelmap_manager->pillar_map_.PlaneFitting(seed_points);
+    voxelmap_manager->pillar_map_.UpdateFlags(_pv_list);
+    voxelmap_manager->pillar_map_.PublishPillarPoints(pubGroundCloud, pubIsolatedCloud);
+    voxelmap_manager->ClearPillarVoxels();
+    t_pillar2 = omp_get_wtime();
   }
 
   // 状态估计，核心是ICP配准，基于体素地图的迭代最近点配准，来估计当前帧的位姿
@@ -620,7 +632,6 @@ void LIVMapper::handleLIO()
   *pcl_w_wait_pub = *laserCloudWorld;
   double t6 = omp_get_wtime();
 
-  if (pub_voxel_points_en) publish_voxel_points(pubGroundCloud, pubSurfaceCloud, pubNonSurfaceCloud, pubIsolatedCloud); // 基于体素类型分类发布点云
   if (!img_en) publish_frame_world(pubLaserCloudFullRes, vio_manager); // 如果没有图像信息，发布点云
   if (pub_body_en) publish_frame_body(pubLaserCloudBody); // 发布机身坐标系下的点云
   if (pub_effect_en) publish_effect_world(pubLaserCloudEffect, voxelmap_manager->ptpl_list_); // 发布有效点云
@@ -635,6 +646,7 @@ void LIVMapper::handleLIO()
 
   // Accumulate times for each step
   total_downsample_time += (t_down - t0);
+  total_pillar_process_time += (t_pillar2 - t_pillar1);
   total_icp_time += (t2 - t1);
   total_update_voxel_map_time += (t4 - t3);
   total_point_transform_time += (t6 - t5);
@@ -658,6 +670,7 @@ void LIVMapper::handleLIO()
   printf("\033[1;34m| %-29s | %-13s %-13s |\033[0m\n", "Algorithm Stage", "Current", "Average");
   printf("\033[1;34m+-------------------------------------------------------------+\033[0m\n");
   printf("\033[1;36m| %-29s | %-13f %-13f |\033[0m\n", "DownSample", t_down - t0, total_downsample_time / frame_num);
+  printf("\033[1;36m| %-29s | %-13f %-13f |\033[0m\n", "Pillar Process", pillar_config.pillar_voxel_en_ ? (t_pillar2 - t_pillar1) : 0.0, pillar_config.pillar_voxel_en_ ? (total_pillar_process_time / frame_num) : 0.0);
   printf("\033[1;36m| %-29s | %-13f %-13f |\033[0m\n", "ICP", t2 - t1, total_icp_time / frame_num);
   printf("\033[1;36m| %-29s | %-13f %-13f |\033[0m\n", "updateVoxelMap", t4 - t3, total_update_voxel_map_time / frame_num);
   printf("\033[1;36m| %-29s | %-13f %-13f |\033[0m\n", "Point Transform", t6 - t5, total_point_transform_time / frame_num);
@@ -1628,119 +1641,6 @@ void LIVMapper::publish_effect_world(const ros::Publisher &pubLaserCloudEffect, 
   pubLaserCloudEffect.publish(laserCloudFullRes3);
 }
 
-void LIVMapper::publish_voxel_points(const ros::Publisher &pubGroundCloud,
-                                     const ros::Publisher &pubSurfaceCloud,
-                                     const ros::Publisher &pubNonSurfaceCloud,
-                                     const ros::Publisher &pubIsolatedCloud)
-{
-  if (pcl_w_wait_pub->empty()) return;
-
-  PointCloudXYZI::Ptr ground_cloud(new PointCloudXYZI());
-  PointCloudXYZI::Ptr surface_cloud(new PointCloudXYZI());
-  PointCloudXYZI::Ptr non_surface_cloud(new PointCloudXYZI());
-  PointCloudXYZI::Ptr isolated_cloud(new PointCloudXYZI());
-
-  double voxel_size = voxelmap_manager->config_setting_.max_voxel_size_;
-  int found_voxels = 0;
-  int effective_voxels = 0;
-  int ground_voxels = 0;
-  int isolated_voxels = 0;
-
-  // 遍历所有点，根据体素类型分类
-  for (const auto& point : pcl_w_wait_pub->points)
-  {
-    V3D point_w(point.x, point.y, point.z);
-    VoxelOctoTree* voxel = getVoxelForPoint(point_w);
-
-    if (voxel != nullptr)
-    {
-      found_voxels++;
-
-      if (voxel->is_surface_voxel_)
-      {
-        effective_voxels++;
-        surface_cloud->points.push_back(point);
-      }
-
-      if (voxel->is_ground_voxel_)
-      {
-        ground_voxels++;
-        ground_cloud->points.push_back(point);
-      }
-
-      if (voxel->is_isolated_voxel_)
-      {
-        isolated_voxels++;
-        isolated_cloud->points.push_back(point);
-      }
-      
-      if (!voxel->is_surface_voxel_ && !voxel->is_ground_voxel_ && !voxel->is_isolated_voxel_)
-      {
-        non_surface_cloud->points.push_back(point);
-      }
-    }
-    else
-    {
-      // 如果没有找到对应的体素，归类为非面点
-      non_surface_cloud->points.push_back(point);
-    }
-  }
-
-  // 设置点云属性
-  ground_cloud->width = ground_cloud->points.size();
-  ground_cloud->height = 1;
-  ground_cloud->is_dense = true;
-
-  surface_cloud->width = surface_cloud->points.size();
-  surface_cloud->height = 1;
-  surface_cloud->is_dense = true;
-
-  non_surface_cloud->width = non_surface_cloud->points.size();
-  non_surface_cloud->height = 1;
-  non_surface_cloud->is_dense = true;
-
-  isolated_cloud->width = isolated_cloud->points.size();
-  isolated_cloud->height = 1;
-  isolated_cloud->is_dense = true;
-
-  // 发布点云
-  if (!ground_cloud->empty())
-  {
-    sensor_msgs::PointCloud2 ground_msg;
-    pcl::toROSMsg(*ground_cloud, ground_msg);
-    ground_msg.header.stamp = ros::Time::now();
-    ground_msg.header.frame_id = "camera_init";
-    pubGroundCloud.publish(ground_msg);
-  }
-
-  if (!surface_cloud->empty())
-  {
-    sensor_msgs::PointCloud2 surface_msg;
-    pcl::toROSMsg(*surface_cloud, surface_msg);
-    surface_msg.header.stamp = ros::Time::now();
-    surface_msg.header.frame_id = "camera_init";
-    pubSurfaceCloud.publish(surface_msg);
-  }
-
-  if (!non_surface_cloud->empty())
-  {
-    sensor_msgs::PointCloud2 non_surface_msg;
-    pcl::toROSMsg(*non_surface_cloud, non_surface_msg);
-    non_surface_msg.header.stamp = ros::Time::now();
-    non_surface_msg.header.frame_id = "camera_init";
-    pubNonSurfaceCloud.publish(non_surface_msg);
-  }
-
-  if (!isolated_cloud->empty())
-  {
-    sensor_msgs::PointCloud2 isolated_msg;
-    pcl::toROSMsg(*isolated_cloud, isolated_msg);
-    isolated_msg.header.stamp = ros::Time::now();
-    isolated_msg.header.frame_id = "camera_init";
-    pubIsolatedCloud.publish(isolated_msg);
-  }
-}
-
 VoxelOctoTree* LIVMapper::getVoxelForPoint(const V3D& point_w)
 {
   double voxel_size = voxelmap_manager->config_setting_.max_voxel_size_;
@@ -1758,8 +1658,6 @@ VoxelOctoTree* LIVMapper::getVoxelForPoint(const V3D& point_w)
 
   if (iter != voxelmap_manager->voxel_map_.end())
   {
-    // Original code: return iter->second;
-    // iter->second is now an iterator to the cache list, need to dereference twice
     return (iter->second)->second;
   }
 

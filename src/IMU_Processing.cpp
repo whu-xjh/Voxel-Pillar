@@ -568,7 +568,7 @@ void ImuProcess::UndistortPcl(LidarMeasureGroup &lidar_meas, StatesGroup &state_
         // 使用协方差的倒数，外部协方差越大，其倒数越小，权重越小
         double internal_inv = 1.0 / (internal_velocity_cov + 1e-9); // 加小值防止除零
         double external_inv = 1.0 / (external_velocity_cov + 1e-9);
-        double external_imu_weight = external_inv / (internal_inv + external_inv);
+        double external_imu_weight = 1 - external_inv / (internal_inv + external_inv);
         state_inout.vel_end = (1 - external_imu_weight) * vel_imu + external_imu_weight * external_velocity_transformed;
 
         std::cout << std::fixed << std::setprecision(6);

@@ -95,10 +95,6 @@ public:
 
   void publish_visual_sub_map(const ros::Publisher &pubSubVisualMap);
   void publish_effect_world(const ros::Publisher &pubLaserCloudEffect, const std::vector<PointToPlane> &ptpl_list);
-  void publish_voxel_points(const ros::Publisher &pubGroundCloud,
-                          const ros::Publisher &pubSurfaceCloud,
-                          const ros::Publisher &pubNonSurfaceCloud,
-                          const ros::Publisher &pubIsolatedCloud);
   void publish_odometry(const ros::Publisher &pubOdomAftMapped);
   void publish_mavros(const ros::Publisher &mavros_pose_publisher);
   void publish_path(const ros::Publisher pubPath);
@@ -213,6 +209,7 @@ private:
   PreprocessPtr p_pre;
   ImuProcessPtr p_imu;
   VoxelMapManagerPtr voxelmap_manager;
+  PillarVoxelConfig pillar_config;
   VIOManagerPtr vio_manager;
   
   ros::Publisher plane_pub;
@@ -226,8 +223,6 @@ private:
   ros::Publisher pubLaserCloudEffect;
   ros::Publisher pubLaserCloudMap;
   ros::Publisher pubGroundCloud;
-  ros::Publisher pubSurfaceCloud;
-  ros::Publisher pubNonSurfaceCloud;
   ros::Publisher pubIsolatedCloud;
   ros::Publisher pubOdomAftMapped;
   ros::Publisher pubPath;
@@ -249,6 +244,7 @@ private:
   double total_update_voxel_map_time = 0;
   double total_point_transform_time = 0;
   double total_publish_save_time = 0;
+  double total_pillar_process_time = 0;
   bool colmap_output_en = false;
   
   std::string session_timestamp_;

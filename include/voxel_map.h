@@ -49,25 +49,13 @@ typedef struct VoxelMapConfig
   double sigma_num_;
   bool is_pub_plane_map_;
 
-  // config of local map sliding
   double sliding_thresh;
   bool map_sliding_en;
   int half_map_size;
 
-  // config for pillow voxel
-  bool pillar_voxel_en_;
-  int min_adjacent_num_;  // 相邻地面体素数量阈值
-  int pillar_max_capacity_;  // 每个体素柱最大容量限制
-  int neighbor_search_type_;  // 邻域搜索类型: 0=8邻域, 1=24邻域
-
-  // config for ground voxel height angle filtering
-  bool ground_height_angle_check_en_;  // 是否启用基于高度角的地面点过滤
-  double ground_height_angle_threshold_;  // 高度角阈值（度），超过此阈值不认为是地面点
-
   int capacity;
-
   bool rf_enhance_en_;
-  bool intensity_fusion_en_;  // 是否启用三维强度概率融合
+  bool intensity_fusion_en_;
 
 } VoxelMapConfig;
 
@@ -226,6 +214,60 @@ public:
 
 void loadVoxelConfig(ros::NodeHandle &nh, VoxelMapConfig &voxel_config);
 
+typedef struct PillarVoxelConfig
+{
+  bool pillar_voxel_en_;
+  double voxel_size_;  // 体素柱中的体素大小
+  int min_adjacent_num_;
+  int pillar_max_capacity_;
+  int neighbor_search_type_;
+  bool upper_voxel_check_en_;
+  bool ground_height_angle_check_en_;
+  double ground_height_angle_threshold_;
+  bool plane_fitting_ground_en_;
+  int lowest_points_num_;
+  double plane_fitting_distance_threshold_;
+  int plane_fitting_iterations_;
+  std::vector<float> plane_fitting_iteration_thresholds_;
+  bool adjacent_check_en_;
+
+  PillarVoxelConfig() : pillar_voxel_en_(false), voxel_size_(1.0), min_adjacent_num_(3), pillar_max_capacity_(0),
+                       neighbor_search_type_(0), upper_voxel_check_en_(false),
+                       ground_height_angle_check_en_(true), ground_height_angle_threshold_(5.0),
+                       plane_fitting_ground_en_(false), lowest_points_num_(100),
+                       plane_fitting_distance_threshold_(0.1), plane_fitting_iterations_(3),
+                       plane_fitting_iteration_thresholds_({0.2f, 0.1f, 0.05f}), adjacent_check_en_(true) {}
+} PillarVoxelConfig;
+
+void loadPillarVoxelConfig(ros::NodeHandle &nh, PillarVoxelConfig &config);
+
+class PillarVoxelMap
+{
+public:
+  PillarVoxelMap() = default;
+  PillarVoxelConfig config_;
+  double voxel_size_;
+  std::unordered_map<PILLAR_LOCATION, std::map<int64_t, VoxelOctoTree*>> pillars_;
+  std::unordered_set<PILLAR_LOCATION> current_pillars_;
+  std::vector<VOXEL_LOCATION> neighbor_offsets_;
+
+  void init(const PillarVoxelConfig &config, double voxel_size);
+  void BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud);
+  void GroundDetection(const Eigen::Vector3d& current_pos);
+  std::vector<Eigen::Vector3d> AdjacentCheck();
+  void PlaneFitting(const std::vector<Eigen::Vector3d>& seed_points);
+  void UpdateFlags(std::vector<pointWithVar> &pv_list);
+  void PublishPillarPoints(const ros::Publisher &pubGround, const ros::Publisher &pubIsolated);
+  void ClearCurrentFramePillars();
+
+private:
+  void initHorizontalNeighborOffsets();
+  PILLAR_LOCATION GetPillarLocation(const VOXEL_LOCATION &position) const;
+  void UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_key, std::map<int64_t, VoxelOctoTree*> &pillar_voxels, const Eigen::Vector3d& current_pos);
+  bool checkHeightAngle(const VoxelOctoTree *current_octo, const Eigen::Vector3d& current_pos);
+  bool hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const VOXEL_LOCATION &current_pos);
+};
+
 class VoxelMapManager
 {
 public:
@@ -233,15 +275,10 @@ public:
   VoxelMapConfig config_setting_;
   int current_frame_id_ = 0;
   ros::Publisher voxel_map_pub_;
-  
-  // LRU缓存相关（添加多线程保护）
-  std::mutex voxel_cache_mutex_;  // 缓存访问互斥锁
+
+  std::mutex voxel_cache_mutex_;
   std::list<std::pair<VOXEL_LOCATION, VoxelOctoTree*>> voxel_map_cache_;
   std::unordered_map<VOXEL_LOCATION, std::list<std::pair<VOXEL_LOCATION, VoxelOctoTree*>>::iterator> voxel_map_;
-
-  // Pillar_voxel相关
-  std::unordered_map<PILLAR_LOCATION, std::map<int64_t, VoxelOctoTree *>> pillars_;
-  std::unordered_set<PILLAR_LOCATION> current_pillars_;
 
   PointCloudXYZI::Ptr feats_undistort_;
   PointCloudXYZI::Ptr feats_down_body_;
@@ -267,12 +304,8 @@ public:
   std::vector<pointWithVar> pv_list_;
   std::vector<PointToPlane> ptpl_list_;
 
-  // 邻域偏移量
-  std::vector<VOXEL_LOCATION> precomputed_neighbor_offsets_;
+  PillarVoxelMap pillar_map_;
 
-  // LRU缓存相关函数
-  // VoxelMapManager(VoxelMapConfig &config_setting, std::unordered_map<VOXEL_LOCATION, VoxelOctoTree *> &voxel_map)
-  //     : config_setting_(config_setting), voxel_map_(voxel_map)
   VoxelMapManager(VoxelMapConfig &config_setting, std::unordered_map<VOXEL_LOCATION, std::list<std::pair<VOXEL_LOCATION, VoxelOctoTree*>>::iterator> &voxel_map)
     : config_setting_(config_setting), voxel_map_(voxel_map)
   {
@@ -280,9 +313,6 @@ public:
     feats_undistort_.reset(new PointCloudXYZI());
     feats_down_body_.reset(new PointCloudXYZI());
     feats_down_world_.reset(new PointCloudXYZI());
-
-    // 初始化水平面8邻域偏移量查询表
-    initHorizontalNeighborOffsets();
   };
 
   void StateEstimation(StatesGroup &state_propagat);
@@ -303,22 +333,9 @@ public:
 
   void mapSliding();
   void clearMemOutOfMap(const int& x_max,const int& x_min,const int& y_max,const int& y_min,const int& z_max,const int& z_min );
-
   void ClearPillarVoxels();
 
 private:
-
-  // 体素柱相关函数
-  void initHorizontalNeighborOffsets();
-  PILLAR_LOCATION GetPillarLocation(const VOXEL_LOCATION &position) const;
-  void RegisterVoxelToPillar(const VOXEL_LOCATION &position, VoxelOctoTree *voxel);
-  void UnregisterVoxelFromPillar(const VOXEL_LOCATION &position);
-  void UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_key, std::map<int64_t, VoxelOctoTree *> &pillar_voxels);
-  void ManagePillarCapacity(std::map<int64_t, VoxelOctoTree *> &pillar_voxels, VoxelOctoTree *voxel);
-  void clearPillars();  // 每帧后清理，只保留每个pillar的地面体素
-  bool checkHeightAngle(const VoxelOctoTree *current_octo);
-  bool hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const VOXEL_LOCATION &current_pos);
-
   void GetUpdatePlane(const VoxelOctoTree *current_octo, const int pub_max_voxel_layer, std::vector<VoxelPlane> &plane_list);
 
   void pubSinglePlane(visualization_msgs::MarkerArray &plane_pub, const std::string plane_ns, const VoxelPlane &single_plane, const float alpha,

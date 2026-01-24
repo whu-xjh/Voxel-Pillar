@@ -67,13 +67,19 @@ lio:
  
 # Pillar Voxel 参数配置
 pillar_voxel:
-  pillar_voxel_en: true
-  pub_voxel_points_en: true
-  min_adjacent_num: 1     # 相邻地面体素数量阈值
+  pillar_voxel_en: true # 是否启用pillar体素地图
+  voxel_size: 1  # 体素柱中的体素大小（米）
+  adjacent_check_en: true  # 是否启用邻域检查
+  min_adjacent_num: 3    # 相邻地面体素数量阈值
   pillar_max_capacity: 0 # 每个体素柱最大容量限制（体素数量）
   neighbor_search_type: 0  # 邻域搜索类型: 0=8邻域, 1=24邻域
-  ground_height_angle_check_en: true  # 是否启用基于高度角的地面点过滤
+  ground_height_angle_check_en: false  # 是否启用基于高度角的地面点过滤
   ground_height_angle_threshold: 0  # 高度角阈值（度），超过此阈值不认为是地面点
+  plane_fitting_ground_en: true # 是否启用基于平面拟合的二次地面判断
+  lowest_points_num: 500  # 参与平面拟合的最低点数量
+  plane_fitting_distance_threshold: 0.5  # 平面拟合距离阈值（米）
+  plane_fitting_iterations: 3  # 平面拟合迭代次数
+  plane_fitting_iteration_thresholds: [0.2, 0.1, 0.1]  # 每次迭代的距离阈值（米）
 
 local_map: 
   map_sliding_en: false
@@ -85,11 +91,10 @@ uav:
   gravity_align_en: true
 
 publish:
-  dense_map_en: true
+  dense_map_en: false
   pub_effect_en: true
   pub_plane_en: false
   pub_body_en: false  # 是否发布body坐标系下的点云
-  pub_voxel_points_en: true
   pub_scan_num: 1 
   blind_rgb_points: 0.0
 
@@ -98,7 +103,7 @@ evo:
   pose_output_en: true
 
 lidar_save:
-  save_en: true
+  save_en: false
   laz_save_en: true
   colmap_output_en: false # need to set interval = -1
   filter_size_pcd: 0.15
@@ -107,7 +112,7 @@ lidar_save:
   # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
 
 external_imu:
-  enable: true # 是否启用外置IMU
+  enable: false # 是否启用外置IMU
   external_imu_init_frame : 30  # 用于外置IMU初始化的帧数
   time_offset: 0  # 外置IMU时间偏移(秒)
   buffer_size: 100000  # external IMU buffer大小
