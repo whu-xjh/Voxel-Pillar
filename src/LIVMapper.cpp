@@ -473,11 +473,10 @@ void LIVMapper::handleLIO()
   if (pillar_config.pillar_voxel_en_)
   {
     t_pillar1 = omp_get_wtime();
-    voxelmap_manager->pillar_map_.BuildPillarMap(feats_down_world);
+    PointCloudXYZI::Ptr filtered_cloud = voxelmap_manager->pillar_map_.CheckHeightAngle(feats_down_world, _state.pos_end);
+    voxelmap_manager->pillar_map_.BuildPillarMap(filtered_cloud);
     voxelmap_manager->pillar_map_.GroundDetection(_state.pos_end);
-    std::vector<Eigen::Vector3d> seed_points = voxelmap_manager->pillar_map_.AdjacentCheck();
-    voxelmap_manager->pillar_map_.PlaneFitting(seed_points);
-    voxelmap_manager->pillar_map_.UpdateFlags(_pv_list);
+    voxelmap_manager->DefineSkipPoints(feats_down_world);
     voxelmap_manager->pillar_map_.PublishPillarPoints(pubGroundCloud, pubIsolatedCloud);
     voxelmap_manager->ClearPillarVoxels();
     t_pillar2 = omp_get_wtime();
@@ -860,47 +859,21 @@ void LIVMapper::imu_prop_callback(const ros::TimerEvent &e)
   mtx_buffer_imu_prop.unlock();
 }
 
-void LIVMapper::transformLidar(const Eigen::Matrix3d rot, const Eigen::Vector3d t, 
-                              const PointCloudXYZI::Ptr &input_cloud, 
-                              PointCloudXYZI::Ptr &trans_cloud)
+void LIVMapper::transformLidar(const Eigen::Matrix3d rot, const Eigen::Vector3d t, const PointCloudXYZI::Ptr &input_cloud, PointCloudXYZI::Ptr &trans_cloud)
 {
-  // 1. 预检查空输入
-  if (input_cloud->empty()) {
-    trans_cloud->clear();
-    return;
-  }
-  
-  // 2. 预计算变换矩阵元素
-  const Eigen::Matrix3d rot_extR = rot * extR;
-  const Eigen::Vector3d rot_extT = rot * extT + t;
-  
-  // 3. 预分配内存
-  trans_cloud->clear();
-  trans_cloud->points.reserve(input_cloud->size());
-  
-  // 4. 提取矩阵元素为局部变量，提高缓存命中率
-  const double r00 = rot_extR(0,0), r01 = rot_extR(0,1), r02 = rot_extR(0,2);
-  const double r10 = rot_extR(1,0), r11 = rot_extR(1,1), r12 = rot_extR(1,2);
-  const double r20 = rot_extR(2,0), r21 = rot_extR(2,1), r22 = rot_extR(2,2);
-  const double tx = rot_extT(0), ty = rot_extT(1), tz = rot_extT(2);
-  
-  // 5. 批量处理点云
-  trans_cloud->points.resize(input_cloud->size());
-  for (size_t i = 0; i < input_cloud->size(); ++i)
+  PointCloudXYZI().swap(*trans_cloud);
+  trans_cloud->reserve(input_cloud->size());
+  for (size_t i = 0; i < input_cloud->size(); i++)
   {
-    const pcl::PointXYZINormal& p_c = input_cloud->points[i];
-    PointType& pi = trans_cloud->points[i];
-    
-    // 直接计算，避免Eigen Vector3d构造开销
-    const double x = p_c.x;
-    const double y = p_c.y;
-    const double z = p_c.z;
-    
-    // 手动展开矩阵乘法，利用编译器向量化
-    pi.x = r00 * x + r01 * y + r02 * z + tx;
-    pi.y = r10 * x + r11 * y + r12 * z + ty;
-    pi.z = r20 * x + r21 * y + r22 * z + tz;
+    pcl::PointXYZINormal p_c = input_cloud->points[i];
+    Eigen::Vector3d p(p_c.x, p_c.y, p_c.z);
+    p = (rot * (extR * p + extT) + t);
+    PointType pi;
+    pi.x = p(0);
+    pi.y = p(1);
+    pi.z = p(2);
     pi.intensity = p_c.intensity;
+    trans_cloud->points.push_back(pi);
   }
 }
 

@@ -376,7 +376,7 @@ void ImuProcess::UndistortPcl(LidarMeasureGroup &lidar_meas, StatesGroup &state_
   if (lidar_meas.lio_vio_flg == LIO)
   {
     pcl_wait_proc.resize(lidar_meas.pcl_proc_cur->points.size());
-    pcl_wait_proc = *(lidar_meas.pcl_proc_cur);
+    pcl_wait_proc = *(lidar_meas.pcl_proc_cur); // 复制当前帧点云到待处理队列
     lidar_meas.lidar_scan_index_now = 0;
     IMUpose.push_back(set_pose6d(0.0, acc_s_last, angvel_last, state_inout.vel_end, state_inout.pos_end, state_inout.rot_end));
   }

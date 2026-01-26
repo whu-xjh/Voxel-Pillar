@@ -219,24 +219,18 @@ typedef struct PillarVoxelConfig
   bool pillar_voxel_en_;
   double voxel_size_;  // 体素柱中的体素大小
   int min_adjacent_num_;
-  int pillar_max_capacity_;
   int neighbor_search_type_;
-  bool upper_voxel_check_en_;
   bool ground_height_angle_check_en_;
   double ground_height_angle_threshold_;
   bool plane_fitting_ground_en_;
-  int lowest_points_num_;
   double plane_fitting_distance_threshold_;
-  int plane_fitting_iterations_;
-  std::vector<float> plane_fitting_iteration_thresholds_;
+  bool skip_ground_points_en_;
   bool adjacent_check_en_;
 
-  PillarVoxelConfig() : pillar_voxel_en_(false), voxel_size_(1.0), min_adjacent_num_(3), pillar_max_capacity_(0),
-                       neighbor_search_type_(0), upper_voxel_check_en_(false),
-                       ground_height_angle_check_en_(true), ground_height_angle_threshold_(5.0),
-                       plane_fitting_ground_en_(false), lowest_points_num_(100),
-                       plane_fitting_distance_threshold_(0.1), plane_fitting_iterations_(3),
-                       plane_fitting_iteration_thresholds_({0.2f, 0.1f, 0.05f}), adjacent_check_en_(true) {}
+  PillarVoxelConfig() : pillar_voxel_en_(false), voxel_size_(1.0), min_adjacent_num_(3),
+                       neighbor_search_type_(0), ground_height_angle_check_en_(true), ground_height_angle_threshold_(5.0),
+                       plane_fitting_ground_en_(false), plane_fitting_distance_threshold_(0.1), adjacent_check_en_(true),
+                       skip_ground_points_en_(false) {}
 } PillarVoxelConfig;
 
 void loadPillarVoxelConfig(ros::NodeHandle &nh, PillarVoxelConfig &config);
@@ -251,14 +245,14 @@ public:
   std::unordered_set<PILLAR_LOCATION> current_pillars_;
   std::vector<VOXEL_LOCATION> neighbor_offsets_;
 
+  Eigen::Vector3d fitted_plane_normal_ = Eigen::Vector3d::Zero();
+  double fitted_plane_d_ = 0.0;
+  bool plane_fitted_ = false;
   void init(const PillarVoxelConfig &config, double voxel_size);
+  PointCloudXYZI::Ptr CheckHeightAngle(const PointCloudXYZI::Ptr &input_cloud, const Eigen::Vector3d& current_pos);
   void BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud);
   void GroundDetection(const Eigen::Vector3d& current_pos);
-  std::vector<Eigen::Vector3d> AdjacentCheck();
-  void PlaneFitting(const std::vector<Eigen::Vector3d>& seed_points);
-  void UpdateFlags(std::vector<pointWithVar> &pv_list);
   void PublishPillarPoints(const ros::Publisher &pubGround, const ros::Publisher &pubIsolated);
-  void ClearCurrentFramePillars();
 
 private:
   void initHorizontalNeighborOffsets();
@@ -303,6 +297,7 @@ public:
   std::vector<M3D> body_cov_list_;
   std::vector<pointWithVar> pv_list_;
   std::vector<PointToPlane> ptpl_list_;
+  std::vector<bool> skip_list;
 
   PillarVoxelMap pillar_map_;
 
@@ -325,6 +320,8 @@ public:
   void UpdateVoxelMap(const std::vector<pointWithVar> &input_points);
 
   void BuildResidualListOMP(std::vector<pointWithVar> &pv_list, std::vector<PointToPlane> &ptpl_list);
+
+  void DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_world);
 
   void build_single_residual(pointWithVar &pv, const VoxelOctoTree *current_octo, const int current_layer, bool &is_sucess, bool &is_surface, double &prob,
                              PointToPlane &single_ptpl);
