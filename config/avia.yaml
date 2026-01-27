@@ -1,8 +1,8 @@
 common:
   img_topic: "/left_camera/image"
   lid_topic: "/livox/lidar"
-  imu_topic: "/livox/imu"
-  img_en: 1
+  imu_topic: "/livox/imu_192_168_1_159" 
+  img_en: 0
   lidar_en: 1
   ros_driver_bug_fix: true
 
@@ -21,7 +21,7 @@ time_offset:
 
 preprocess:
   point_filter_num: 1
-  filter_size_surf: 0.1 # 点云体素下采样中的体素大小
+  filter_size_surf: 0.25 # 点云体素下采样中的体素大小
   lidar_type: 1 # Livox Avia LiDAR
   scan_line: 6
   blind: 0.8
@@ -52,16 +52,23 @@ lio:
   dept_err: 0.02
   beam_err: 0.05
   min_eigen_value: 0.0025 # 0.005
-  voxel_size: 0.5
+  voxel_size: 1
   max_layer: 2
   max_points_num: 50
   layer_init_num: [5, 5, 5, 5, 5]
-  capacity: 10000  # LRU缓存容量 (0 = 禁用LRU缓存)
 
 # Pillar Voxel 参数配置
 pillar_voxel:
-  pillar_voxel_en: true
-  min_adjacent_num: 2      # 相邻地面体素数量阈值
+  pillar_voxel_en: false # 是否启用pillar体素地图
+  voxel_size: 0.25  # 体素柱中的体素大小（米）
+  adjacent_check_en: true  # 是否启用邻域检查
+  min_adjacent_num: 5    # 相邻地面体素数量阈值
+  neighbor_search_type: 0  # 邻域搜索类型: 0=8邻域, 1=24邻域
+  ground_height_angle_check_en: true  # 是否启用基于高度角的地面点过滤
+  ground_height_angle_threshold: 0  # 高度角阈值（度），超过此阈值不认为是地面点
+  plane_fitting_ground_en: true # 是否启用基于平面拟合的二次地面判断
+  plane_fitting_distance_threshold: 0.1  # 平面拟合距离阈值（米）
+  skip_type: true # 是否跳过地面点的ICP
 
 local_map:  
   map_sliding_en: false
@@ -78,6 +85,10 @@ publish:
   pub_plane_en: false
   pub_scan_num: 1
   blind_rgb_points: 0.0
+
+evo:
+  seq_name: "fenhe_tunnel_basement"
+  pose_output_en: true
 
 lidar_save:
   save_en: false

@@ -80,7 +80,7 @@ void loadPillarVoxelConfig(ros::NodeHandle &nh, PillarVoxelConfig &config)
   nh.param<double>("pillar_voxel/ground_height_angle_threshold", config.ground_height_angle_threshold_, 30.0);
   nh.param<bool>("pillar_voxel/plane_fitting_ground_en", config.plane_fitting_ground_en_, false);
   nh.param<double>("pillar_voxel/plane_fitting_distance_threshold", config.plane_fitting_distance_threshold_, 0.1);
-  nh.param<bool>("pillar_voxel/skip_ground_points_en", config.skip_ground_points_en_, false);
+  nh.param<bool>("pillar_voxel/skip_type", config.skip_type_, false);
   nh.param<bool>("pillar_voxel/adjacent_check_en", config.adjacent_check_en_, true);
 }
 
@@ -1578,7 +1578,7 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
 
     const double distance = plane_normal.dot(point_vec) + plane_d;
 
-    if (pillar_map_.config_.skip_ground_points_en_)
+    if (pillar_map_.config_.skip_type_ == 2)
     {
       if (distance < distance_threshold)
       {
@@ -1589,7 +1589,8 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
         skip_list.push_back(false);
       }
     }
-    else{
+    else if (pillar_map_.config_.skip_type_ == 1)
+    {
       if (distance < -distance_threshold)
       {
         skip_list.push_back(true);
@@ -1598,6 +1599,10 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
       {
         skip_list.push_back(false);
       }
+    }
+    else
+    {
+        skip_list.push_back(false);
     }
   }
 }
