@@ -67,7 +67,7 @@ lio:
 
 # Pillar Voxel 参数配置
 pillar_voxel:
-  pillar_voxel_en: false # 是否启用pillar体素地图
+  pillar_voxel_en: true # 是否启用pillar体素地图
   voxel_size: 0.25  # 体素柱中的体素大小（米）
   adjacent_check_en: true  # 是否启用邻域检查
   min_adjacent_num: 5    # 相邻地面体素数量阈值
@@ -76,7 +76,7 @@ pillar_voxel:
   ground_height_angle_threshold: 0  # 高度角阈值（度），超过此阈值不认为是地面点
   plane_fitting_ground_en: true # 是否启用基于平面拟合的二次地面判断
   plane_fitting_distance_threshold: 0.2  # 平面拟合距离阈值（米）
-  skip_type: 0 # 0: 不跳过, 1: 跳过地面之下的点, 2: 跳过地面及地面之下的点
+  skip_type: 1 # 0: 不跳过, 1: 跳过地面之下的点, 2: 跳过地面及地面之下的点
 
 local_map: 
   map_sliding_en: false
@@ -96,7 +96,7 @@ publish:
   blind_rgb_points: 0.0
 
 evo:
-  seq_name: "fenhe_tunnel"
+  seq_name: "fenhe_tunnel_skiptype2"
   pose_output_en: true
 
 lidar_save:
