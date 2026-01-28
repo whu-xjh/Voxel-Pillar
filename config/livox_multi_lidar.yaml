@@ -1,6 +1,6 @@
 common:
   img_topic: "/left_camera/image"
-  lid_topic: "/livox/lidar"  # 使用合并后的LiDAR话题
+  lid_topic: "/livox/multi_lidar"  # 使用合并后的LiDAR话题
   imu_topic: "/livox/imu_192_168_1_159"  # 默认使用159的IMU
   external_imu_topic: "/novatel/oem7/odom"  # 如果有外置IMU，可以在这里设置话题
   img_en: 0
@@ -22,7 +22,7 @@ time_offset:
 
 preprocess:
   point_filter_num: 1
-  filter_size_surf: 0.25 # 体素滤波大小
+  filter_size_surf: 0.5 # 体素滤波大小
   lidar_type: 1 # Livox Avia LiDAR
   scan_line: 6 # Avia: 6, Mid360: 4
   blind: 0.8
@@ -62,20 +62,20 @@ lio:
   layer_init_num: [5, 5, 5, 5, 5]
   sigma_num: 3
   capacity: 0  # LRU缓存容量, 越大占用内存越多 (0 = 禁用LRU缓存)
-  rf_enhance_en: false
-  intensity_fusion_en: false  # 是否启用三维强度概率融合 (几何距离+强度差异)
+  rf_enhance_en: true  # 是否启用反射强度增强
+  intensity_fusion_en: true  # 是否启用三维强度概率融合 (几何距离+强度差异)
 
 # Pillar Voxel 参数配置
 pillar_voxel:
   pillar_voxel_en: true # 是否启用pillar体素地图
-  voxel_size: 0.25  # 体素柱中的体素大小（米）
+  voxel_size: 0.5  # 体素柱中的体素大小（米）
   adjacent_check_en: true  # 是否启用邻域检查
   min_adjacent_num: 5    # 相邻地面体素数量阈值
   neighbor_search_type: 0  # 邻域搜索类型: 0=8邻域, 1=24邻域
   ground_height_angle_check_en: true  # 是否启用基于高度角的地面点过滤
   ground_height_angle_threshold: 0  # 高度角阈值（度），超过此阈值不认为是地面点
   plane_fitting_ground_en: true # 是否启用基于平面拟合的二次地面判断
-  plane_fitting_distance_threshold: 0.2  # 平面拟合距离阈值（米）
+  plane_fitting_distance_threshold: 0.1  # 平面拟合距离阈值（米）
   skip_type: 1 # 0: 不跳过, 1: 跳过地面之下的点, 2: 跳过地面及地面之下的点
 
 local_map: 
@@ -88,7 +88,7 @@ uav:
   gravity_align_en: true
 
 publish:
-  dense_map_en: false
+  dense_map_en: true
   pub_effect_en: true
   pub_plane_en: false
   pub_body_en: false  # 是否发布body坐标系下的点云
@@ -96,7 +96,7 @@ publish:
   blind_rgb_points: 0.0
 
 evo:
-  seq_name: "fenhe_tunnel_skiptype2"
+  seq_name: "shawan_tunnel_skiptype1_nocpt7"
   pose_output_en: true
 
 lidar_save:

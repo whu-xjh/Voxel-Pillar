@@ -991,11 +991,11 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
         // 根据配置决定是否启用三维强度概率融合
         if (config_setting_.intensity_fusion_en_) 
         {
-          // double mean_intensity_diff = static_cast<double>(pv.intensity) - plane.mean_intensity_;
-          // double mean_intensity_prob = 1.0 / (sqrt(2.0 * M_PI) * plane.intensity_std_) *
-          //                               exp(-0.5 * mean_intensity_diff * mean_intensity_diff / (plane.intensity_std_ *
-          //                               plane.intensity_std_));
-          // this_prob *= mean_intensity_prob; // 考虑空间距离和强度差异的概率
+          double mean_intensity_diff = static_cast<double>(pv.intensity) - plane.mean_intensity_;
+          double mean_intensity_prob = 1.0 / (sqrt(2.0 * M_PI) * plane.intensity_std_) *
+                                        exp(-0.5 * mean_intensity_diff * mean_intensity_diff / (plane.intensity_std_ *
+                                        plane.intensity_std_));
+          this_prob *= mean_intensity_prob; // 考虑空间距离和强度差异的概率
 
           double latest_intensity_diff = static_cast<double>(pv.intensity) - plane.latest_intensity_;
           double latest_intensity_prob = 1.0 / (sqrt(2.0 * M_PI) * plane.intensity_std_) *
@@ -1561,11 +1561,16 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
 {
   if (!pillar_map_.plane_fitted_)
   {
-    std::cout << "[ DefineSkipPoints ] No plane fitted, skipping point removal." << std::endl;
+    skip_list.assign(feats_down_world->points.size(), false);
     return;
   }
 
   skip_list.clear();
+
+  std::vector<PointType> kept_world_points;
+  std::vector<PointType> kept_body_points;
+  kept_world_points.reserve(feats_down_world->points.size());
+  kept_body_points.reserve(feats_down_body_->points.size());
 
   const Eigen::Vector3d& plane_normal = pillar_map_.fitted_plane_normal_;
   const double plane_d = pillar_map_.fitted_plane_d_;
@@ -1577,34 +1582,30 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
     Eigen::Vector3d point_vec(point_world.x, point_world.y, point_world.z);
 
     const double distance = plane_normal.dot(point_vec) + plane_d;
+    bool skip = false;
 
     if (pillar_map_.config_.skip_type_ == 2)
     {
-      if (distance < distance_threshold)
-      {
-        skip_list.push_back(true);
-      }
-      else
-      {
-        skip_list.push_back(false);
-      }
+      skip = (distance < distance_threshold);
     }
     else if (pillar_map_.config_.skip_type_ == 1)
     {
-      if (distance < -distance_threshold)
-      {
-        skip_list.push_back(true);
-      }
-      else
-      {
-        skip_list.push_back(false);
-      }
+      skip = (distance < -distance_threshold);
     }
-    else
+
+    skip_list.push_back(skip);
+
+    if (!skip)
     {
-        skip_list.push_back(false);
+      kept_world_points.push_back(feats_down_world->points[i]);
+      kept_body_points.push_back(feats_down_body_->points[i]);
     }
   }
+
+  feats_down_world->points.clear();
+  feats_down_body_->points.clear();
+  feats_down_world->points.insert(feats_down_world->points.end(), kept_world_points.begin(), kept_world_points.end());
+  feats_down_body_->points.insert(feats_down_body_->points.end(), kept_body_points.begin(), kept_body_points.end());
 }
 
 void PillarVoxelMap::PublishPillarPoints(const ros::Publisher &pubGround, const ros::Publisher &pubIsolated)

@@ -46,6 +46,8 @@ LIVMapper::LIVMapper(ros::NodeHandle &nh)
   feats_undistort.reset(new PointCloudXYZI());
   feats_down_body.reset(new PointCloudXYZI());
   feats_down_world.reset(new PointCloudXYZI());
+  origin_feats_down_body_.reset(new PointCloudXYZI());
+  origin_feats_down_world_.reset(new PointCloudXYZI());
   pcl_w_wait_pub.reset(new PointCloudXYZI());
   pcl_wait_pub.reset(new PointCloudXYZI());
   pcl_wait_save.reset(new PointCloudXYZRGB());
@@ -459,6 +461,7 @@ void LIVMapper::handleLIO()
   transformLidar(_state.rot_end, _state.pos_end, feats_down_body, feats_down_world); // 转换到世界坐标系
   voxelmap_manager->feats_down_world_ = feats_down_world;
   voxelmap_manager->feats_down_size_ = feats_down_size;
+
   // double t_tran2 = omp_get_wtime();
   // printf("transformLidar time: %f\n", t_tran2 - t_tran1);
 
@@ -473,6 +476,11 @@ void LIVMapper::handleLIO()
   if (pillar_config.pillar_voxel_en_)
   {
     t_pillar1 = omp_get_wtime();
+
+    *origin_feats_down_body_ = *feats_down_body;
+    *origin_feats_down_world_ = *feats_down_world;
+    origin_feats_down_size_ = feats_down_size;
+
     PointCloudXYZI::Ptr filtered_cloud = voxelmap_manager->pillar_map_.CheckHeightAngle(feats_down_world, _state.pos_end);
     voxelmap_manager->pillar_map_.BuildPillarMap(filtered_cloud);
     voxelmap_manager->pillar_map_.GroundDetection(_state.pos_end);
@@ -487,6 +495,17 @@ void LIVMapper::handleLIO()
   voxelmap_manager->StateEstimation(state_propagat);
   _state = voxelmap_manager->state_;
   _pv_list = voxelmap_manager->pv_list_;
+
+  if (pillar_config.pillar_voxel_en_)
+  {
+    feats_down_body->clear();
+    feats_down_world->clear();
+    feats_down_body->points.insert(feats_down_body->points.end(), origin_feats_down_body_->points.begin(), origin_feats_down_body_->points.end());
+    feats_down_world->points.insert(feats_down_world->points.end(), origin_feats_down_world_->points.begin(), origin_feats_down_world_->points.end());
+    voxelmap_manager->feats_down_size_ = origin_feats_down_size_;
+    _pv_list.resize(origin_feats_down_size_);
+  }
+  
   double t2 = omp_get_wtime();
 
   /*

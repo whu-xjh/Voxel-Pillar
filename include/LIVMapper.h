@@ -184,6 +184,9 @@ private:
   PointCloudXYZI::Ptr feats_undistort;
   PointCloudXYZI::Ptr feats_down_body;
   PointCloudXYZI::Ptr feats_down_world;
+  PointCloudXYZI::Ptr origin_feats_down_body_;
+  PointCloudXYZI::Ptr origin_feats_down_world_;
+  int origin_feats_down_size_;
   PointCloudXYZI::Ptr pcl_w_wait_pub;
   PointCloudXYZI::Ptr pcl_wait_pub;
   PointCloudXYZRGB::Ptr pcl_wait_save;

@@ -21,7 +21,7 @@ time_offset:
 
 preprocess:
   point_filter_num: 1
-  filter_size_surf: 0.25 # 点云体素下采样中的体素大小
+  filter_size_surf: 0.5 # 点云体素下采样中的体素大小
   lidar_type: 1 # Livox Avia LiDAR
   scan_line: 6
   blind: 0.8
@@ -87,7 +87,7 @@ publish:
   blind_rgb_points: 0.0
 
 evo:
-  seq_name: "fenhe_tunnel_basement"
+  seq_name: "shawan_tunnel_basement"
   pose_output_en: true
 
 lidar_save:
@@ -99,7 +99,7 @@ lidar_save:
   # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
 
 external_imu:
-  enable: false  # 是否启用外置IMU
+  enable: true  # 是否启用外置IMU
   time_offset: 0  # 外置IMU时间偏移(秒)
   buffer_size: 100000  # external IMU buffer大小
   external_R : [0, 0, -1, 1, 0, 0, 0, -1, 0]
