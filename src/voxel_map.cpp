@@ -80,7 +80,7 @@ void loadPillarVoxelConfig(ros::NodeHandle &nh, PillarVoxelConfig &config)
   nh.param<double>("pillar_voxel/ground_height_angle_threshold", config.ground_height_angle_threshold_, 30.0);
   nh.param<bool>("pillar_voxel/plane_fitting_ground_en", config.plane_fitting_ground_en_, false);
   nh.param<double>("pillar_voxel/plane_fitting_distance_threshold", config.plane_fitting_distance_threshold_, 0.1);
-  nh.param<bool>("pillar_voxel/skip_type", config.skip_type_, false);
+  nh.param<int>("pillar_voxel/skip_type", config.skip_type_, 0);
   nh.param<bool>("pillar_voxel/adjacent_check_en", config.adjacent_check_en_, true);
 }
 

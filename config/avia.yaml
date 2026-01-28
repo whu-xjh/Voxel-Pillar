@@ -37,7 +37,7 @@ vio:
   inverse_composition_en: false
   exposure_estimate_en: true
   inv_expo_cov: 0.1
-  capacity: 10000 # LRU cache capacity for visual feature map (0 = disable LRU cache)
+  capacity: 0 # LRU cache capacity for visual feature map (0 = disable LRU cache)
 
 imu:
   imu_en: true
@@ -76,7 +76,7 @@ local_map:
   sliding_thresh: 8
 
 uav:
-  imu_rate_odom: false
+  imu_rate_odom: true
   gravity_align_en: true
 
 publish:

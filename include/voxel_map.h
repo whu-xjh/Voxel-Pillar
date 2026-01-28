@@ -224,13 +224,13 @@ typedef struct PillarVoxelConfig
   double ground_height_angle_threshold_;
   bool plane_fitting_ground_en_;
   double plane_fitting_distance_threshold_;
-  bool skip_type_;
+  int skip_type_;
   bool adjacent_check_en_;
 
   PillarVoxelConfig() : pillar_voxel_en_(false), voxel_size_(1.0), min_adjacent_num_(3),
                        neighbor_search_type_(0), ground_height_angle_check_en_(true), ground_height_angle_threshold_(5.0),
                        plane_fitting_ground_en_(false), plane_fitting_distance_threshold_(0.1), adjacent_check_en_(true),
-                       skip_type_(false) {}
+                       skip_type_(0) {}
 } PillarVoxelConfig;
 
 void loadPillarVoxelConfig(ros::NodeHandle &nh, PillarVoxelConfig &config);
