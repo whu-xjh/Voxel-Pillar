@@ -15,8 +15,6 @@ which is included as part of this source code package.
 #include <iomanip>
 #include <sys/stat.h>
 #include <fstream>
-#include <LASlib/laszip.hpp>
-#include <laszip_api.h>
 #include <type_traits>
 #include <pcl/point_types.h>
 #include <unordered_map>
@@ -30,9 +28,6 @@ LIVMapper::LIVMapper(ros::NodeHandle &nh)
   extrinR.assign(9, 0.0);
   cameraextrinT.assign(3, 0.0);
   cameraextrinR.assign(9, 0.0);
-
-  // Start LAZ save worker thread
-  laz_save_thread_ = std::thread(&LIVMapper::lazSaveWorker, this);
 
   p_pre.reset(new Preprocess());
   p_imu.reset(new ImuProcess());
@@ -66,15 +61,8 @@ LIVMapper::LIVMapper(ros::NodeHandle &nh)
   path.header.frame_id = "camera_init";
 }
 
-LIVMapper::~LIVMapper() 
+LIVMapper::~LIVMapper()
 {
-  // Stop LAZ save worker thread
-  laz_stop_thread_ = true;
-  laz_queue_cv_.notify_all();
-  
-  if (laz_save_thread_.joinable()) {
-    laz_save_thread_.join();
-  }
 }
 
 void LIVMapper::readParameters(ros::NodeHandle &nh)
@@ -125,7 +113,6 @@ void LIVMapper::readParameters(ros::NodeHandle &nh)
   
   nh.param<int>("lidar_save/interval", save_interval, -1);
   nh.param<bool>("lidar_save/save_en", save_en, false);
-  nh.param<bool>("lidar_save/laz_save_en", laz_save_en, false);
   nh.param<bool>("lidar_save/colmap_output_en", colmap_output_en, false);
   nh.param<bool>("lidar_save/effect_save_en", effect_save_en, false);
   nh.param<double>("lidar_save/filter_size_pcd", filter_size_pcd, 0.5);
@@ -704,13 +691,12 @@ void LIVMapper::handleLIO()
             << _state.bias_a.transpose() << " " << V3D(_state.inv_expo_time, 0, 0).transpose() << " " << feats_undistort->points.size() << std::endl;
 }
 
-void LIVMapper::savePCD() 
+void LIVMapper::savePCD()
 {
-  if (save_en && (pcl_wait_save->points.size() > 0 || pcl_wait_save_intensity->points.size() > 0) && save_interval < 0) 
+  if (save_en && (pcl_wait_save->points.size() > 0 || pcl_wait_save_intensity->points.size() > 0) && save_interval < 0)
   {
-    std::string file_extension = laz_save_en ? ".laz" : ".pcd";
-    std::string raw_points_dir = pcd_session_dir_ + "/all_raw_points" + file_extension;
-    std::string downsampled_points_dir = pcd_session_dir_ + "/all_downsampled_points" + file_extension;
+    std::string raw_points_dir = pcd_session_dir_ + "/all_raw_points.pcd";
+    std::string downsampled_points_dir = pcd_session_dir_ + "/all_downsampled_points.pcd";
 
     if (img_en)
     {
@@ -719,32 +705,21 @@ void LIVMapper::savePCD()
       voxel_filter.setInputCloud(pcl_wait_save);
       voxel_filter.setLeafSize(filter_size_pcd, filter_size_pcd, filter_size_pcd);
       voxel_filter.filter(*downsampled_cloud);
-  
-      if (laz_save_en) {
-        // Queue LAZ save tasks to separate thread
-        auto pcl_wait_save_copy = *pcl_wait_save;
-        queueLazSaveTask(raw_points_dir, [this, raw_points_dir, pcl_wait_save_copy]() {
-          saveAsLAZ(raw_points_dir, pcl_wait_save_copy);
-        });
-        queueLazSaveTask(downsampled_points_dir, [this, downsampled_points_dir, downsampled_cloud]() {
-          saveAsLAZ(downsampled_points_dir, *downsampled_cloud);
-        });
-      } else {
-        pcl::PCDWriter pcd_writer;
-        pcd_writer.writeBinary(raw_points_dir, *pcl_wait_save);
-        pcd_writer.writeBinary(downsampled_points_dir, *downsampled_cloud);
-      }
-      
-      std::cout << GREEN << "Raw point cloud data saved to: " << raw_points_dir 
+
+      pcl::PCDWriter pcd_writer;
+      pcd_writer.writeBinary(raw_points_dir, *pcl_wait_save);
+      pcd_writer.writeBinary(downsampled_points_dir, *downsampled_cloud);
+
+      std::cout << GREEN << "Raw point cloud data saved to: " << raw_points_dir
                 << " with point count: " << pcl_wait_save->points.size() << RESET << std::endl;
-      std::cout << GREEN << "Downsampled point cloud data saved to: " << downsampled_points_dir 
+      std::cout << GREEN << "Downsampled point cloud data saved to: " << downsampled_points_dir
                 << " with point count after filtering: " << downsampled_cloud->points.size() << RESET << std::endl;
 
       if(colmap_output_en)
       {
         fout_points << "# 3D point list with one line of data per point\n";
         fout_points << "#  POINT_ID, X, Y, Z, R, G, B, ERROR\n";
-        for (size_t i = 0; i < downsampled_cloud->size(); ++i) 
+        for (size_t i = 0; i < downsampled_cloud->size(); ++i)
         {
             const auto& point = downsampled_cloud->points[i];
             fout_points << i << " "
@@ -758,18 +733,10 @@ void LIVMapper::savePCD()
       }
     }
     else
-    {      
-      if (laz_save_en) {
-        // Queue LAZ save task to separate thread
-        auto pcl_wait_save_intensity_copy = *pcl_wait_save_intensity;
-        queueLazSaveTask(raw_points_dir, [this, raw_points_dir, pcl_wait_save_intensity_copy]() {
-          saveAsLAZ(raw_points_dir, pcl_wait_save_intensity_copy);
-        });
-      } else {
-        pcl::PCDWriter pcd_writer;
-        pcd_writer.writeBinary(raw_points_dir, *pcl_wait_save_intensity);
-      }
-      std::cout << GREEN << "Raw point cloud data saved to: " << raw_points_dir 
+    {
+      pcl::PCDWriter pcd_writer;
+      pcd_writer.writeBinary(raw_points_dir, *pcl_wait_save_intensity);
+      std::cout << GREEN << "Raw point cloud data saved to: " << raw_points_dir
                 << " with point count: " << pcl_wait_save_intensity->points.size() << RESET << std::endl;
     }
   }
@@ -1532,26 +1499,17 @@ void LIVMapper::save_frame_world_RGB(PointCloudXYZRGB::Ptr &laserCloudWorldRGB)
     if (pcl_wait_save->size() > 0 && save_interval > 0 && scan_wait_num >= save_interval)
     {
       pcd_index++;
-      string file_extension = laz_save_en ? ".laz" : ".pcd";
-      string all_points_dir(pcd_session_dir_ + "/" + to_string(pcd_index) + file_extension);
-      
+      string all_points_dir(pcd_session_dir_ + "/" + to_string(pcd_index) + ".pcd");
+
       if (save_en)
       {
         cout << "current scan saved to /PCD/" << all_points_dir << endl;
         if (img_en)
         {
-          if (laz_save_en) {
-            // Queue LAZ save task to separate thread
-            auto pcl_wait_save_copy = *pcl_wait_save;
-            queueLazSaveTask(all_points_dir, [this, all_points_dir, pcl_wait_save_copy]() {
-              saveAsLAZ(all_points_dir, pcl_wait_save_copy);
-            });
-          } else {
-            pcl::PCDWriter pcd_writer;
-            pcd_writer.writeBinary(all_points_dir, *pcl_wait_save);
-          }
+          pcl::PCDWriter pcd_writer;
+          pcd_writer.writeBinary(all_points_dir, *pcl_wait_save);
           PointCloudXYZRGB().swap(*pcl_wait_save);
-        }  
+        }
         Eigen::Quaterniond q(_state.rot_end);
         fout_pcd_pos << _state.pos_end[0] << " " << _state.pos_end[1] << " " << _state.pos_end[2] << " " << q.w() << " " << q.x() << " " << q.y()
                      << " " << q.z() << " " << endl;
@@ -1576,24 +1534,15 @@ void LIVMapper::save_frame_world(const std::vector<PointToPlane> &ptpl_list)
     if ((pcl_wait_save_intensity->size() > 0 || ptpl_list_wait_save.size() > 0) && save_interval > 0 && scan_wait_num >= save_interval)
     {
       pcd_index++;
-      string file_extension = laz_save_en ? ".laz" : ".pcd";
-      string all_points_dir(pcd_session_dir_ + "/" + to_string(pcd_index) + file_extension);
-      
-      if (laz_save_en) {
-      // Queue LAZ save task to separate thread
-      auto pcl_wait_save_intensity_copy = *pcl_wait_save_intensity;
-      queueLazSaveTask(all_points_dir, [this, all_points_dir, pcl_wait_save_intensity_copy]() {
-        saveAsLAZ(all_points_dir, pcl_wait_save_intensity_copy);
-      });
-      } else {
-        pcl::PCDWriter pcd_writer;
-        pcd_writer.writeBinary(all_points_dir, *pcl_wait_save_intensity);
-      }
+      string all_points_dir(pcd_session_dir_ + "/" + to_string(pcd_index) + ".pcd");
+
+      pcl::PCDWriter pcd_writer;
+      pcd_writer.writeBinary(all_points_dir, *pcl_wait_save_intensity);
       PointCloudXYZI().swap(*pcl_wait_save_intensity);
       Eigen::Quaterniond q(_state.rot_end);
       fout_pcd_pos << _state.pos_end[0] << " " << _state.pos_end[1] << " " << _state.pos_end[2] << " " << q.w() << " " << q.x() << " " << q.y()
                     << " " << q.z() << " " << endl;
-      scan_wait_num = 0; 
+      scan_wait_num = 0;
     }
   }
   PointCloudXYZI().swap(*pcl_w_wait_pub);
@@ -1703,167 +1652,4 @@ void LIVMapper::publish_path(const ros::Publisher pubPath)
   msg_body_pose.header.frame_id = "camera_init";
   path.poses.push_back(msg_body_pose);
   pubPath.publish(path);
-}
-
-template<typename PointT>
-void LIVMapper::saveAsLAZ(const std::string& filename, const pcl::PointCloud<PointT>& cloud)
-{
-  if (filename.empty() || filename.find_last_of(".") < 0)
-  {
-    std::cerr << "Error: invalid LAZ filename" << std::endl;
-    return;
-  }
-  
-  // 初始化LASzip写入器
-  laszip_POINTER laszip_writer;
-  if (laszip_create(&laszip_writer))
-  {
-    std::cerr << "Error: creating LASzip writer failed" << std::endl;
-    return;
-  }
-  
-  // 初始化头信息
-  laszip_header* header;
-  if (laszip_get_header_pointer(laszip_writer, &header))
-  {
-    std::cerr << "Error: getting LASzip header failed" << std::endl;
-    laszip_destroy(laszip_writer);
-    return;
-  }
-  
-  // 设置LAS参数
-  header->version_major = 1;
-  header->version_minor = 2;
-  header->point_data_format = 2; // XYZ + Intensity + RGB + GPS time
-  header->point_data_record_length = 26;
-  header->number_of_point_records = cloud.points.size();
-  header->x_scale_factor = 0.0001;
-  header->y_scale_factor = 0.0001;
-  header->z_scale_factor = 0.0001;
-  header->x_offset = 0.0;
-  header->y_offset = 0.0;
-  header->z_offset = 0.0;
-  
-  // // 计算边界框
-  // double min_x = std::numeric_limits<double>::max();
-  // double max_x = std::numeric_limits<double>::lowest();
-  // double min_y = min_x, max_y = max_x;
-  // double min_z = min_x, max_z = max_x;
-
-  // Set bounding box
-  if (!cloud.points.empty())
-  {
-    // 打开LAZ文件
-    laszip_BOOL compress = 1;  // 启用压缩
-    if (laszip_open_writer(laszip_writer, filename.c_str(), compress) != 0) {
-        laszip_CHAR* error;
-        laszip_get_error(laszip_writer, &error);
-        std::cerr << "Error opening LAZ file: " << error << std::endl;
-        laszip_destroy(laszip_writer);
-        return;
-    }
-    
-    // 获取点指针
-    laszip_point* laz_point;
-    if (laszip_get_point_pointer(laszip_writer, &laz_point) != 0) {
-        std::cerr << "Error getting point pointer" << std::endl;
-        laszip_close_writer(laszip_writer);
-        laszip_destroy(laszip_writer);
-        return;
-    }
-
-    for (const auto& point : cloud.points)
-    {
-      // min_x = std::min(min_x, point.x());
-      // min_y = std::min(min_y, point.y());
-      // min_z = std::min(min_z, point.z());
-      // max_x = std::max(max_x, point.x());
-      // max_y = std::max(max_y, point.y());
-      // max_z = std::max(max_z, point.z());
-
-      laz_point->X = static_cast<I32>((point.x - header->x_offset) / header->x_scale_factor);
-      laz_point->Y = static_cast<I32>((point.y - header->y_offset) / header->y_scale_factor);
-      laz_point->Z = static_cast<I32>((point.z - header->z_offset) / header->z_scale_factor);
-
-      // Set intensity if available
-      if constexpr (std::is_same_v<PointT, pcl::PointXYZINormal>) {
-        laz_point->intensity = static_cast<U16>(point.intensity);
-      }
-      else if constexpr (std::is_same_v<PointT, pcl::PointXYZRGB>) {
-        laz_point->rgb[0] = point.r;
-        laz_point->rgb[1] = point.g;
-        laz_point->rgb[2] = point.b;
-      }
-
-      // Write point
-      laszip_write_point(laszip_writer);
-    }
-    
-    // Close writer
-    laszip_close_writer(laszip_writer);
-  }
-  
-  // Always destroy the writer
-  laszip_destroy(laszip_writer);
-  
-  // std::cout << GREEN << "Point cloud saved as LAZ: " << filename 
-  //           << " with " << cloud.points.size() << " points" << RESET << std::endl;
-}
-
-// Explicit template instantiation
-template void LIVMapper::saveAsLAZ<pcl::PointXYZRGB>(const std::string& filename, const pcl::PointCloud<pcl::PointXYZRGB>& cloud);
-template void LIVMapper::saveAsLAZ<pcl::PointXYZI>(const std::string& filename, const pcl::PointCloud<pcl::PointXYZI>& cloud);
-template void LIVMapper::saveAsLAZ<pcl::PointXYZINormal>(const std::string& filename, const pcl::PointCloud<pcl::PointXYZINormal>& cloud);
-
-void LIVMapper::lazSaveWorker()
-{
-  while (true) {
-    LazSaveTask task;
-    
-    {
-      std::unique_lock<std::mutex> lock(laz_queue_mutex_);
-      
-      // Wait for task or stop signal
-      laz_queue_cv_.wait(lock, [this]() {
-        return !laz_save_queue_.empty() || laz_stop_thread_;
-      });
-      
-      // Check if thread should stop
-      if (laz_stop_thread_ && laz_save_queue_.empty()) {
-        break;
-      }
-      
-      // Get task from queue
-      if (!laz_save_queue_.empty()) {
-        task = laz_save_queue_.front();
-        laz_save_queue_.pop();
-      }
-    }
-    
-    // Execute the save task outside of lock
-    if (task.save_function) {
-      try {
-        // std::cout << YELLOW << "Starting LAZ save to: " << task.filename << RESET << std::endl;
-        task.save_function();
-        // std::cout << GREEN << "Completed LAZ save to: " << task.filename << RESET << std::endl;
-      } catch (const std::exception& e) {
-        std::cerr << RED << "Error saving LAZ file " << task.filename << ": " << e.what() << RESET << std::endl;
-      }
-    }
-  }
-  
-  std::cout << YELLOW << "LAZ save worker thread stopped" << RESET << std::endl;
-}
-
-void LIVMapper::queueLazSaveTask(const std::string& filename, std::function<void()> save_function)
-{
-  {
-    std::lock_guard<std::mutex> lock(laz_queue_mutex_);
-    laz_save_queue_.emplace(filename, save_function);
-  }
-
-  // Notify worker thread
-  laz_queue_cv_.notify_one();
-
-  std::cout << CYAN << "Queued LAZ save task: " << filename << " (queue size: " << laz_save_queue_.size() << ")" << RESET << std::endl;
 }

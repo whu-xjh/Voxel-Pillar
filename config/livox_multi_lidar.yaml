@@ -100,11 +100,10 @@ evo:
   pose_output_en: true
 
 lidar_save:
-  save_en: false
-  laz_save_en: true
+  save_en: true
   colmap_output_en: false # need to set interval = -1
   filter_size_pcd: 0.15
-  interval: 1
+  interval: 10
   # how many LiDAR frames saved in each pcd file;
   # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
 

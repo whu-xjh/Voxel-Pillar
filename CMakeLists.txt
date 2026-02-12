@@ -105,15 +105,6 @@ find_package(Boost REQUIRED COMPONENTS thread)
 
 
 
-# LAStools - set paths directly since we know they exist
-set(LASTOOLS_INCLUDE_DIR "/usr/local/include/LASlib")
-set(LASTOOLS_LIBRARY "/usr/local/lib/liblaszip.so.8")
-set(laszip_INCLUDE_DIR "/usr/local/include/laszip")
-
-message(STATUS "Using LAStools include: ${LASTOOLS_INCLUDE_DIR}")
-message(STATUS "Using LAStools library: ${LASTOOLS_LIBRARY}")
-message(STATUS "USing laszio include: ${laszip_INCLUDE_DIR}")
-
 set(Sophus_LIBRARIES libSophus.so)
 
 # Define the catkin package
@@ -129,8 +120,6 @@ include_directories(
   ${PCL_INCLUDE_DIRS}
   ${OpenCV_INCLUDE_DIRS}
   ${Sophus_INCLUDE_DIRS}
-  ${LASTOOLS_INCLUDE_DIR}
-  ${laszip_INCLUDE_DIR}
   include
 )
 
@@ -160,7 +149,6 @@ target_link_libraries(fastlivo_mapping
   ${OpenCV_LIBRARIES}
   ${Sophus_LIBRARIES}
   ${Boost_LIBRARIES}
-  ${LASTOOLS_LIBRARY}
 )
 
 # Link libraries to livox_multi_lidar executable

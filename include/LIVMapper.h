@@ -32,17 +32,7 @@ class LIVMapper
 public:
   LIVMapper(ros::NodeHandle &nh);
   ~LIVMapper();
-  
-  // LAZ save thread structures
-  struct LazSaveTask {
-    std::string filename;
-    std::function<void()> save_function;
-    
-    LazSaveTask() = default;
-    LazSaveTask(const std::string& fname, std::function<void()> func) 
-      : filename(fname), save_function(func) {}
-  };
-  
+
   // 外置IMU相关变量
   ExternalIMUData latest_external_imu;
   deque<ExternalIMUData> external_imu_buffer;
@@ -60,8 +50,6 @@ public:
   M3D external_imu_R;
   std::vector<double> external_imu_T_vec, external_imu_R_vec;
 
-  void lazSaveWorker();
-  void queueLazSaveTask(const std::string& filename, std::function<void()> save_function);
   void initializeSubscribersAndPublishers(ros::NodeHandle &nh, image_transport::ImageTransport &it);
   void initializeComponents();
   void initializeFiles();
@@ -72,8 +60,6 @@ public:
   void handleVIO();
   void handleLIO();
   void savePCD();
-  template<typename PointT>
-  void saveAsLAZ(const std::string& filename, const pcl::PointCloud<PointT>& cloud);
   void processImu();
   
   bool sync_packages(LidarMeasureGroup &meas);
@@ -133,7 +119,7 @@ private:
   double match_time = 0, solve_time = 0, solve_const_H_time = 0;
 
   bool lidar_map_inited = false, save_en = false, pub_effect_en = false, pub_voxel_points_en = false, pub_body_en = false, pose_output_en = false, ros_driver_fix_en = false, hilti_en = false;
-  bool laz_save_en = false, effect_save_en = false;
+  bool effect_save_en = false;
 
   int save_interval = -1, pcd_index = 0, scan_wait_num = 0;
   int pub_scan_num = 1;
@@ -252,13 +238,6 @@ private:
   
   std::string session_timestamp_;
   std::string pcd_session_dir_;
-  
-  // LAZ save thread variables
-  std::thread laz_save_thread_;
-  std::queue<LazSaveTask> laz_save_queue_;
-  std::mutex laz_queue_mutex_;
-  std::condition_variable laz_queue_cv_;
-  std::atomic<bool> laz_stop_thread_{false};
-  
+
   };
 #endif

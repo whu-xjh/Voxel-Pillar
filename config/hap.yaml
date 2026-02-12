@@ -84,7 +84,6 @@ evo:
 
 lidar_save:
   save_en: false
-  laz_save_en: true
   colmap_output_en: false # need to set interval = -1
   filter_size_pcd: 0.15
   interval: 1
