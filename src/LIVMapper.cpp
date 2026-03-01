@@ -464,9 +464,9 @@ void LIVMapper::handleLIO()
   {
     t_pillar1 = omp_get_wtime();
 
-    *origin_feats_down_body_ = *feats_down_body;
-    *origin_feats_down_world_ = *feats_down_world;
-    origin_feats_down_size_ = feats_down_size;
+    // *origin_feats_down_body_ = *feats_down_body;
+    // *origin_feats_down_world_ = *feats_down_world;
+    // origin_feats_down_size_ = feats_down_size;
 
     PointCloudXYZI::Ptr filtered_cloud = voxelmap_manager->pillar_map_.CheckHeightAngle(feats_down_world, _state.pos_end);
     voxelmap_manager->pillar_map_.BuildPillarMap(filtered_cloud);
@@ -483,15 +483,15 @@ void LIVMapper::handleLIO()
   _state = voxelmap_manager->state_;
   _pv_list = voxelmap_manager->pv_list_;
 
-  if (pillar_config.pillar_voxel_en_)
-  {
-    feats_down_body->clear();
-    feats_down_world->clear();
-    feats_down_body->points.insert(feats_down_body->points.end(), origin_feats_down_body_->points.begin(), origin_feats_down_body_->points.end());
-    feats_down_world->points.insert(feats_down_world->points.end(), origin_feats_down_world_->points.begin(), origin_feats_down_world_->points.end());
-    voxelmap_manager->feats_down_size_ = origin_feats_down_size_;
-    _pv_list.resize(origin_feats_down_size_);
-  }
+  // if (pillar_config.pillar_voxel_en_)
+  // {
+  //   feats_down_body->clear();
+  //   feats_down_world->clear();
+  //   feats_down_body->points.insert(feats_down_body->points.end(), origin_feats_down_body_->points.begin(), origin_feats_down_body_->points.end());
+  //   feats_down_world->points.insert(feats_down_world->points.end(), origin_feats_down_world_->points.begin(), origin_feats_down_world_->points.end());
+  //   voxelmap_manager->feats_down_size_ = origin_feats_down_size_;
+  //   _pv_list.resize(origin_feats_down_size_);
+  // }
   
   double t2 = omp_get_wtime();
 

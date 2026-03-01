@@ -1567,10 +1567,10 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
 
   skip_list.clear();
 
-  std::vector<PointType> kept_world_points;
-  std::vector<PointType> kept_body_points;
-  kept_world_points.reserve(feats_down_world->points.size());
-  kept_body_points.reserve(feats_down_body_->points.size());
+  // std::vector<PointType> kept_world_points;
+  // std::vector<PointType> kept_body_points;
+  // kept_world_points.reserve(feats_down_world->points.size());
+  // kept_body_points.reserve(feats_down_body_->points.size());
 
   const Eigen::Vector3d& plane_normal = pillar_map_.fitted_plane_normal_;
   const double plane_d = pillar_map_.fitted_plane_d_;
@@ -1595,17 +1595,17 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
 
     skip_list.push_back(skip);
 
-    if (!skip)
-    {
-      kept_world_points.push_back(feats_down_world->points[i]);
-      kept_body_points.push_back(feats_down_body_->points[i]);
-    }
+    // if (!skip)
+    // {
+    //   kept_world_points.push_back(feats_down_world->points[i]);
+    //   kept_body_points.push_back(feats_down_body_->points[i]);
+    // }
   }
 
-  feats_down_world->points.clear();
-  feats_down_body_->points.clear();
-  feats_down_world->points.insert(feats_down_world->points.end(), kept_world_points.begin(), kept_world_points.end());
-  feats_down_body_->points.insert(feats_down_body_->points.end(), kept_body_points.begin(), kept_body_points.end());
+  // feats_down_world->points.clear();
+  // feats_down_body_->points.clear();
+  // feats_down_world->points.insert(feats_down_world->points.end(), kept_world_points.begin(), kept_world_points.end());
+  // feats_down_body_->points.insert(feats_down_body_->points.end(), kept_body_points.begin(), kept_body_points.end());
 }
 
 void PillarVoxelMap::PublishPillarPoints(const ros::Publisher &pubGround, const ros::Publisher &pubIsolated)
