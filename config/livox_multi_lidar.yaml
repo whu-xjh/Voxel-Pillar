@@ -68,7 +68,7 @@ lio:
 # Pillar Voxel 参数配置
 pillar_voxel:
   pillar_voxel_en: true  # 是否启用pillar体素地图
-  voxel_size: 0.25  # 体素柱中的体素大小（米）
+  voxel_size: 0.5  # 体素柱中的体素大小（米）
   adjacent_check_en: true  # 是否启用邻域检查
   min_adjacent_num: 5    # 相邻地面体素数量阈值
   neighbor_search_type: 0  # 邻域搜索类型: 0=8邻域, 1=24邻域
@@ -97,7 +97,7 @@ publish:
 
 evo:
   seq_name: "shawan_tunnel_back_ground"
-  pose_output_en: true
+  pose_output_en: false
 
 lidar_save:
   save_en: true
