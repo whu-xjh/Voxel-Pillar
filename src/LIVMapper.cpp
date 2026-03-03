@@ -438,7 +438,11 @@ void LIVMapper::handleLIO()
   // 点云下采样
   double t0 = omp_get_wtime();
   downSizeFilterSurf.setInputCloud(feats_undistort); // 设置输入点云为去畸变点云
-  downSizeFilterSurf.filter(*feats_down_body); // 对去畸变点云进行体素滤波（filter_size_surf），结果存储在feats_down_body中
+  if (filter_size_surf_min == 0.0) {
+    feats_down_body = feats_undistort;
+  } else {
+    downSizeFilterSurf.filter(*feats_down_body); // 对去畸变点云进行体素滤波（filter_size_surf），结果存储在feats_down_body中
+  }
   double t_down = omp_get_wtime();
  
   // 更新体素地图管理器的相关属性

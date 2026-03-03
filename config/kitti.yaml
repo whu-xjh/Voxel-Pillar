@@ -47,21 +47,33 @@ imu:
   b_acc_cov: 0.0001 # 0.1
   b_gyr_cov: 0.0001 # 0.1
 
+# 激光雷达里程计
 lio:
   max_iterations: 5
   dept_err: 0.02
   beam_err: 0.05
   min_eigen_value: 0.0025 # 0.005
-  voxel_size: 3
-  max_layer: 4
-  max_points_num: 50
+  voxel_size: 3 # 体素底图尺寸
+  max_layer: 3
+  max_points_num: 100
   layer_init_num: [5, 5, 5, 5, 5]
-  capacity: 0  # LRU缓存容量 (0 = 禁用LRU缓存)
+  sigma_num: 3
+  capacity: 0  # LRU缓存容量, 越大占用内存越多 (0 = 禁用LRU缓存)
+  rf_enhance_en: true  # 是否启用配准时候的感受野增强 (Range Field enhancement)
+  intensity_fusion_en: true  # 是否启用三维强度概率融合 (几何距离+强度差异)
 
 # Pillar Voxel 参数配置
 pillar_voxel:
-  pillar_voxel_en: true
-  min_adjacent_num: 1      # 相邻地面体素数量阈值
+  pillar_voxel_en: false  # 是否启用pillar体素地图
+  voxel_size: 0.5  # 体素柱中的体素大小（米）
+  adjacent_check_en: true  # 是否启用邻域检查
+  min_adjacent_num: 1    # 相邻地面体素数量阈值
+  neighbor_search_type: 0  # 邻域搜索类型: 0=8邻域, 1=24邻域
+  ground_height_angle_check_en: false  # 是否启用基于高度角的地面点过滤
+  ground_height_angle_threshold: 0  # 高度角阈值（度），超过此阈值不认为是地面点
+  plane_fitting_ground_en: true # 是否启用基于平面拟合的二次地面判断
+  plane_fitting_distance_threshold: 0.5  # 平面拟合距离阈值（米）
+  skip_type: 1 # 0: 不跳过, 1: 跳过地面之下的点, 2: 跳过地面及地面之下的点
 
 local_map:  
   map_sliding_en: false
@@ -70,7 +82,7 @@ local_map:
 
 uav:
   imu_rate_odom: true
-  gravity_align_en: false
+  gravity_align_en: true
 
 publish:
   dense_map_en: true
@@ -78,6 +90,10 @@ publish:
   pub_plane_en: false
   pub_scan_num: 1
   blind_rgb_points: 0.0
+
+evo:
+  seq_name: "kitti_00"
+  pose_output_en: true
 
 lidar_save:
   save_en: false

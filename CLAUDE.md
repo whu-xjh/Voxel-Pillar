@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is **fast_livo** (package name), a high-speed LiDAR-Inertial Odometry system. It supports multi-LiDAR fusion, visual-inertial odometry, and external IMU integration optimized for high-speed scenarios (>5 m/s). The system features 250Hz IMU propagation and efficient voxel-based mapping with LRU caching.
 
-**Recent Updates** (2025-01):
+**Recent Updates** (2025-01 to 2026-03):
 - Added pillar voxel ground detection system with configurable adjacency filtering and iterative plane fitting
 - Function renaming: `PerformInitialGroundDetection` → `GroundDetection`, `PerformAdjacentGroundDetection` → `AdjacentCheck`, `RefineGroundDetectionByPlaneFitting` → `PlaneFitting`, `UpdatePointGroundFlags` → `UpdateFlags`, `PublishPillarGroundPoints` → `PublishPillarPoints`
 - All pillar voxel functions are sequential (no parallelization)
@@ -21,6 +21,8 @@ cd /home/xjh/Doc/highspeed-lio/catkin_ws
 catkin_make
 source devel/setup.bash
 ```
+
+**Note**: The workspace path is hardcoded in build commands. If your workspace is located elsewhere, adjust paths accordingly.
 
 For development with debugging:
 ```bash
@@ -46,8 +48,9 @@ catkin_make -DCMAKE_BUILD_TYPE=Debug
 **Libraries:**
 - `laser_mapping`: Core LiDAR-IMU fusion (src/LIVMapper.cpp)
 - `imu_proc`: 250Hz IMU propagation with bias estimation (src/IMU_Processing.cpp)
+- `imu_filter`: IMU data filtering and preprocessing (src/imu_filter.cpp)
 - `lio`: Voxel octree map with LRU caching (src/voxel_map.cpp)
-- `vio`: Visual-inertial odometry with feature tracking (src/vio.cpp)
+- `vio`: Visual-inertial odometry with feature tracking (src/vio.cpp, src/frame.cpp, src/visual_point.cpp)
 - `pre`: Point cloud preprocessing and filtering (src/preprocess.cpp)
 
 ### Data Flow
@@ -134,10 +137,18 @@ rosbag play your_multi_lidar.bag
 ### Available Launch Files
 - `mapping_livox_multi_lidar.launch`: Multi-LiDAR setup with external IMU support
 - `mapping_avia.launch`: Livox Avia LiDAR configuration
+- `mapping_avia_marslvig.launch`: Livox Avia with MARS LVIG visual-inertial dataset
 - `mapping_mid360.launch`: Livox Mid360 configuration
 - `mapping_hesaixt32_hilti22.launch`: Hesai XT32 + Hilti dataset setup
+- `mapping_hap.launch`: HAP dataset configuration
 - `mapping_kitti.launch`: KITTI dataset configuration
 - `mapping_ouster_ntu.launch`: Ouster NTU dataset configuration
+- `mapping_subt_mrs.launch`: SubT-MRS dataset (Velodyne VLP-16)
+
+**RViz Configurations**: Pre-configured visualization files in `rviz_cfg/`:
+- `livox_multi_lidar.rviz`: Multi-LiDAR setup visualization
+- `fast_livo2.rviz`, `fast_livo2_follow_view.rviz`: Standard and follow-view configs
+- `hilti.rviz`, `ntu_viral.rviz`, `M300.rviz`: Dataset-specific visualizations
 
 ### Debugging (launch/mapping_livox_multi_lidar.launch:29-30)
 Uncomment and add to `<node>` tag:
@@ -159,9 +170,40 @@ Uncomment and add to `<node>` tag:
 - `livox_multi_lidar.yaml`: Multi-LiDAR with external IMU (primary config)
 - `HILTI22.yaml`: Hesai XT32 + Hilti industrial dataset
 - `NTU_VIRAL.yaml`: NTU viral dataset with visual-inertial data
+- `MARS_LVIG.yaml`: MARS LVIG visual-inertial dataset
 - `avia.yaml`, `mid360.yaml`, `kitti.yaml`, `hap.yaml`: Sensor-specific configs
+- `camera_pinhole.yaml`: Pinhole camera intrinsics for VIO
+- `camera_*.yaml`: Dataset-specific camera configurations (fisheye, MARS_LVIG, NTU_VIRAL, SubT_MRS)
 
 ### Important Parameters (livox_multi_lidar.yaml)
+
+**Common** (lines 1-8):
+- `img_en`: Enable VIO mode (0 = LIO only, 1 = VIO enabled)
+- `lidar_en`: Enable LiDAR processing
+- `imu_topic`: Default internal IMU from LiDAR 159 (`/livox/imu_192_168_1_159`)
+
+**Preprocessing** (lines 23-28):
+- `lidar_type`: LiDAR type (1 = Livox Avia)
+- `scan_line`: Scan line count (Avia: 6, Mid360: 4)
+- `blind`: Blind spot distance in meters (default: 0.8)
+- `point_filter_num`: Point downsampling factor (default: 1)
+
+**VIO** (lines 31-42):
+- `capacity`: LRU cache for visual feature map (0 = disable)
+- `exposure_estimate_en`: Enable exposure time estimation
+
+**Publish** (lines 90-96):
+- `dense_map_en`: Publish dense map
+- `pub_effect_en`: Publish effective points for visualization
+- `pub_scan_num`: Number of scans to publish
+
+**Point Cloud Saving** (lines 102-108):
+- `save_en`: Enable PCD file saving
+- `filter_size_pcd`: Voxel filter size for saved PCD
+- `interval`: Frames per PCD file (-1 = all in one file, may cause memory issues)
+
+**Evaluation** (lines 98-99):
+- `seq_name`: Sequence name for trajectory evaluation output
 
 **External IMU** (lines 111-119):
 - `external_imu/enable`: Enable external IMU fusion
@@ -185,9 +227,125 @@ Uncomment and add to `<node>` tag:
 
 **Multi-LiDAR Merger** (launch file lines 9-11):
 - Input topics: `/livox/lidar_192_168_1_159`, `_160`, `_161`
+  - Topic naming: `159`, `160`, `161` refer to the last octet of LiDAR IP addresses (e.g., 192.168.1.159)
+  - Modify these in launch file when using different LiDAR IP configurations
 - Extrinsic calibration in `extrin_calib` section (lines 10-16)
 
-## Scripts and Tools
+**Camera Image Handling** (launch file line 27):
+- `image_transport republish` node decompresses compressed camera images for VIO
+- Converts `compressed in:=/left_camera/image` to `raw out:=/left_camera/image`
+- Required when camera publishes compressed images only
+
+## SubT-MRS Dataset Support
+
+**Configuration Files:**
+- `config/SubT_MRS.yaml`: Main configuration for SubT-MRS datasets (Velodyne VLP-16)
+- `config/camera_pinhole_SubT_MRS.yaml`: Camera intrinsics (MEI fisheye parameters converted to Pinhole)
+- `launch/mapping_subt_mrs.launch`: Launch file for SubT-MRS
+
+**Key SubT-MRS Settings:**
+- `lidar_type: 2` (Velodyne, uses `sensor_msgs/PointCloud2`)
+- `scan_line: 16` (VLP-16 has 16 laser channels)
+- Input topics: `/velodyne_points`, `/imu/data`
+- No `image_transport` node required (raw images used, `img_en: 0` by default)
+
+## Point Cloud Format Requirements
+
+### Velodyne PointCloud2 Field Order
+
+When working with Velodyne LiDAR (`lidar_type: 2`), PointCloud2 **must** have fields in this exact order:
+
+| Field | Offset | Type | Description |
+|-------|--------|------|-------------|
+| x | 0 | FLOAT32 | |
+| y | 4 | FLOAT32 | |
+| z | 8 | FLOAT32 | |
+| intensity | 12 | FLOAT32 | |
+| **time** | 16 | FLOAT32 | Must come **before** ring |
+| **ring** | 20 | UINT16 | Must come **after** time |
+
+Point step: 22 bytes (4+4+4+4+4+2+2 padding)
+
+This matches the `velodyne_ros::Point` structure defined in `include/preprocess.h:67-79`:
+
+```cpp
+namespace velodyne_ros {
+struct Point {
+    PCL_ADD_POINT4D;      // x, y, z
+    float intensity;       // offset 12
+    float time;            // offset 16
+    std::uint16_t ring;    // offset 20
+};
+}
+```
+
+**Wrong field order causes**: `[ LIO ]: No point!!!` error or segfault
+
+## Camera Configuration Requirements
+
+**Critical**: Camera YAML files must use proper float notation:
+
+```yaml
+# WRONG - causes segfault during initialization
+scale: 1
+cam_fx: 758.315
+
+# CORRECT
+scale: 1.0
+cam_fx: 758.3153257832925
+```
+
+The `vk::camera_loader::loadFromRosNs()` uses `getParam<double>()` which expects proper float format. Integer values like `scale: 1` can cause parsing failures.
+
+**When VIO is disabled** (`img_en: 0`):
+- Camera config is still loaded (required by initialization)
+- Use `camera_pinhole.yaml` or dataset-specific camera config
+- Camera parameters are read even if not actively used for odometry
+
+## Common Issues and Debugging
+
+### "No point!!!" Error
+
+**Symptoms**: Repeated `[ LIO ]: No point!!!` messages after receiving LiDAR data
+
+**Causes**:
+1. `lidar_type` mismatch (config has wrong LiDAR type)
+2. PointCloud2 field order incorrect (time/ring order swapped)
+3. `blind` parameter filtering all points
+4. Empty or malformed point cloud messages
+
+**Debug Steps**:
+1. Verify input topic: `rostopic list` and `rostopic info /velodyne_points`
+2. Check point cloud content: `rostopic echo /velodyne_points -n 1`
+3. Confirm `lidar_type: 2` for Velodyne PointCloud2 format
+4. Reduce `blind` parameter temporarily to test
+
+### Process Crash (Exit Code -11)
+
+**Symptoms**: Node dies immediately after startup
+
+**Common Causes**:
+1. Camera config YAML syntax error (e.g., `scale: 1` instead of `scale: 1.0`)
+2. Missing camera configuration file
+3. ROS master not running when VIO initialization occurs
+
+**Debug Steps**:
+1. Check camera config YAML for proper float notation
+2. Verify camera file exists at correct path
+3. Run with gdb to get backtrace:
+   ```xml
+   <node ... launch-prefix="gdb -ex run --args">
+   ```
+
+### Rosbag Reading Error
+
+**Symptoms**: `Error reading from file: wanted X bytes, read Y bytes`
+
+**Cause**: Rosbag was not properly closed during conversion
+
+**Fix**: Run `rosbag reindex your_file.bag`
+
+
 
 **Data Processing:**
 - `Log/plot.py`: Plot trajectory, IMU data, and state estimation results (requires `mat_pre.txt`, `mat_out.txt`, `imu.txt`)

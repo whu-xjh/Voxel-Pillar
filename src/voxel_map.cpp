@@ -94,7 +94,6 @@ void VoxelOctoTree::init_plane(const std::vector<pointWithVar> &points, VoxelPla
   plane->points_size_ = points.size(); // 点云数量
   plane->radius_ = 0; // 平面半径
   plane->mean_intensity_ = 0.0f; // 平面平均强度
-  plane->latest_intensity_ = static_cast<double>(points.back().intensity); // 最新点强度
 
   // 2.计算点云的协方差矩阵和中心点
   // 协方差举证描述点云在三个方向上的分布情况
@@ -877,53 +876,30 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
       // 在当前体素的八叉树中寻找对应的平面,如果找到则构建点到平面的残差
       build_single_residual(pv, current_octo, 0, is_sucess, is_surface, prob, single_ptpl);
       if (!is_sucess)
-      { 
+      {
         // 如果当前体素未找到有效平面,则检查相邻体素
         VOXEL_LOCATION near_position = position;
 
-        if (config_setting_.rf_enhance_en_)
-        {
-            if (loc_xyz[0] > (current_octo->voxel_center_[0] + current_octo->quater_length_))
-          { 
-            if(loc_xyz[0] > (current_octo->voxel_center_[0] + 2*current_octo->quater_length_)) near_position.x = near_position.x + 2; 
-            else near_position.x = near_position.x + 1; 
+        // 感受野增强：根据配置决定搜索范围
+        // 辅助函数：计算单轴偏移量
+        auto calc_offset = [&](double coord, double center, double quater_len) -> int {
+          if (coord > center + quater_len) {
+            if (config_setting_.rf_enhance_en_ && coord > center + 2 * quater_len)
+              return 2;
+            else
+              return 1;
+          } else if (coord < center - quater_len) {
+            if (config_setting_.rf_enhance_en_ && coord < center - 2 * quater_len)
+              return -2;
+            else
+              return -1;
           }
-          else if (loc_xyz[0] < (current_octo->voxel_center_[0] - current_octo->quater_length_)) 
-          { 
-            if (loc_xyz[0] < (current_octo->voxel_center_[0] - 2*current_octo->quater_length_)) near_position.x = near_position.x - 2; 
-            else near_position.x = near_position.x - 1; 
-          }
+          return 0;
+        };
 
-          if (loc_xyz[1] > (current_octo->voxel_center_[1] + current_octo->quater_length_)) 
-          { 
-            if (loc_xyz[1] > (current_octo->voxel_center_[1] + 2*current_octo->quater_length_)) near_position.y = near_position.y + 2; 
-            else near_position.y = near_position.y + 1; 
-          }
-          else if (loc_xyz[1] < (current_octo->voxel_center_[1] - current_octo->quater_length_)) 
-          { 
-            if (loc_xyz[1] < (current_octo->voxel_center_[1] - 2*current_octo->quater_length_)) near_position.y = near_position.y - 2; 
-            else near_position.y = near_position.y - 1; 
-          }
-
-          if (loc_xyz[2] > (current_octo->voxel_center_[2] + current_octo->quater_length_)) 
-          { 
-            if (loc_xyz[2] > (current_octo->voxel_center_[2] + 2*current_octo->quater_length_)) near_position.z = near_position.z + 2; 
-            else near_position.z = near_position.z + 1; 
-          }
-          else if (loc_xyz[2] < (current_octo->voxel_center_[2] - current_octo->quater_length_)) 
-          { 
-            if (loc_xyz[2] < (current_octo->voxel_center_[2] - 2*current_octo->quater_length_)) near_position.z = near_position.z - 2; 
-            else near_position.z = near_position.z - 1; 
-          }
-        }
-        else {
-          if (loc_xyz[0] > (current_octo->voxel_center_[0] + current_octo->quater_length_)) { near_position.x = near_position.x + 1; }
-          else if (loc_xyz[0] < (current_octo->voxel_center_[0] - current_octo->quater_length_)) { near_position.x = near_position.x - 1; }
-          if (loc_xyz[1] > (current_octo->voxel_center_[1] + current_octo->quater_length_)) { near_position.y = near_position.y + 1; }
-          else if (loc_xyz[1] < (current_octo->voxel_center_[1] - current_octo->quater_length_)) { near_position.y = near_position.y - 1; }
-          if (loc_xyz[2] > (current_octo->voxel_center_[2] + current_octo->quater_length_)) { near_position.z = near_position.z + 1; }
-          else if (loc_xyz[2] < (current_octo->voxel_center_[2] - current_octo->quater_length_)) { near_position.z = near_position.z - 1; }
-        }
+        near_position.x += calc_offset(loc_xyz[0], current_octo->voxel_center_[0], current_octo->quater_length_);
+        near_position.y += calc_offset(loc_xyz[1], current_octo->voxel_center_[1], current_octo->quater_length_);
+        near_position.z += calc_offset(loc_xyz[2], current_octo->voxel_center_[2], current_octo->quater_length_);
 
         // 在相邻体素中查找平面,如果找到则构建残差
         auto iter_near = voxel_map_.find(near_position);
@@ -989,20 +965,17 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
         double this_prob = 1.0 / (sqrt(sigma_l)) * exp(-0.5 * dis_to_plane * dis_to_plane / sigma_l);
 
         // 根据配置决定是否启用三维强度概率融合
-        if (config_setting_.intensity_fusion_en_) 
+        if (config_setting_.intensity_fusion_en_)
         {
-          double mean_intensity_diff = static_cast<double>(pv.intensity) - plane.mean_intensity_;
-          double mean_intensity_prob = 1.0 / (sqrt(2.0 * M_PI) * plane.intensity_std_) *
-                                        exp(-0.5 * mean_intensity_diff * mean_intensity_diff / (plane.intensity_std_ *
-                                        plane.intensity_std_));
-          this_prob *= mean_intensity_prob; // 考虑空间距离和强度差异的概率
+          // 防止除零：强度标准差至少为 1e-6
+          double intensity_std_safe = std::max(plane.intensity_std_, 1e-6);
+          double intensity_std_sq = intensity_std_safe * intensity_std_safe;
 
-          double latest_intensity_diff = static_cast<double>(pv.intensity) - plane.latest_intensity_;
-          double latest_intensity_prob = 1.0 / (sqrt(2.0 * M_PI) * plane.intensity_std_) *
-                                        exp(-0.5 * latest_intensity_diff * latest_intensity_diff / (plane.intensity_std_ *
-                                        plane.intensity_std_));
-
-          this_prob *= latest_intensity_prob; // 综合考虑空间距离和强度差异的概率
+          // 强度概率：基于历史平均强度
+          double intensity_diff = static_cast<double>(pv.intensity) - plane.mean_intensity_;
+          double intensity_prob = 1.0 / (sqrt(2.0 * M_PI) * intensity_std_safe) *
+                                  exp(-0.5 * intensity_diff * intensity_diff / intensity_std_sq);
+          this_prob *= intensity_prob;
         }
 
         if (this_prob > prob) // 当点可能在多个平面找到匹配时,选择概率最大的那个平面
