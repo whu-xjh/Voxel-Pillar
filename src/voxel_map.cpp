@@ -824,7 +824,7 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
   int max_layer = config_setting_.max_layer_;
   double voxel_size = config_setting_.max_voxel_size_;
   double sigma_num = config_setting_.sigma_num_;
-  std::mutex mylock;
+  // std::mutex mylock;
   ptpl_list.clear();
   std::vector<PointToPlane> all_ptpl_list(pv_list.size());
   std::vector<bool> useful_ptpl(pv_list.size());
@@ -849,6 +849,11 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
 
     if (!skip_list.empty() && skip_list[i]) {
       // 跳过不需要处理的点云
+      continue;
+    }
+
+    // 跳过孤立体素中的点
+    if (pv.is_isolated) {
       continue;
     }
 
@@ -913,16 +918,16 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
 
       if (is_sucess)
       {
-        mylock.lock();
+        // mylock.lock();
         useful_ptpl[i] = true;
         all_ptpl_list[i] = single_ptpl;
-        mylock.unlock();
+        // mylock.unlock();
       }
       else
       {
-        mylock.lock();
+        // mylock.lock();
         useful_ptpl[i] = false;
-        mylock.unlock();
+        // mylock.unlock();
       }
     }
   }
@@ -975,7 +980,7 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
           double intensity_diff = static_cast<double>(pv.intensity) - plane.mean_intensity_;
           double intensity_prob = 1.0 / (sqrt(2.0 * M_PI) * intensity_std_safe) *
                                   exp(-0.5 * intensity_diff * intensity_diff / intensity_std_sq);
-          this_prob *= intensity_prob;
+          this_prob = 0.5 * this_prob + 0.5 * intensity_prob;
         }
 
         if (this_prob > prob) // 当点可能在多个平面找到匹配时,选择概率最大的那个平面
@@ -1285,7 +1290,72 @@ void PillarVoxelMap::UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_key
   bottom_voxel->is_ground_voxel_ = true;
 
   if (pillar_voxels.size() == 1) {
-    bottom_voxel->is_isolated_voxel_ = true; 
+    bottom_voxel->is_isolated_voxel_ = true;
+    // 设置体素中所有点的is_isolated标志
+    for (auto& pv : bottom_voxel->temp_points_) {
+      pv.is_isolated = true;
+    }
+  }
+  else if (pillar_voxels.size() == 2)
+  {
+    auto top_voxel = std::next(pillar_voxels.begin())->second;
+    auto z_diff = top_voxel->voxel_center_[2] - bottom_voxel->voxel_center_[2];
+
+    if (z_diff > voxel_size_) {
+      bottom_voxel->is_isolated_voxel_ = true;
+      top_voxel->is_isolated_voxel_ = true;
+
+      for (auto& pv : bottom_voxel->temp_points_) {
+        pv.is_isolated = true;
+      }
+      for (auto& pv : top_voxel->temp_points_) {
+        pv.is_isolated = true;
+      }
+    }
+  }
+  else{
+    auto pillar_iter = std::next(pillar_voxels.begin());
+    double down_z_diff = 0;
+    double up_z_diff = 0;
+    for (; pillar_iter != std::prev(pillar_voxels.end()); ++pillar_iter)
+    {
+      down_z_diff = pillar_iter->second->voxel_center_[2] - std::prev(pillar_iter)->second->voxel_center_[2];
+      up_z_diff = std::next(pillar_iter)->second->voxel_center_[2] - pillar_iter->second->voxel_center_[2];
+
+      if (down_z_diff > voxel_size_ && up_z_diff > voxel_size_) {
+        pillar_iter->second->is_isolated_voxel_ = true;
+        for (auto& pv : pillar_iter->second->temp_points_) {
+          pv.is_isolated = true;
+        }
+      }
+    }
+    if (up_z_diff > voxel_size_) {
+      pillar_voxels.rbegin()->second->is_isolated_voxel_ = true;
+      for (auto& pv : pillar_voxels.rbegin()->second->temp_points_) {
+        pv.is_isolated = true;
+      }
+    }
+  }
+
+  // process top voxel - 检查水平邻域，如果有足够邻域则不孤立
+  if (pillar_voxels.size() > 1) {
+    VoxelOctoTree* top_voxel = pillar_voxels.rbegin()->second;
+
+    if (top_voxel->is_isolated_voxel_) {
+      VOXEL_LOCATION top_loc;
+      top_loc.x = static_cast<int64_t>(std::floor(top_voxel->voxel_center_[0] / voxel_size_));
+      top_loc.y = static_cast<int64_t>(std::floor(top_voxel->voxel_center_[1] / voxel_size_));
+      top_loc.z = pillar_voxels.rbegin()->first;
+
+      bool has_enough_adjacent = hasAdjacentTopVoxel(top_loc);
+      if (has_enough_adjacent) {
+        // 有足够邻域，清除孤立标志
+        top_voxel->is_isolated_voxel_ = false;
+        for (auto& pv : top_voxel->temp_points_) {
+          pv.is_isolated = false;
+        }
+      }
+    }
   }
 }
 
@@ -1350,6 +1420,46 @@ bool PillarVoxelMap::hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const V
         }
 
         if (adjacent_ground_count >= config_.min_adjacent_num_){
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+bool PillarVoxelMap::hasAdjacentTopVoxel(const VOXEL_LOCATION &current_pos)
+{ 
+  if (config_.min_adjacent_num_ <= 0) {
+    return false;
+  }
+
+  int adjacent_count = 0;
+  int64_t current_elevation = current_pos.z;
+
+  for (const auto& voxel_offset : neighbor_offsets_) {
+    VOXEL_LOCATION adjacent_pos = {
+      current_pos.x + voxel_offset.x,
+      current_pos.y + voxel_offset.y,
+      current_pos.z
+    };
+
+    PILLAR_LOCATION adjacent_pillar = GetPillarLocation(adjacent_pos);
+
+    auto pillar_iter = pillars_.find(adjacent_pillar);
+
+    if (pillar_iter != pillars_.end() && !pillar_iter->second.empty()) {
+      VoxelOctoTree *last_voxel = pillar_iter->second.rbegin()->second;
+
+      if (last_voxel) {
+        int64_t height_diff = std::abs(current_elevation - pillar_iter->second.rbegin()->first);
+
+        if (height_diff <= voxel_size_) {
+          adjacent_count++;
+        }
+
+        if (adjacent_count >= config_.min_adjacent_num_){
           return true;
         }
       }
@@ -1430,18 +1540,16 @@ void PillarVoxelMap::GroundDetection(const Eigen::Vector3d& current_pos)
         continue;
 
       auto& pillar_voxels = pillar_iter->second;
-      VoxelOctoTree* bottom_voxel = pillar_voxels.begin()->second;
 
-      if (!bottom_voxel->is_ground_voxel_)
-        continue;
+      // process bottom voxel
+      VoxelOctoTree* bottom_voxel = pillar_voxels.begin()->second;
+      if (!bottom_voxel->is_ground_voxel_) continue;
 
       VOXEL_LOCATION bottom_loc;
       bottom_loc.x = static_cast<int64_t>(std::floor(bottom_voxel->voxel_center_[0] / voxel_size_));
       bottom_loc.y = static_cast<int64_t>(std::floor(bottom_voxel->voxel_center_[1] / voxel_size_));
       bottom_loc.z = pillar_voxels.begin()->first;
-
       bool has_enough_adjacent_ground = hasAdjacentGroundVoxel(bottom_voxel, bottom_loc);
-
       if (!has_enough_adjacent_ground)
       {
         bottom_voxel->is_ground_voxel_ = false;

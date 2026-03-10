@@ -1,6 +1,6 @@
 common:
   img_topic: "/left_camera/image"
-  lid_topic: "/livox/multi_lidar"  # 使用合并后的LiDAR话题
+  lid_topic: "/livox/lidar"  # 使用合并后的LiDAR话题
   imu_topic: "/livox/imu_192_168_1_159"  # 默认使用159的IMU
   external_imu_topic: "/novatel/oem7/odom"  # 如果有外置IMU，可以在这里设置话题
   img_en: 0

@@ -2,7 +2,10 @@ common:
   img_topic: "/camera_1/image_raw"
   lid_topic: "/velodyne_points"  # 使用合并后的LiDAR话题
   imu_topic: "/imu/data"  # 默认使用159的IMU
-  external_imu_topic: "/novatel/oem7/odom"  # 如果有外置IMU，可以在这里设置话题
+
+  # lid_topic: "/tartanair/velodyne"  # 使用合并后的LiDAR话题
+  # imu_topic: "/tartanair/imu"  # 默认使用159的IMU
+
   img_en: 0
   lidar_en: 1 
   ros_driver_bug_fix: false
@@ -14,9 +17,15 @@ extrin_calib:
   #   extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
 
   # Corridor参数:
-  extrinsic_T: [0.0, 0.0, 0.0]
-  extrinsic_R: [0.999954875339377, 0.0, 0.009499857104811, 0.0, 1.0, 0.0, -0.009499857104811, 0.0, 0.999954875339377]
+  # extrinsic_T: [0.0, 0.0, 0.0]
+  # extrinsic_R: [0.999954875339377, 0.0, 0.009499857104811, 0.0, 1.0, 0.0, -0.009499857104811, 0.0, 0.999954875339377]
   
+  # UGV1参数:
+  extrinsic_T: [0.0, 0.0, 0.0]
+  extrinsic_R: [1, 0,  0,
+                0, 1,  0,
+                0, 0,  1]
+
   # 相机到IMU的外参 (从rgb_camera_to_imu矩阵提取)
   # Cave参数:
   #   Rcl: [-0.04279531, -0.00237969,  0.99908103,
@@ -40,7 +49,7 @@ preprocess:
   filter_size_surf: 0.1 # 体素滤波大小
   lidar_type: 2 # Velodyne LiDAR (标准PointCloud2格式)
   scan_line: 16 # Velodyne扫描线数 (根据实际传感器调整: 16, 32, 64)
-  blind: 0.5
+  blind: 0.3
 
 # 视觉里程计
 vio:
@@ -59,16 +68,21 @@ vio:
 # imu参数      
 imu:
   imu_en: true
-  imu_int_frame: 50
-  acc_cov: 0.08 # 0.2
-  gyr_cov: 0.004 # 0.5
-  b_acc_cov: 0.00004 # 0.1
-  b_gyr_cov: 0.000002 # 0.1
+  imu_int_frame: 30
+  # acc_cov: 0.2 # 0.1
+  # gyr_cov: 0.1
+  # b_acc_cov: 0.001 # 0.1
+  # b_gyr_cov: 0.001 # 0.1
+
+  acc_cov: 0.2 # 0.1
+  gyr_cov: 0.1
+  b_acc_cov: 0.001 # 0.1
+  b_gyr_cov: 0.001 # 0.1
 
 # 激光雷达里程计
 lio:
   max_iterations: 5
-  dept_err: 0.02
+  dept_err: 0.03
   beam_err: 0.05
   min_eigen_value: 0.0025 # 0.005
   voxel_size: 0.5 # 体素底图尺寸
@@ -77,21 +91,21 @@ lio:
   layer_init_num: [5, 5, 5, 5, 5]
   sigma_num: 3
   capacity: 0  # LRU缓存容量, 越大占用内存越多 (0 = 禁用LRU缓存)
-  rf_enhance_en: true  # 是否启用配准时候的感受野增强 (Range Field enhancement)
+  rf_enhance_en: false # 是否启用配准时候的感受野增强 (Range Field enhancement)
   intensity_fusion_en: true  # 是否启用三维强度概率融合 (几何距离+强度差异)
 
 # Pillar Voxel 参数配置
 pillar_voxel:
-  pillar_voxel_en: true  # 是否启用pillar体素地图
+  pillar_voxel_en: true # 是否启用pillar体素地图
   voxel_size: 0.5  # 体素柱中的体素大小（米）
   adjacent_check_en: true  # 是否启用邻域检查
-  min_adjacent_num: 5    # 相邻地面体素数量阈值
+  min_adjacent_num: 1    # 相邻地面体素数量阈值
   neighbor_search_type: 0  # 邻域搜索类型: 0=8邻域, 1=24邻域
   ground_height_angle_check_en: true  # 是否启用基于高度角的地面点过滤
   ground_height_angle_threshold: 0  # 高度角阈值（度），超过此阈值不认为是地面点
   plane_fitting_ground_en: true # 是否启用基于平面拟合的二次地面判断
   plane_fitting_distance_threshold: 0.1  # 平面拟合距离阈值（米）
-  skip_type: 1 # 0: 不跳过, 1: 跳过地面之下的点, 2: 跳过地面及地面之下的点
+  skip_type: 0 # 0: 不跳过, 1: 跳过地面之下的点, 2: 跳过地面及地面之下的点
 
 local_map: 
   map_sliding_en: false
@@ -111,7 +125,7 @@ publish:
   blind_rgb_points: 0.0
 
 evo:
-  seq_name: "cave01"
+  seq_name: "Laurel_Cavern_enhanced_pillar"
   pose_output_en: true
 
 lidar_save:

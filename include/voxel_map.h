@@ -259,6 +259,7 @@ private:
   void UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_key, std::map<int64_t, VoxelOctoTree*> &pillar_voxels, const Eigen::Vector3d& current_pos);
   bool checkHeightAngle(const VoxelOctoTree *current_octo, const Eigen::Vector3d& current_pos);
   bool hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const VOXEL_LOCATION &current_pos);
+  bool hasAdjacentTopVoxel(const VOXEL_LOCATION &current_pos);
 };
 
 class VoxelMapManager
