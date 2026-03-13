@@ -852,11 +852,6 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
       continue;
     }
 
-    // 跳过孤立体素中的点
-    if (pv.is_isolated) {
-      continue;
-    }
-
     // 计算点云所在的体素位置
     float loc_xyz[3];
     for (int j = 0; j < 3; j++)
@@ -1338,7 +1333,7 @@ void PillarVoxelMap::UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_key
   }
 
   // process top voxel - 检查水平邻域，如果有足够邻域则不孤立
-  if (pillar_voxels.size() > 1) {
+  if (pillar_voxels.size() >= 1) {
     VoxelOctoTree* top_voxel = pillar_voxels.rbegin()->second;
 
     if (top_voxel->is_isolated_voxel_) {
@@ -1448,7 +1443,6 @@ bool PillarVoxelMap::hasAdjacentTopVoxel(const VOXEL_LOCATION &current_pos)
     PILLAR_LOCATION adjacent_pillar = GetPillarLocation(adjacent_pos);
 
     auto pillar_iter = pillars_.find(adjacent_pillar);
-
     if (pillar_iter != pillars_.end() && !pillar_iter->second.empty()) {
       VoxelOctoTree *last_voxel = pillar_iter->second.rbegin()->second;
 
@@ -1640,31 +1634,76 @@ void PillarVoxelMap::GroundDetection(const Eigen::Vector3d& current_pos)
 
 void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_world)
 {
+  const size_t point_num = feats_down_world->points.size();
+  skip_list.assign(point_num, false);
+
+  const double inv_voxel_size = 1.0 / pillar_map_.voxel_size_;
+
+  // First pass: mark isolated voxels
+  int isolated_count = 0;
+  for (size_t i = 0; i < point_num; ++i)
+  {
+    const PointType &point_world = feats_down_world->points[i];
+
+    VOXEL_LOCATION voxel_location;
+    voxel_location.x = static_cast<int64_t>(std::floor(point_world.x * inv_voxel_size));
+    voxel_location.y = static_cast<int64_t>(std::floor(point_world.y * inv_voxel_size));
+    voxel_location.z = static_cast<int64_t>(std::floor(point_world.z * inv_voxel_size));
+
+    PILLAR_LOCATION pillar_loc(voxel_location.x, voxel_location.y);
+
+    auto pillar_iter = pillar_map_.pillars_.find(pillar_loc);
+    if (pillar_iter == pillar_map_.pillars_.end())
+      continue;
+
+    auto voxel_iter = pillar_iter->second.find(voxel_location.z);
+    if (voxel_iter == pillar_iter->second.end())
+      continue;
+
+    if (voxel_iter->second->is_isolated_voxel_)
+    {
+      skip_list[i] = true;
+      isolated_count++;
+    }
+  }
+
+  // If plane not fitted, keep only isolated voxel marks
   if (!pillar_map_.plane_fitted_)
   {
-    skip_list.assign(feats_down_world->points.size(), false);
+    std::cout << "[DefineSkipPoints] Isolated: " << isolated_count
+              << "/" << point_num << " ("
+              << std::fixed << std::setprecision(1)
+              << (100.0 * isolated_count / point_num) << "%)" << std::endl;
     return;
   }
 
-  skip_list.clear();
-
-  // std::vector<PointType> kept_world_points;
-  // std::vector<PointType> kept_body_points;
-  // kept_world_points.reserve(feats_down_world->points.size());
-  // kept_body_points.reserve(feats_down_body_->points.size());
-
+  // Second pass: apply plane-based filtering (combined with isolated voxel check)
   const Eigen::Vector3d& plane_normal = pillar_map_.fitted_plane_normal_;
   const double plane_d = pillar_map_.fitted_plane_d_;
   const double distance_threshold = pillar_map_.config_.plane_fitting_distance_threshold_;
 
-  for (size_t i = 0; i < feats_down_world->points.size(); i++)
+  int ground_near_count = 0;  // points near ground (within threshold)
+  int ground_below_count = 0;  // points below ground (distance < -threshold)
+  int final_skip_count = 0;    // total points to skip
+
+  for (size_t i = 0; i < point_num; ++i)
   {
     const PointType& point_world = feats_down_world->points[i];
     Eigen::Vector3d point_vec(point_world.x, point_world.y, point_world.z);
 
     const double distance = plane_normal.dot(point_vec) + plane_d;
-    bool skip = false;
 
+    // Count points by distance to plane
+    if (distance < -distance_threshold)
+    {
+      ground_below_count++;
+    }
+    else if (distance < distance_threshold)
+    {
+      ground_near_count++;
+    }
+
+    bool skip = false;
     if (pillar_map_.config_.skip_type_ == 2)
     {
       skip = (distance < distance_threshold);
@@ -1674,19 +1713,21 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
       skip = (distance < -distance_threshold);
     }
 
-    skip_list.push_back(skip);
-
-    // if (!skip)
-    // {
-    //   kept_world_points.push_back(feats_down_world->points[i]);
-    //   kept_body_points.push_back(feats_down_body_->points[i]);
-    // }
+    // Combine isolated voxel check with plane-based filtering
+    skip_list[i] = skip_list[i] || skip;
+    if (skip_list[i])
+    {
+      final_skip_count++;
+    }
   }
 
-  // feats_down_world->points.clear();
-  // feats_down_body_->points.clear();
-  // feats_down_world->points.insert(feats_down_world->points.end(), kept_world_points.begin(), kept_world_points.end());
-  // feats_down_body_->points.insert(feats_down_body_->points.end(), kept_body_points.begin(), kept_body_points.end());
+  std::cout << "[DefineSkipPoints] Isolated: " << isolated_count
+            << ", Ground_near: " << ground_near_count
+            << ", Below_ground: " << ground_below_count
+            << ", Skip_total: " << final_skip_count
+            << "/" << point_num << " ("
+            << std::fixed << std::setprecision(1)
+            << (100.0 * final_skip_count / point_num) << "%)" << std::endl;
 }
 
 void PillarVoxelMap::PublishPillarPoints(const ros::Publisher &pubGround, const ros::Publisher &pubIsolated)

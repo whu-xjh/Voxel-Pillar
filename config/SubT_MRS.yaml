@@ -49,8 +49,8 @@ preprocess:
   filter_size_surf: 0.1 # 体素滤波大小
   lidar_type: 2 # Velodyne LiDAR (标准PointCloud2格式)
   scan_line: 16 # Velodyne扫描线数 (根据实际传感器调整: 16, 32, 64)
-  blind: 0.3
-
+  blind: 0.5
+ 
 # 视觉里程计
 vio:
   max_iterations: 5
@@ -68,7 +68,7 @@ vio:
 # imu参数      
 imu:
   imu_en: true
-  imu_int_frame: 30
+  imu_int_frame: 50
   # acc_cov: 0.2 # 0.1
   # gyr_cov: 0.1
   # b_acc_cov: 0.001 # 0.1
@@ -76,15 +76,15 @@ imu:
 
   acc_cov: 0.2 # 0.1
   gyr_cov: 0.1
-  b_acc_cov: 0.001 # 0.1
-  b_gyr_cov: 0.001 # 0.1
+  b_acc_cov: 0.0005 # 0.1
+  b_gyr_cov: 0.0005 # 0.1
 
 # 激光雷达里程计
 lio:
   max_iterations: 5
   dept_err: 0.03
   beam_err: 0.05
-  min_eigen_value: 0.0025 # 0.005
+  min_eigen_value: 0.0025 # 0.0025
   voxel_size: 0.5 # 体素底图尺寸
   max_layer: 2
   max_points_num: 100
@@ -97,13 +97,13 @@ lio:
 # Pillar Voxel 参数配置
 pillar_voxel:
   pillar_voxel_en: true # 是否启用pillar体素地图
-  voxel_size: 0.5  # 体素柱中的体素大小（米）
+  voxel_size: 1  # 体素柱中的体素大小（米）
   adjacent_check_en: true  # 是否启用邻域检查
-  min_adjacent_num: 1    # 相邻地面体素数量阈值
-  neighbor_search_type: 0  # 邻域搜索类型: 0=8邻域, 1=24邻域
+  min_adjacent_num: 8    # 相邻地面体素数量阈值
+  neighbor_search_type: 1  # 邻域搜索类型: 0=8邻域, 1=24邻域
   ground_height_angle_check_en: true  # 是否启用基于高度角的地面点过滤
   ground_height_angle_threshold: 0  # 高度角阈值（度），超过此阈值不认为是地面点
-  plane_fitting_ground_en: true # 是否启用基于平面拟合的二次地面判断
+  plane_fitting_ground_en: false # 是否启用基于平面拟合的二次地面判断
   plane_fitting_distance_threshold: 0.1  # 平面拟合距离阈值（米）
   skip_type: 0 # 0: 不跳过, 1: 跳过地面之下的点, 2: 跳过地面及地面之下的点
 
@@ -125,14 +125,14 @@ publish:
   blind_rgb_points: 0.0
 
 evo:
-  seq_name: "Laurel_Cavern_enhanced_pillar"
-  pose_output_en: true
+  seq_name: "Final_UGV1"
+  pose_output_en: false
 
 lidar_save:
-  save_en: false
+  save_en: true
   colmap_output_en: false # need to set interval = -1
   filter_size_pcd: 0.15
-  interval: 10
+  interval: -1
   # how many LiDAR frames saved in each pcd file;
   # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
 
