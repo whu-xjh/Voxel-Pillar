@@ -1274,10 +1274,21 @@ void PillarVoxelMap::UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_key
                                                 std::map<int64_t, VoxelOctoTree*> &pillar_voxels,
                                                 const Eigen::Vector3d& current_pos)
 {
+  (void)pillar_key;
+  (void)current_pos;
+
+  auto setVoxelIsolatedFlag = [](VoxelOctoTree* voxel, bool is_isolated)
+  {
+    voxel->is_isolated_voxel_ = is_isolated;
+    for (auto& pv : voxel->temp_points_) {
+      pv.is_isolated = is_isolated;
+    }
+  };
+
   for (auto &voxel_pair : pillar_voxels)
   {
     voxel_pair.second->is_ground_voxel_ = false;
-    voxel_pair.second->is_isolated_voxel_ = false;
+    setVoxelIsolatedFlag(voxel_pair.second, false);
   }
 
   auto bottom_voxel = pillar_voxels.begin()->second;
@@ -1285,11 +1296,7 @@ void PillarVoxelMap::UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_key
   bottom_voxel->is_ground_voxel_ = true;
 
   if (pillar_voxels.size() == 1) {
-    bottom_voxel->is_isolated_voxel_ = true;
-    // 设置体素中所有点的is_isolated标志
-    for (auto& pv : bottom_voxel->temp_points_) {
-      pv.is_isolated = true;
-    }
+    setVoxelIsolatedFlag(bottom_voxel, true);
   }
   else if (pillar_voxels.size() == 2)
   {
@@ -1297,15 +1304,8 @@ void PillarVoxelMap::UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_key
     auto z_diff = top_voxel->voxel_center_[2] - bottom_voxel->voxel_center_[2];
 
     if (z_diff > voxel_size_) {
-      bottom_voxel->is_isolated_voxel_ = true;
-      top_voxel->is_isolated_voxel_ = true;
-
-      for (auto& pv : bottom_voxel->temp_points_) {
-        pv.is_isolated = true;
-      }
-      for (auto& pv : top_voxel->temp_points_) {
-        pv.is_isolated = true;
-      }
+      setVoxelIsolatedFlag(bottom_voxel, true);
+      setVoxelIsolatedFlag(top_voxel, true);
     }
   }
   else{
@@ -1318,38 +1318,28 @@ void PillarVoxelMap::UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_key
       up_z_diff = std::next(pillar_iter)->second->voxel_center_[2] - pillar_iter->second->voxel_center_[2];
 
       if (down_z_diff > voxel_size_ && up_z_diff > voxel_size_) {
-        pillar_iter->second->is_isolated_voxel_ = true;
-        for (auto& pv : pillar_iter->second->temp_points_) {
-          pv.is_isolated = true;
-        }
+        setVoxelIsolatedFlag(pillar_iter->second, true);
       }
     }
     if (up_z_diff > voxel_size_) {
-      pillar_voxels.rbegin()->second->is_isolated_voxel_ = true;
-      for (auto& pv : pillar_voxels.rbegin()->second->temp_points_) {
-        pv.is_isolated = true;
-      }
+      setVoxelIsolatedFlag(pillar_voxels.rbegin()->second, true);
     }
   }
 
-  // process top voxel - 检查水平邻域，如果有足够邻域则不孤立
-  if (pillar_voxels.size() >= 1) {
-    VoxelOctoTree* top_voxel = pillar_voxels.rbegin()->second;
+  // 对候选孤立体素做水平邻域复核：若同高度附近存在足够邻域，则不视为孤立点
+  for (const auto& voxel_pair : pillar_voxels) {
+    VoxelOctoTree* voxel = voxel_pair.second;
+    if (!voxel->is_isolated_voxel_) {
+      continue;
+    }
 
-    if (top_voxel->is_isolated_voxel_) {
-      VOXEL_LOCATION top_loc;
-      top_loc.x = static_cast<int64_t>(std::floor(top_voxel->voxel_center_[0] / voxel_size_));
-      top_loc.y = static_cast<int64_t>(std::floor(top_voxel->voxel_center_[1] / voxel_size_));
-      top_loc.z = pillar_voxels.rbegin()->first;
+    VOXEL_LOCATION voxel_loc;
+    voxel_loc.x = static_cast<int64_t>(std::floor(voxel->voxel_center_[0] / voxel_size_));
+    voxel_loc.y = static_cast<int64_t>(std::floor(voxel->voxel_center_[1] / voxel_size_));
+    voxel_loc.z = voxel_pair.first;
 
-      bool has_enough_adjacent = hasAdjacentTopVoxel(top_loc);
-      if (has_enough_adjacent) {
-        // 有足够邻域，清除孤立标志
-        top_voxel->is_isolated_voxel_ = false;
-        for (auto& pv : top_voxel->temp_points_) {
-          pv.is_isolated = false;
-        }
-      }
+    if (hasAdjacentTopVoxel(voxel_loc)) {
+      setVoxelIsolatedFlag(voxel, false);
     }
   }
 }
@@ -1385,7 +1375,9 @@ PointCloudXYZI::Ptr PillarVoxelMap::CheckHeightAngle(const PointCloudXYZI::Ptr &
 }
 
 bool PillarVoxelMap::hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const VOXEL_LOCATION &current_pos)
-{ 
+{
+  (void)current_octo;
+
   if (config_.min_adjacent_num_ <= 0) {
     return false;
   }
@@ -1514,6 +1506,8 @@ void PillarVoxelMap::BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud)
 
 void PillarVoxelMap::GroundDetection(const Eigen::Vector3d& current_pos)
 {
+  plane_fitted_ = false;
+
   // 第一步：初始地面检测
   for (const auto& pillar_key : current_pillars_)
   {
@@ -1636,6 +1630,11 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
 {
   const size_t point_num = feats_down_world->points.size();
   skip_list.assign(point_num, false);
+
+  if (point_num == 0) {
+    std::cout << "[DefineSkipPoints] Empty cloud, skip nothing." << std::endl;
+    return;
+  }
 
   const double inv_voxel_size = 1.0 / pillar_map_.voxel_size_;
 
