@@ -75,8 +75,8 @@ lio:
 pillar_voxel:
   pillar_voxel_en: true
   voxel_size: 1.0
-  min_adjacent_ground_num: 3       # <=0 to disable adjacency check for ground
-  min_adjacent_isolated_num: 8     # <=0 to disable adjacency check for isolated
+  min_adjacent_ground_num: 3
+  min_adjacent_isolated_num: 8
   neighbor_search_type: 1  # 0=8-neighbor, 1=24-neighbor
   ground_height_angle_check_en: true
   ground_height_angle_threshold: 0  # degrees

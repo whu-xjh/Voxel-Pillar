@@ -1,2 +1,2 @@
 ate,completeness,num_poses,time_range,align_fraction,num_poses_align,sequence,pred_path,gt_path
-0.37365686052860325,99.98,4730,"(np.float64(1681498134.611228), np.float64(1681499088.695237))",1.0,4730,Laurel_Caverns_enhanced_pillar,/home/whuxjh/code/voxel-pillar/catkin_ws/src/Voxel-Pillar/Log/result/Laurel_Caverns_enhanced_pillar.txt,/home/whuxjh/data/SubT_MRS/ground_truth/Laurel_Cavern/ground_truth_path.csv
+0.3373530544957519,99.98,4730,"(np.float64(1681498134.611228), np.float64(1681499088.695237))",1.0,4730,Laurel_Caverns_enhanced_pillar,/home/whuxjh/code/voxel-pillar/catkin_ws/src/Voxel-Pillar/Log/result/Laurel_Caverns_enhanced_pillar.txt,/home/whuxjh/data/SubT_MRS/ground_truth/Laurel_Cavern/ground_truth_path.csv
