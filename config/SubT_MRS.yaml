@@ -69,16 +69,14 @@ lio:
   layer_init_num: [5, 5, 5, 5, 5]
   sigma_num: 3
   capacity: 0  # LRU cache (0 = disable)
-  rf_enhance_en: false  # Range Field enhancement
   intensity_fusion_en: true
 
 # Pillar Voxel Ground Detection
 pillar_voxel:
   pillar_voxel_en: true
   voxel_size: 1.0
-  adjacent_check_en: true
-  min_adjacent_ground_num: 8
-  min_adjacent_isolated_num: 8
+  min_adjacent_ground_num: 3       # <=0 to disable adjacency check for ground
+  min_adjacent_isolated_num: 8     # <=0 to disable adjacency check for isolated
   neighbor_search_type: 1  # 0=8-neighbor, 1=24-neighbor
   ground_height_angle_check_en: true
   ground_height_angle_threshold: 0  # degrees

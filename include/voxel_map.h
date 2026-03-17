@@ -54,7 +54,6 @@ typedef struct VoxelMapConfig
   int half_map_size;
 
   int capacity;
-  bool rf_enhance_en_;
   bool intensity_fusion_en_;
 
 } VoxelMapConfig;
@@ -217,19 +216,18 @@ typedef struct PillarVoxelConfig
 {
   bool pillar_voxel_en_;              // Enable pillar voxel map
   double voxel_size_;                 // Voxel size within pillar (meters)
-  int min_adjacent_ground_num_;       // Minimum adjacent ground voxels threshold
-  int min_adjacent_isolated_num_;     // Minimum adjacent isolated voxels threshold
+  int min_adjacent_ground_num_;       // Minimum adjacent ground voxels threshold (<=0 to disable)
+  int min_adjacent_isolated_num_;     // Minimum adjacent isolated voxels threshold (<=0 to disable)
   int neighbor_search_type_;          // Neighbor search type: 0=8-neighbor, 1=24-neighbor
   bool ground_height_angle_check_en_; // Enable height angle-based ground point filtering
   double ground_height_angle_threshold_; // Height angle threshold (degrees)
   bool plane_fitting_ground_en_;      // Enable plane fitting for ground detection
   double plane_fitting_distance_threshold_; // Plane fitting distance threshold (meters)
   int skip_type_;                     // Skip type: 0=none, 1=skip below ground, 2=skip ground+below
-  bool adjacent_check_en_;            // Enable adjacency check
 
   PillarVoxelConfig() : pillar_voxel_en_(false), voxel_size_(1.0), min_adjacent_ground_num_(3),
                        min_adjacent_isolated_num_(3), neighbor_search_type_(0), ground_height_angle_check_en_(true), ground_height_angle_threshold_(5.0),
-                       plane_fitting_ground_en_(false), plane_fitting_distance_threshold_(0.1), adjacent_check_en_(true),
+                       plane_fitting_ground_en_(false), plane_fitting_distance_threshold_(0.1),
                        skip_type_(0) {}
 } PillarVoxelConfig;
 

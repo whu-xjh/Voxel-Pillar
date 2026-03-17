@@ -66,7 +66,6 @@ void loadVoxelConfig(ros::NodeHandle &nh, VoxelMapConfig &voxel_config)
   nh.param<int>("local_map/half_map_size", voxel_config.half_map_size, 100);
   nh.param<double>("local_map/sliding_thresh", voxel_config.sliding_thresh, 8);
 
-  nh.param<bool>("lio/rf_enhance_en", voxel_config.rf_enhance_en_, false);
   nh.param<bool>("lio/intensity_fusion_en", voxel_config.intensity_fusion_en_, false);
 }
 
@@ -82,7 +81,6 @@ void loadPillarVoxelConfig(ros::NodeHandle &nh, PillarVoxelConfig &config)
   nh.param<bool>("pillar_voxel/plane_fitting_ground_en", config.plane_fitting_ground_en_, false);
   nh.param<double>("pillar_voxel/plane_fitting_distance_threshold", config.plane_fitting_distance_threshold_, 0.1);
   nh.param<int>("pillar_voxel/skip_type", config.skip_type_, 0);
-  nh.param<bool>("pillar_voxel/adjacent_check_en", config.adjacent_check_en_, true);
 }
 
 void VoxelOctoTree::init_plane(const std::vector<pointWithVar> &points, VoxelPlane *plane)
@@ -870,33 +868,15 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
       build_single_residual(pv, current_octo, 0, is_sucess, is_surface, prob, single_ptpl);
       if (!is_sucess)
       {
-        // If no valid plane found in current voxel, check adjacent voxels
         VOXEL_LOCATION near_position = position;
-
-        // Receptive field enhancement: determine search range based on configuration
-        // Helper function: compute single-axis offset
-        auto calc_offset = [&](double coord, double center, double quater_len) -> int {
-          if (coord > center + quater_len) {
-            if (config_setting_.rf_enhance_en_ && coord > center + 2 * quater_len)
-              return 2;
-            else
-              return 1;
-          } else if (coord < center - quater_len) {
-            if (config_setting_.rf_enhance_en_ && coord < center - 2 * quater_len)
-              return -2;
-            else
-              return -1;
-          }
-          return 0;
-        };
-
-        near_position.x += calc_offset(loc_xyz[0], current_octo->voxel_center_[0], current_octo->quater_length_);
-        near_position.y += calc_offset(loc_xyz[1], current_octo->voxel_center_[1], current_octo->quater_length_);
-        near_position.z += calc_offset(loc_xyz[2], current_octo->voxel_center_[2], current_octo->quater_length_);
-
-        // Find plane in adjacent voxels, build residual if found
+        if (loc_xyz[0] > (current_octo->voxel_center_[0] + current_octo->quater_length_)) { near_position.x = near_position.x + 1; }
+        else if (loc_xyz[0] < (current_octo->voxel_center_[0] - current_octo->quater_length_)) { near_position.x = near_position.x - 1; }
+        if (loc_xyz[1] > (current_octo->voxel_center_[1] + current_octo->quater_length_)) { near_position.y = near_position.y + 1; }
+        else if (loc_xyz[1] < (current_octo->voxel_center_[1] - current_octo->quater_length_)) { near_position.y = near_position.y - 1; }
+        if (loc_xyz[2] > (current_octo->voxel_center_[2] + current_octo->quater_length_)) { near_position.z = near_position.z + 1; }
+        else if (loc_xyz[2] < (current_octo->voxel_center_[2] - current_octo->quater_length_)) { near_position.z = near_position.z - 1; }
         auto iter_near = voxel_map_.find(near_position);
-        if (iter_near != voxel_map_.end()) { build_single_residual(pv, (iter_near->second)->second, 0, is_sucess, is_surface, prob, single_ptpl); }
+        if (iter_near != voxel_map_.end()) { build_single_residual(pv, (*(iter_near->second)).second, 0, is_sucess, is_surface, prob, single_ptpl); }
       }
 
       if (is_surface)
@@ -1511,8 +1491,8 @@ void PillarVoxelMap::GroundDetection(const Eigen::Vector3d& current_pos)
     }
   }
 
-  // Step 2: Adjacency check
-  if (config_.adjacent_check_en_)
+  // Step 2: Adjacency check (only if min_adjacent_ground_num > 0)
+  if (config_.min_adjacent_ground_num_ > 0)
   {
     for (const auto& pillar_key : current_pillars_)
     {
