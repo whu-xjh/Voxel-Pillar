@@ -4,7 +4,7 @@
 	<arg name="rviz" default="true" />
 
 	<!-- LiDAR topic merger node -->
-	<node pkg="fast_livo" type="livox_multi_lidar" name="livox_multi_lidar" output="screen">
+	<node pkg="voxel_pillar" type="merge_lidar" name="merge_lidar" output="screen">
 		<param name="output_topic" value="/livox/multi_lidar" />
 		<param name="input_topic_159" value="/livox/lidar_192_168_1_159" />
 		<param name="input_topic_160" value="/livox/lidar_192_168_1_160" />
@@ -12,16 +12,16 @@
 	</node>
 
 	<!-- Load merged LiDAR configuration -->
-	<rosparam command="load" file="$(find fast_livo)/config/livox_multi_lidar.yaml" />
+	<rosparam command="load" file="$(find voxel_pillar)/config/merge_lidar.yaml" />
 
 	<!-- FAST-LIVO2 mapping node -->
-	<node pkg="fast_livo" type="fastlivo_mapping" name="laserMapping" output="screen">
-		<rosparam file="$(find fast_livo)/config/camera_pinhole.yaml" />
+	<node pkg="voxel_pillar" type="fastlivo_mapping" name="laserMapping" output="screen">
+		<rosparam file="$(find voxel_pillar)/config/camera_pinhole.yaml" />
 	</node>
 
 	<group if="$(arg rviz)">
 		<!-- RViz with robot follow view -->
-		<node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find fast_livo)/rviz_cfg/livox_multi_lidar.rviz" />
+		<node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find voxel_pillar)/rviz_cfg/merge_lidar.rviz" />
 	</group>
 
 	<node pkg="image_transport" type="republish" name="republish" args="compressed in:=/left_camera/image raw out:=/left_camera/image" output="screen" respawn="true"/>

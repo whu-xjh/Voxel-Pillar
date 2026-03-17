@@ -3,13 +3,13 @@
 
 	<arg name="rviz" default="true" />
 
-	<rosparam command="load" file="$(find fast_livo)/config/SubT_MRS.yaml" />
-	<node pkg="fast_livo" type="fastlivo_mapping" name="laserMapping" output="screen">
-		<rosparam file="$(find fast_livo)/config/camera_pinhole_SubT_MRS.yaml" />
+	<rosparam command="load" file="$(find voxel_pillar)/config/SubT_MRS.yaml" />
+	<node pkg="voxel_pillar" type="fastlivo_mapping" name="laserMapping" output="screen">
+		<rosparam file="$(find voxel_pillar)/config/camera_pinhole_SubT_MRS.yaml" />
 	</node>
 
 	<group if="$(arg rviz)">
-		<node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find fast_livo)/rviz_cfg/fast_livo2.rviz" />
+		<node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find voxel_pillar)/rviz_cfg/voxel_pillar.rviz" />
 	</group>
 
     

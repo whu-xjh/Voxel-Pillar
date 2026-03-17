@@ -16,7 +16,7 @@ class LivoxLidarMerger {
 public:
     LivoxLidarMerger(ros::NodeHandle& nh) : nh_(nh) {
         // Get package path
-        std::string package_path = ros::package::getPath("fast_livo");
+        std::string package_path = ros::package::getPath("voxel_pillar");
         log_dir_ = package_path + "/Log/launch_log";
 
         // Create Log directory if not exists
@@ -301,7 +301,7 @@ private:
 };
 
 int main(int argc, char** argv) {
-    ros::init(argc, argv, "livox_multi_lidar");
+    ros::init(argc, argv, "merge_lidar");
     ros::NodeHandle nh;
 
     LivoxLidarMerger merger(nh);

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 2.8.3)
-project(fast_livo)
+project(voxel_pillar)
 
 set(CMAKE_BUILD_TYPE "Release")
 message(STATUS "Build Type: ${CMAKE_BUILD_TYPE}")
@@ -135,7 +135,7 @@ add_library(laser_mapping src/LIVMapper.cpp)
 add_executable(fastlivo_mapping src/main.cpp)
 
 # Add livox multi-lidar merger executable
-add_executable(livox_multi_lidar src/livox_multi_lidar.cpp)
+add_executable(merge_lidar src/merge_lidar.cpp)
 
 # Link libraries to the executable
 target_link_libraries(fastlivo_mapping
@@ -151,9 +151,9 @@ target_link_libraries(fastlivo_mapping
   ${Boost_LIBRARIES}
 )
 
-# Link libraries to livox_multi_lidar executable
+# Link libraries to merge_lidar executable
 target_link_libraries(
-  livox_multi_lidar
+  merge_lidar
   ${catkin_LIBRARIES}
   ${PCL_LIBRARIES}
 )
