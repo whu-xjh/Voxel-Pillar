@@ -134,8 +134,8 @@ public:
   
   // OLD: Using old voxel map format
   // unordered_map<VOXEL_LOCATION, VOXEL_POINTS *> feat_map;
-  // NEW: Using LRU cache format for visual feature map（添加多线程保护）
-  std::mutex feat_cache_mutex_;  // 特征缓存访问互斥锁
+  // NEW: Using LRU cache format with thread-safe access
+  std::mutex feat_cache_mutex_;  // Feature cache mutex
   unordered_map<VOXEL_LOCATION, std::list<std::pair<VOXEL_LOCATION, VOXEL_POINTS*>>::iterator> feat_map;
   std::list<std::pair<VOXEL_LOCATION, VOXEL_POINTS*>> feat_map_cache;
   int capacity;

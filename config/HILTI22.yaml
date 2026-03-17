@@ -8,13 +8,13 @@ common:
 
 extrin_calib:
   # Hilti-2022
-  extrinsic_T: [-0.001, -0.00855, 0.055] 
+  extrinsic_T: [-0.001, -0.00855, 0.055]
   extrinsic_R: [0, -1, 0, -1, 0, 0, 0, 0, -1]
-  
+
   # Hilti-2023
-  # extrinsic_T: [-0.006730146149038548, -0.006897049862999071, 0.049898628062256645] 
-  # extrinsic_R: [0.006609639848469365, -0.9999773650294649, 0.0012578115132016717, 
-  #               -0.9999762249571927, -0.006612093869054189, -0.0019569708811106104, 
+  # extrinsic_T: [-0.006730146149038548, -0.006897049862999071, 0.049898628062256645]
+  # extrinsic_R: [0.006609639848469365, -0.9999773650294649, 0.0012578115132016717,
+  #               -0.9999762249571927, -0.006612093869054189, -0.0019569708811106104,
   #               0.001965243352927244, -0.0012448467359610184, -0.9999972940839232]
 
   # Hilti
@@ -28,14 +28,14 @@ time_offset:
   img_time_offset: 0.0
   exposure_time_init: 0.0
 
-preprocess: 
+preprocess:
   hilti_en: true
   point_filter_num: 1
-  filter_size_surf: 0.2 # 0.2
-  lidar_type: 5 # HesaiXT32
+  filter_size_surf: 0.2
+  lidar_type: 5  # HesaiXT32
   scan_line: 32
-  blind: 0.3 # 0.1 0.3 0.6
- 
+  blind: 0.3
+
 vio:
   max_iterations: 5
   outlier_threshold: 500
@@ -47,38 +47,44 @@ vio:
   inverse_composition_en: false
   exposure_estimate_en: true
   inv_expo_cov: 0.1
-  capacity: 0 # LRU cache capacity for visual feature map (0 = disable LRU cache)
+  capacity: 0  # LRU cache (0 = disable)
 
 imu:
   imu_en: true
   imu_int_frame: 30
-  acc_cov: 0.5 # 0.1
+  acc_cov: 0.5
   gyr_cov: 0.01
-  b_acc_cov: 0.0001 # 0.1
-  b_gyr_cov: 0.0001 # 0.1
+  b_acc_cov: 0.0001
+  b_gyr_cov: 0.0001
 
 lio:
   max_iterations: 5
   dept_err: 0.02
   beam_err: 0.05
-  min_eigen_value: 0.0001 # 0.0025
+  min_eigen_value: 0.0001
   voxel_size: 0.4
   max_layer: 2
   max_points_num: 100
   layer_init_num: [5, 5, 5, 5, 5]
-  capacity: 0  # LRU缓存容量, 越大占用内存越多 (0 = 禁用LRU缓存)
+  capacity: 0  # LRU cache (0 = disable)
   rf_enhance_en: true
   intensity_fusion_en: true
 
-# Pillar Voxel 参数配置
+# Pillar Voxel Ground Detection
 pillar_voxel:
   pillar_voxel_en: true
-  min_adjacent_num: 3      # 相邻地面体素数量阈值
-  neighbor_search_type: 0  # 邻域搜索类型: 0=8邻域, 1=24邻域
-  ground_height_angle_check_en: true  # 是否启用基于高度角的地面点过滤
-  ground_height_angle_threshold: 2.5  # 高度角阈值（度），超过此阈值不认为是地面点
+  voxel_size: 1.0
+  adjacent_check_en: true
+  min_adjacent_ground_num: 3
+  min_adjacent_isolated_num: 3
+  neighbor_search_type: 0  # 0=8-neighbor, 1=24-neighbor
+  ground_height_angle_check_en: true
+  ground_height_angle_threshold: 2.5  # degrees
+  plane_fitting_ground_en: false
+  plane_fitting_distance_threshold: 0.1
+  skip_type: 0  # 0=none, 1=skip below ground, 2=skip ground+below
 
-local_map: 
+local_map:
   map_sliding_en: false
   half_map_size: 1000
   sliding_thresh: 8
@@ -91,26 +97,24 @@ publish:
   dense_map_en: false
   pub_effect_en: false
   pub_plane_en: false
-  pub_body_en: false  # 是否发布body坐标系下的点云
-  pub_scan_num: 1 
+  pub_body_en: false
+  pub_scan_num: 1
   blind_rgb_points: 0.0
- 
+
 evo:
   seq_name: "exp21_outside_building"
   pose_output_en: true
 
 lidar_save:
   save_en: false
-  colmap_output_en: false # need to set interval = -1
+  colmap_output_en: false
   filter_size_pcd: 0.15
   interval: 1
-  # how many LiDAR frames saved in each pcd file;
-  # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
 
 external_imu:
-  enable: false  # 是否启用外置IMU
-  time_offset: 0  # 外置IMU时间偏移(秒)
-  buffer_size: 100000  # external IMU buffer大小
-  external_R : [0, 0, -1, 1, 0, 0, 0, -1, 0]
-  external_T : [0, 0, 0]
-  external_imu_only: false # 是否动态启动
+  enable: false
+  time_offset: 0
+  buffer_size: 100000
+  external_R: [0, 0, -1, 1, 0, 0, 0, -1, 0]
+  external_T: [0, 0, 0]
+  external_imu_only: false

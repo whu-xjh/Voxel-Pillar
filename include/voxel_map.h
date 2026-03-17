@@ -117,7 +117,7 @@ public:
 class PILLAR_LOCATION
 {
 public:
-  int64_t axis1, axis2; // 两个非高程方向的坐标
+  int64_t axis1, axis2;  // horizontal coordinates (x, y)
 
   PILLAR_LOCATION(int64_t v1 = 0, int64_t v2 = 0) : axis1(v1), axis2(v2) {}
 
@@ -215,19 +215,20 @@ void loadVoxelConfig(ros::NodeHandle &nh, VoxelMapConfig &voxel_config);
 
 typedef struct PillarVoxelConfig
 {
-  bool pillar_voxel_en_;
-  double voxel_size_;  // 体素柱中的体素大小
-  int min_adjacent_num_;
-  int neighbor_search_type_;
-  bool ground_height_angle_check_en_;
-  double ground_height_angle_threshold_;
-  bool plane_fitting_ground_en_;
-  double plane_fitting_distance_threshold_;
-  int skip_type_;
-  bool adjacent_check_en_;
+  bool pillar_voxel_en_;              // Enable pillar voxel map
+  double voxel_size_;                 // Voxel size within pillar (meters)
+  int min_adjacent_ground_num_;       // Minimum adjacent ground voxels threshold
+  int min_adjacent_isolated_num_;     // Minimum adjacent isolated voxels threshold
+  int neighbor_search_type_;          // Neighbor search type: 0=8-neighbor, 1=24-neighbor
+  bool ground_height_angle_check_en_; // Enable height angle-based ground point filtering
+  double ground_height_angle_threshold_; // Height angle threshold (degrees)
+  bool plane_fitting_ground_en_;      // Enable plane fitting for ground detection
+  double plane_fitting_distance_threshold_; // Plane fitting distance threshold (meters)
+  int skip_type_;                     // Skip type: 0=none, 1=skip below ground, 2=skip ground+below
+  bool adjacent_check_en_;            // Enable adjacency check
 
-  PillarVoxelConfig() : pillar_voxel_en_(false), voxel_size_(1.0), min_adjacent_num_(3),
-                       neighbor_search_type_(0), ground_height_angle_check_en_(true), ground_height_angle_threshold_(5.0),
+  PillarVoxelConfig() : pillar_voxel_en_(false), voxel_size_(1.0), min_adjacent_ground_num_(3),
+                       min_adjacent_isolated_num_(3), neighbor_search_type_(0), ground_height_angle_check_en_(true), ground_height_angle_threshold_(5.0),
                        plane_fitting_ground_en_(false), plane_fitting_distance_threshold_(0.1), adjacent_check_en_(true),
                        skip_type_(0) {}
 } PillarVoxelConfig;

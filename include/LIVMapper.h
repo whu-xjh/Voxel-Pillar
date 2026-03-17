@@ -33,7 +33,7 @@ public:
   LIVMapper(ros::NodeHandle &nh);
   ~LIVMapper();
 
-  // 外置IMU相关变量
+  // External IMU variables
   ExternalIMUData latest_external_imu;
   deque<ExternalIMUData> external_imu_buffer;
   bool external_imu_enable = false;
@@ -44,8 +44,8 @@ public:
   ros::Subscriber sub_external_imu;
   string external_imu_topic;
   void odom_cbk(const nav_msgs::Odometry::ConstPtr &msg_in);
-  
-  // 外置IMU外参
+
+  // External IMU extrinsics
   V3D external_imu_T;
   M3D external_imu_R;
   std::vector<double> external_imu_T_vec, external_imu_R_vec;

@@ -129,7 +129,7 @@ void LIVMapper::readParameters(ros::NodeHandle &nh)
   nh.param<bool>("publish/dense_map_en", dense_map_en, false);
   nh.param<bool>("publish/pub_cloud_body", pub_body_en, false);
 
-  // 读取外置IMU参数
+  // Read external IMU parameters
   nh.param<string>("common/external_imu_topic", external_imu_topic, "/novatel/oem7/odom");
   nh.param<bool>("external_imu/enable", external_imu_enable, false);
   nh.param<int>("external_imu/external_imu_int_frame", external_imu_int_frame, 3);
@@ -193,16 +193,16 @@ void LIVMapper::initializeComponents()
   
   }
 
-void LIVMapper::initializeFiles() 
+void LIVMapper::initializeFiles()
 {
-  // 创建时间戳子目录
+  // Create timestamp subdirectory
   auto now = std::chrono::system_clock::now();
   auto time_t = std::chrono::system_clock::to_time_t(now);
   std::stringstream ss;
   ss << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S");
   session_timestamp_ = ss.str();
-  
-  // 创建PCD时间戳子目录（在Log/PCD/下）
+
+  // Create PCD timestamp subdirectory (under Log/PCD/)
   // pcd_session_dir_ = "/media/xjh/Extreme SSD/data/shanxi/car/output/" + session_timestamp_;
   pcd_session_dir_ = root_dir + "Log/PCD/" + session_timestamp_;
   if (save_en) {
@@ -248,7 +248,7 @@ void LIVMapper::initializeSubscribersAndPublishers(ros::NodeHandle &nh, image_tr
   sub_imu = nh.subscribe(imu_topic, 200000, &LIVMapper::imu_cbk, this);
   sub_img = nh.subscribe(img_topic, 200000, &LIVMapper::img_cbk, this);
   
-  // 只有在启用外置IMU时才订阅相关话题
+  // Only subscribe to external IMU topics when enabled
   if (external_imu_enable) {
       sub_external_imu = nh.subscribe(external_imu_topic, 200000, &LIVMapper::odom_cbk, this);
       ROS_INFO("External IMU enabled, subscribing to topic: %s", external_imu_topic.c_str());
@@ -287,10 +287,10 @@ void LIVMapper::handleFirstFrame()
   }
 }
 
-void LIVMapper::gravityAlignment() 
+void LIVMapper::gravityAlignment()
 {
-  // 统一垂直参考，确保z轴与重力方向一致
-  if (!p_imu->imu_need_init && !gravity_align_finished) 
+  // Unify vertical reference, ensure z-axis aligns with gravity direction
+  if (!p_imu->imu_need_init && !gravity_align_finished)
   {
     std::cout << "Gravity Alignment Starts" << std::endl;
     V3D ez(0, 0, -1), gz(_state.gravity);
@@ -306,31 +306,31 @@ void LIVMapper::gravityAlignment()
   }
 }
 
-void LIVMapper::processImu() 
+void LIVMapper::processImu()
 {
   // double t0 = omp_get_wtime();
 
-  p_imu->Process2(LidarMeasures, _state, feats_undistort, external_imu_buffer, external_imu_enable, external_imu_only); // 调用IMU处理模块，传入external IMU buffer和启用状态
+  p_imu->Process2(LidarMeasures, _state, feats_undistort, external_imu_buffer, external_imu_enable, external_imu_only);  // Call IMU processing module with external IMU buffer and enable state
 
   if (gravity_align_en) gravityAlignment();
 
-  state_propagat = _state; // 更新状态传播变量
-  voxelmap_manager->state_ = _state; // 更新体素地图管理器状态：位姿、IMU偏差、协方差矩阵等
+  state_propagat = _state;  // Update state propagation variable
+  voxelmap_manager->state_ = _state;  // Update voxel map manager state: pose, IMU bias, covariance matrix, etc.
   /*
-      1. 坐标变换基准：
-        - 体素地图使用此状态进行点云的世界坐标变换
-        - 影响点云配准和地图构建的准确性
-      2. ICP配准：
-        - 在StateEstimation()中用作初始猜测
-        - 影响迭代最近点算法的收敛性和精度
-      3. 地图更新：
-        - 决定新点云如何与现有体素地图融合
-        - 影响地图的一致性和精度
-      4. 不确定性传播：
-        - 状态协方差影响点云匹配的权重
-        - 影响状态估计的置信度
+      1. Coordinate transformation reference:
+        - Voxel map uses this state for point cloud world coordinate transformation
+        - Affects accuracy of point cloud registration and map building
+      2. ICP registration:
+        - Used as initial guess in StateEstimation()
+        - Affects convergence and accuracy of ICP algorithm
+      3. Map update:
+        - Determines how new point clouds merge with existing voxel map
+        - Affects map consistency and accuracy
+      4. Uncertainty propagation:
+        - State covariance affects point cloud matching weights
+        - Affects confidence of state estimation
   */
-  voxelmap_manager->feats_undistort_ = feats_undistort; // 更新去畸变点云
+  voxelmap_manager->feats_undistort_ = feats_undistort; // Update undistorted point cloud
 
   // double t_prop = omp_get_wtime();
 
@@ -418,45 +418,45 @@ void LIVMapper::handleVIO()
             << _state.bias_a.transpose() << " " << V3D(_state.inv_expo_time, 0, 0).transpose() << " " << feats_undistort->points.size() << std::endl;
 }
 
-// 执行激光-惯性里程计（LIO）处理
-void LIVMapper::handleLIO() 
-{ 
-  // 记录当前状态的欧拉角表示，并将相关信息写入调试文件
-  euler_cur = RotMtoEuler(_state.rot_end); // 将当前旋转矩阵转换为欧拉角
+// Execute LiDAR-Inertial Odometry (LIO) processing
+void LIVMapper::handleLIO()
+{
+  // Record current state as Euler angles and write to debug file
+  euler_cur = RotMtoEuler(_state.rot_end); // Convert current rotation matrix to Euler angles
   fout_pre << setw(20) << LidarMeasures.last_lio_update_time - _first_lidar_time << " " << euler_cur.transpose() * 57.3 << " "
            << _state.pos_end.transpose() << " " << _state.vel_end.transpose() << " " << _state.bias_g.transpose() << " "
            << _state.bias_a.transpose() << " " << V3D(_state.inv_expo_time, 0, 0).transpose() << endl;
-  // 记录的相关信息依次为：相对时间戳、欧拉角（度）、位置、速度、陀螺仪偏差、加速度计偏差、曝光时间的倒数
+  // Recorded: relative timestamp, Euler angles (deg), position, velocity, gyro bias, accel bias, inverse exposure time
 
-  // 检查去畸变点云是否为空
+  // Check if undistorted point cloud is empty
   if (feats_undistort->empty() || (feats_undistort == nullptr))
   {
     std::cout << "[ LIO ]: No point!!!" << std::endl;
     return;
   }
 
-  // 点云下采样
+  // Point cloud downsampling
   double t0 = omp_get_wtime();
-  downSizeFilterSurf.setInputCloud(feats_undistort); // 设置输入点云为去畸变点云
+  downSizeFilterSurf.setInputCloud(feats_undistort); // Set input point cloud as undistorted point cloud
   if (filter_size_surf_min == 0.0) {
     feats_down_body = feats_undistort;
   } else {
-    downSizeFilterSurf.filter(*feats_down_body); // 对去畸变点云进行体素滤波（filter_size_surf），结果存储在feats_down_body中
+    downSizeFilterSurf.filter(*feats_down_body); // Apply voxel filter (filter_size_surf) to undistorted point cloud, result stored in feats_down_body
   }
   double t_down = omp_get_wtime();
- 
-  // 更新体素地图管理器的相关属性
+
+  // Update voxel map manager properties
   // double t_tran1 = omp_get_wtime();
-  feats_down_size = feats_down_body->points.size(); // 获取下采样之后的点数
+  feats_down_size = feats_down_body->points.size(); // Get point count after downsampling
   voxelmap_manager->feats_down_body_ = feats_down_body;
-  transformLidar(_state.rot_end, _state.pos_end, feats_down_body, feats_down_world); // 转换到世界坐标系
+  transformLidar(_state.rot_end, _state.pos_end, feats_down_body, feats_down_world); // Transform to world coordinate system
   voxelmap_manager->feats_down_world_ = feats_down_world;
   voxelmap_manager->feats_down_size_ = feats_down_size;
 
   // double t_tran2 = omp_get_wtime();
   // printf("transformLidar time: %f\n", t_tran2 - t_tran1);
 
-  // 首次运行时构建体素地图,基于八叉树结构
+  // Build voxel map on first run, based on octree structure
   if (!lidar_map_inited)
   {
     lidar_map_inited = true;
@@ -481,7 +481,7 @@ void LIVMapper::handleLIO()
     t_pillar2 = omp_get_wtime();
   }
 
-  // 状态估计，核心是ICP配准，基于体素地图的迭代最近点配准，来估计当前帧的位姿
+  // State estimation: ICP registration based on voxel map to estimate current frame pose
   double t1 = omp_get_wtime();
   voxelmap_manager->StateEstimation(state_propagat);
   _state = voxelmap_manager->state_;
@@ -500,52 +500,52 @@ void LIVMapper::handleLIO()
   double t2 = omp_get_wtime();
 
   /*
-    1. 预测层 - IMU预积分（在StateEstimation之外）
+    1. Prediction Layer - IMU Pre-integration (outside StateEstimation)
 
-    state_propagat - 这个状态是通过IMU预积分得到的
-    - IMU提供高频的角速度和加速度测量
-    - 通过预积分得到位姿的预测值
-    - 这个预测值作为ICP优化的初始值
+    state_propagat - State obtained via IMU pre-integration
+    - IMU provides high-frequency angular velocity and acceleration measurements
+    - Pre-integration yields pose prediction
+    - This prediction serves as initial value for ICP optimization
 
-    2. 观测层 - 点云配准（BuildResidualListOMP）
+    2. Observation Layer - Point Cloud Registration (BuildResidualListOMP)
 
-    // 构建观测：点云到平面的距离
+    // Build observation: point-to-plane distance
     for (int i = 0; i < effct_feat_num_; i++)
     {
-        meas_vec(i) = -ptpl_list_[i].dis_to_plane_;  // 观测值
+        meas_vec(i) = -ptpl_list_[i].dis_to_plane_;  // Observation value
     }
-    - 将当前帧点云与地图中的平面对齐
-    - 点到平面的距离作为观测量
-    - 这个观测值用于校正IMU的预测
+    - Align current frame point cloud with planes in map
+    - Point-to-plane distance used as observation
+    - This observation corrects IMU prediction
 
-    3. 融合层 - 卡尔曼滤波（StateEstimation核心）
+    3. Fusion Layer - Kalman Filter (StateEstimation core)
 
-    // 卡尔曼滤波融合预测和观测
+    // Kalman filter fuses prediction and observation
     solution = K_1.block<DIM_STATE, 6>(0, 0) * HTz +
               vec.block<DIM_STATE, 1>(0, 0) -
               G.block<DIM_STATE, 6>(0, 0) * vec.block<6, 1>(0, 0);
-    state_ += solution;  // 更新最终状态
+    state_ += solution;  // Update final state
 
-    关键区别：传统ICP vs 基于EKF的ICP
+    Key Difference: Traditional ICP vs EKF-based ICP
 
-    传统ICP：
+    Traditional ICP:
 
-    // 直接最小化点到平面的距离
+    // Directly minimize point-to-plane distance
     while (!converged) {
         FindCorrespondences();
         ComputeTransform();
         ApplyTransform();
     }
 
-    基于EKF的ICP：
+    EKF-based ICP:
 
-    // 使用卡尔曼滤波框架
-    Prediction:  state_pred = f(state_prev, imu_data)  // IMU预测
-    Correction:  state_corr = state_pred + K * (z - h(state_pred))  // 点云校正
+    // Use Kalman filter framework
+    Prediction:  state_pred = f(state_prev, imu_data)  // IMU prediction
+    Correction:  state_corr = state_pred + K * (z - h(state_pred))  // Point cloud correction
   */
 
-  // 如果启用IMU传播，则更新相关标志和状态，为高频IMU传播提供最新的状态估计
-  if (imu_prop_enable) 
+  // If IMU propagation is enabled, update related flags and state for high-frequency IMU propagation
+  if (imu_prop_enable)
   {
     ekf_finish_once = true;
     latest_ekf_state = _state;
@@ -553,7 +553,7 @@ void LIVMapper::handleLIO()
     state_update_flg = true;
   }
 
-  // 输出位姿到文件（如果启用）
+  // Output pose to file (if enabled)
   if (pose_output_en) 
   {
     static bool pos_opend = false;
@@ -577,28 +577,28 @@ void LIVMapper::handleLIO()
             << q.x() << " " << q.y() << " " << q.z() << " " << q.w() << std::endl;
   }
   
-  // 记录当前状态的欧拉角表示，并将相关信息写入调试文件
+  // Record current state as Euler angles and write to debug file
   euler_cur = RotMtoEuler(_state.rot_end);
   geoQuat = tf::createQuaternionMsgFromRollPitchYaw(euler_cur(0), euler_cur(1), euler_cur(2));
-  publish_odometry(pubOdomAftMapped); // 发布里程计信息
+  publish_odometry(pubOdomAftMapped); // Publish odometry
 
-  // 将当前帧点云放入体素地图中，更新体素地图
+  // Insert current frame point cloud into voxel map, update voxel map
   double t3 = omp_get_wtime();
   PointCloudXYZI::Ptr world_lidar(new PointCloudXYZI());
   transformLidar(_state.rot_end, _state.pos_end, feats_down_body, world_lidar);
-  // 计算每个点的协方差和不确定性
+  // Compute covariance and uncertainty for each point
   /*
-    (1) 加权优化
-    - 在ICP配准中，协方差决定点的权重
-    - 协方差小的点 → 权重大 → 置信度高
-    - 协方差大的点 → 权重小 → 置信度低
-    (2) 不确定性传播
-    - 传感器噪声：激光雷达测量误差
-    - 运动畸变：IMU积分误差
-    - 位姿不确定性：系统状态估计误差
-    (3) 鲁棒性提升
-    - 对异常点具有更好的抵抗力
-    - 提高系统在动态环境中的稳定性
+    (1) Weighted Optimization
+    - In ICP registration, covariance determines point weight
+    - Small covariance → Large weight → High confidence
+    - Large covariance → Small weight → Low confidence
+    (2) Uncertainty Propagation
+    - Sensor noise: LiDAR measurement error
+    - Motion distortion: IMU integration error
+    - Pose uncertainty: System state estimation error
+    (3) Robustness Improvement
+    - Better resistance to outliers
+    - Improved stability in dynamic environments
   */
   for (size_t i = 0; i < world_lidar->points.size(); i++) 
   {
@@ -615,39 +615,39 @@ void LIVMapper::handleLIO()
   _pv_list = voxelmap_manager->pv_list_;
   double t4 = omp_get_wtime();
 
-  // 地图滑动窗口机制，移除远离当前位姿的体素以节省内存
-  // 1. 计算当前位姿与体素的距离
-  // 2. 移除距离超过阈值的体素
-  // 3. 保持地图大小恒定
-  // 4. 提高匹配效率和精度
+  // Map sliding window: remove voxels far from current pose to save memory
+  // 1. Calculate distance between current pose and voxels
+  // 2. Remove voxels exceeding distance threshold
+  // 3. Keep map size constant
+  // 4. Improve matching efficiency and accuracy
   if(voxelmap_manager->config_setting_.map_sliding_en)
   {
     voxelmap_manager->mapSliding();
   }
   
-  // 选择发布稠密点云还是下采样点云
+  // Select whether to publish dense or downsampled point cloud
   PointCloudXYZI::Ptr laserCloudFullRes(dense_map_en ? feats_undistort : feats_down_body);
   int size = laserCloudFullRes->points.size();
   PointCloudXYZI::Ptr laserCloudWorld(new PointCloudXYZI(size, 1));
 
   double t5 = omp_get_wtime();
-  // 转换点云到世界坐标系用于发布
-  for (int i = 0; i < size; i++) 
+  // Transform point cloud to world coordinate system for publishing
+  for (int i = 0; i < size; i++)
   {
     RGBpointBodyToWorld(&laserCloudFullRes->points[i], &laserCloudWorld->points[i]);
   }
 
-  // 发布所有点云
+  // Publish all point clouds
   *pcl_w_wait_pub = *laserCloudWorld;
   double t6 = omp_get_wtime();
 
-  if (!img_en) publish_frame_world(pubLaserCloudFullRes, vio_manager); // 如果没有图像信息，发布点云
-  if (pub_body_en) publish_frame_body(pubLaserCloudBody); // 发布机身坐标系下的点云
-  if (pub_effect_en) publish_effect_world(pubLaserCloudEffect, voxelmap_manager->ptpl_list_); // 发布有效点云
-  if (voxelmap_manager->config_setting_.is_pub_plane_map_) voxelmap_manager->pubVoxelMap(); // 发布体素地图
-  if (save_en) save_frame_world(voxelmap_manager->ptpl_list_); // 保存点云到文件
-  publish_path(pubPath); // 发布路径
-  publish_mavros(mavros_pose_publisher); // 发布MAVROS位姿
+  if (!img_en) publish_frame_world(pubLaserCloudFullRes, vio_manager); // If no image information, publish point cloud
+  if (pub_body_en) publish_frame_body(pubLaserCloudBody); // Publish point cloud in body coordinate system
+  if (pub_effect_en) publish_effect_world(pubLaserCloudEffect, voxelmap_manager->ptpl_list_); // Publish effective point cloud
+  if (voxelmap_manager->config_setting_.is_pub_plane_map_) voxelmap_manager->pubVoxelMap(); // Publish voxel map
+  if (save_en) save_frame_world(voxelmap_manager->ptpl_list_); // Save point cloud to file
+  publish_path(pubPath); // Publish path
+  publish_mavros(mavros_pose_publisher); // Publish MAVROS pose
   
   frame_num++;
   double t7 = omp_get_wtime();
@@ -792,7 +792,7 @@ void LIVMapper::imu_prop_callback(const ros::TimerEvent &e)
 {
   if (p_imu->imu_need_init || !new_imu || !ekf_finish_once) { return; }
   mtx_buffer_imu_prop.lock();
-  new_imu = false; // 控制propagate频率和IMU频率一致
+  new_imu = false; // Control propagate frequency to match IMU frequency
   if (imu_prop_enable && !prop_imu_buffer.empty())
   {
     static double last_t_from_lidar_end_time = 0;
@@ -1028,56 +1028,56 @@ void LIVMapper::imu_cbk(const sensor_msgs::Imu::ConstPtr &msg_in)
 
 void LIVMapper::odom_cbk(const nav_msgs::Odometry::ConstPtr &msg_in)
 {
-    // 如果外置IMU未启用，直接返回
+    // If external IMU not enabled, return directly
     if (!external_imu_enable) {
         return;
     }
-    
+
     mtx_buffer.lock();
-    
+
     double timestamp = msg_in->header.stamp.toSec() + external_imu_time_offset;
-    
-    // 检查时间戳是否有效
+
+    // Check if timestamp is valid
     if (timestamp < last_timestamp_lidar) {
         mtx_buffer.unlock();
         return;
     }
-    
-    // 创建外置IMU数据结构
+
+    // Create external IMU data structure
     ExternalIMUData external_data;
     external_data.timestamp = timestamp;
     external_data.is_valid = true;
-    
-    // 提取位置信息
+
+    // Extract position information
     external_data.position << msg_in->pose.pose.position.x,
                              msg_in->pose.pose.position.y,
                              msg_in->pose.pose.position.z;
 
-    // 提取线速度信息
+    // Extract linear velocity information
     external_data.linear_velocity << msg_in->twist.twist.linear.x,
                                    msg_in->twist.twist.linear.y,
                                    msg_in->twist.twist.linear.z;
 
-    // 提取线速度协方差信息
-    // nav_msgs Odometry的twist.covariance是36个元素的数组，按行优先排列
-    // 线速度协方差对应位置 [0], [7], [14]
-    external_data.velocity_covariance << msg_in->twist.covariance[0],    // x速度方差
-                                          msg_in->twist.covariance[7],    // y速度方差  
-                                          msg_in->twist.covariance[14];   // z速度方差
+    // Extract linear velocity covariance information
+    // nav_msgs Odometry twist.covariance is a 36-element array in row-major order
+    // Linear velocity covariance at positions [0], [7], [14]
+    external_data.velocity_covariance << msg_in->twist.covariance[0],    // x velocity variance
+                                          msg_in->twist.covariance[7],    // y velocity variance
+                                          msg_in->twist.covariance[14];   // z velocity variance
 
-    // 提取姿态信息（四元数转旋转矩阵）
+    // Extract orientation information (quaternion to rotation matrix)
     Eigen::Quaterniond q(msg_in->pose.pose.orientation.w,
                          msg_in->pose.pose.orientation.x,
                          msg_in->pose.pose.orientation.y,
                          msg_in->pose.pose.orientation.z);
 
-    // 使用配置文件中的外参进行坐标变换
-    // 首先应用外置IMU到内置IMU的旋转变换
+    // Use extrinsic parameters from config file for coordinate transformation
+    // First apply rotation transform from external IMU to internal IMU
     external_data.linear_velocity = external_imu_R * external_data.linear_velocity;
 
-    // 对速度协方差进行坐标变换
-    // 协方差变换公式: C_internal = R * C_external * R^T
-    // 对于对角协方差矩阵，需要完整的3x3变换
+    // Transform velocity covariance
+    // Covariance transformation formula: C_internal = R * C_external * R^T
+    // For diagonal covariance matrix, full 3x3 transformation needed
     Eigen::Matrix3d external_cov_matrix = Eigen::Matrix3d::Zero();
     external_cov_matrix.diagonal() = external_data.velocity_covariance;
     Eigen::Matrix3d internal_cov_matrix = external_imu_R * external_cov_matrix * external_imu_R.transpose();
@@ -1085,13 +1085,13 @@ void LIVMapper::odom_cbk(const nav_msgs::Odometry::ConstPtr &msg_in)
 
     last_external_imu_time = timestamp;
     latest_external_imu = external_data;
-    
-    // 添加到buffer并管理buffer大小
+
+    // Add to buffer and manage buffer size
     external_imu_buffer.push_back(external_data);
     if (external_imu_buffer.size() > external_imu_buffer_size) {
       external_imu_buffer.pop_front();
     }
-    
+
     mtx_buffer.unlock();
     sig_buffer.notify_all();
 }
@@ -1284,7 +1284,7 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
       meas.pcl_proc_next->reserve(max_size);
       // deque<PointCloudXYZI::Ptr> lidar_buffer_tmp;
 
-      // 只保留时间戳小于img_capture_time的lidar数据
+      // Only keep lidar data with timestamp less than img_capture_time
       while (!lid_raw_data_buffer.empty())
       {
         if (lid_header_time_buffer.front() > img_capture_time) break;
@@ -1590,7 +1590,7 @@ VoxelOctoTree* LIVMapper::getVoxelForPoint(const V3D& point_w)
 {
   double voxel_size = voxelmap_manager->config_setting_.max_voxel_size_;
 
-  // 计算体素坐标
+  // Compute voxel coordinates
   float loc_xyz[3];
   for (int j = 0; j < 3; j++)
   {

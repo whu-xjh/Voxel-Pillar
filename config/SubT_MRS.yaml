@@ -1,61 +1,44 @@
 common:
   img_topic: "/camera_1/image_raw"
-  lid_topic: "/velodyne_points"  # 使用合并后的LiDAR话题
-  imu_topic: "/imu/data"  # 默认使用159的IMU
-
-  # lid_topic: "/tartanair/velodyne"  # 使用合并后的LiDAR话题
-  # imu_topic: "/tartanair/imu"  # 默认使用159的IMU
+  lid_topic: "/velodyne_points"
+  imu_topic: "/imu/data"
 
   img_en: 0
-  lidar_en: 1 
+  lidar_en: 1
   ros_driver_bug_fix: false
 
 extrin_calib:
-  # 激光雷达到IMU的外参 (从laser_to_imu矩阵提取)
-  # Cave参数:
-  #   extrinsic_T: [0.080, 0.029, 0.030]
-  #   extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+  # LiDAR to IMU extrinsic
+  # Cave: extrinsic_T: [0.080, 0.029, 0.030]
+  # Corridor: extrinsic_R: [0.999954875339377, 0.0, 0.009499857104811, 0.0, 1.0, 0.0, -0.009499857104811, 0.0, 0.999954875339377]
 
-  # Corridor参数:
-  # extrinsic_T: [0.0, 0.0, 0.0]
-  # extrinsic_R: [0.999954875339377, 0.0, 0.009499857104811, 0.0, 1.0, 0.0, -0.009499857104811, 0.0, 0.999954875339377]
-  
-  # UGV1参数:
+  # UGV1
   extrinsic_T: [0.0, 0.0, 0.0]
-  extrinsic_R: [1, 0,  0,
-                0, 1,  0,
-                0, 0,  1]
+  extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
 
-  # 相机到IMU的外参 (从rgb_camera_to_imu矩阵提取)
-  # Cave参数:
-  #   Rcl: [-0.04279531, -0.00237969,  0.99908103,
-  #         -0.99880330, -0.02359508, -0.04283961,
-  #          0.02367534, -0.99971877, -0.00136708]
-  #   Pcl: [0.19499356, 0.04340662,-0.01782382]
-
-  # Corridor参数:
+  # Camera to IMU extrinsic (Corridor)
   Rcl: [-0.01578308, -0.01124397,  0.99981222,
         -0.99975463, -0.01536642, -0.01595499,
          0.01554293, -0.99981871, -0.01099868]
   Pcl: [0.17313616, 0.0476788, -0.01933398]
 
-time_offset: 
+time_offset:
   imu_time_offset: 0.1
   img_time_offset: 0.1
   exposure_time_init: 0.0
 
 preprocess:
   point_filter_num: 1
-  filter_size_surf: 0.1 # 体素滤波大小
-  lidar_type: 2 # Velodyne LiDAR (标准PointCloud2格式)
-  scan_line: 16 # Velodyne扫描线数 (根据实际传感器调整: 16, 32, 64)
-  blind: 0.5
- 
-# 视觉里程计
+  filter_size_surf: 0.1
+  lidar_type: 2  # Velodyne
+  scan_line: 16
+  blind: 0.4
+
+# Visual Odometry
 vio:
   max_iterations: 5
-  outlier_threshold: 1000 # 78 100 156 #100 200 500 700 infinite
-  img_point_cov: 100 # 100 1000 
+  outlier_threshold: 1000
+  img_point_cov: 100
   patch_size: 8
   patch_pyrimid_level: 4
   normal_en: true
@@ -63,51 +46,47 @@ vio:
   inverse_composition_en: false
   exposure_estimate_en: true
   inv_expo_cov: 0.1
-  capacity: 0 # LRU cache capacity for visual feature map (0 = disable LRU cache)
+  capacity: 0  # LRU cache (0 = disable)
 
-# imu参数      
+# IMU
 imu:
   imu_en: true
   imu_int_frame: 50
-  # acc_cov: 0.2 # 0.1
-  # gyr_cov: 0.1
-  # b_acc_cov: 0.001 # 0.1
-  # b_gyr_cov: 0.001 # 0.1
-
-  acc_cov: 0.2 # 0.1
+  acc_cov: 0.2
   gyr_cov: 0.1
-  b_acc_cov: 0.0005 # 0.1
-  b_gyr_cov: 0.0005 # 0.1
+  b_acc_cov: 0.0005
+  b_gyr_cov: 0.0005
 
-# 激光雷达里程计
+# LiDAR-Inertial Odometry
 lio:
   max_iterations: 5
   dept_err: 0.03
   beam_err: 0.05
-  min_eigen_value: 0.0025 # 0.0025
-  voxel_size: 0.5 # 体素底图尺寸
+  min_eigen_value: 0.0025
+  voxel_size: 0.5
   max_layer: 2
   max_points_num: 100
   layer_init_num: [5, 5, 5, 5, 5]
   sigma_num: 3
-  capacity: 0  # LRU缓存容量, 越大占用内存越多 (0 = 禁用LRU缓存)
-  rf_enhance_en: false # 是否启用配准时候的感受野增强 (Range Field enhancement)
-  intensity_fusion_en: true  # 是否启用三维强度概率融合 (几何距离+强度差异)
+  capacity: 0  # LRU cache (0 = disable)
+  rf_enhance_en: false  # Range Field enhancement
+  intensity_fusion_en: true
 
-# Pillar Voxel 参数配置
+# Pillar Voxel Ground Detection
 pillar_voxel:
-  pillar_voxel_en: true # 是否启用pillar体素地图
-  voxel_size: 1  # 体素柱中的体素大小（米）
-  adjacent_check_en: true  # 是否启用邻域检查
-  min_adjacent_num: 8    # 相邻地面体素数量阈值
-  neighbor_search_type: 1  # 邻域搜索类型: 0=8邻域, 1=24邻域
-  ground_height_angle_check_en: true  # 是否启用基于高度角的地面点过滤
-  ground_height_angle_threshold: 0  # 高度角阈值（度），超过此阈值不认为是地面点
-  plane_fitting_ground_en: false # 是否启用基于平面拟合的二次地面判断
-  plane_fitting_distance_threshold: 0.1  # 平面拟合距离阈值（米）
-  skip_type: 0 # 0: 不跳过, 1: 跳过地面之下的点, 2: 跳过地面及地面之下的点
+  pillar_voxel_en: true
+  voxel_size: 1.0
+  adjacent_check_en: true
+  min_adjacent_ground_num: 8
+  min_adjacent_isolated_num: 8
+  neighbor_search_type: 1  # 0=8-neighbor, 1=24-neighbor
+  ground_height_angle_check_en: true
+  ground_height_angle_threshold: 0  # degrees
+  plane_fitting_ground_en: false
+  plane_fitting_distance_threshold: 0.1
+  skip_type: 0  # 0=none, 1=skip below ground, 2=skip ground+below
 
-local_map: 
+local_map:
   map_sliding_en: false
   half_map_size: 1000
   sliding_thresh: 8
@@ -117,11 +96,11 @@ uav:
   gravity_align_en: true
 
 publish:
-  dense_map_en: true
+  dense_map_en: false
   pub_effect_en: true
   pub_plane_en: false
-  pub_body_en: false  # 是否发布body坐标系下的点云
-  pub_scan_num: 1 
+  pub_body_en: false
+  pub_scan_num: 1
   blind_rgb_points: 0.0
 
 evo:
@@ -130,17 +109,15 @@ evo:
 
 lidar_save:
   save_en: false
-  colmap_output_en: false # need to set interval = -1
+  colmap_output_en: false
   filter_size_pcd: 0.15
-  interval: -1
-  # how many LiDAR frames saved in each pcd file;
-  # -1 : all frames will be saved in ONE pcd file, may lead to memory crash when having too much frames.
+  interval: -1  # -1 = save all in one file (memory risk)
 
 external_imu:
-  enable: false # 是否启用外置IMU
-  external_imu_init_frame : 30  # 用于外置IMU初始化的帧数
-  time_offset: 0  # 外置IMU时间偏移(秒)
-  buffer_size: 100000  # external IMU buffer大小
-  external_R : [0, 0, -1, 1, 0, 0, 0, -1, 0]
-  external_T : [0, 0, 0]
-  external_imu_only: false # 是否仅使用外置IMU进行里程计估计
+  enable: false
+  external_imu_init_frame: 30
+  time_offset: 0
+  buffer_size: 100000
+  external_R: [0, 0, -1, 1, 0, 0, 0, -1, 0]
+  external_T: [0, 0, 0]
+  external_imu_only: false

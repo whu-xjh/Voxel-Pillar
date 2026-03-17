@@ -3,7 +3,7 @@
 
 	<arg name="rviz" default="true" />
 
-	<!-- 启动LiDAR话题合并节点 -->
+	<!-- LiDAR topic merger node -->
 	<node pkg="fast_livo" type="livox_multi_lidar" name="livox_multi_lidar" output="screen">
 		<param name="output_topic" value="/livox/multi_lidar" />
 		<param name="input_topic_159" value="/livox/lidar_192_168_1_159" />
@@ -16,13 +16,13 @@
 	<node pkg="fast_livo" type="fastlivo_mapping" name="laserMapping" output="screen">
 		<rosparam file="$(find fast_livo)/config/camera_pinhole.yaml" />
 	</node>
-	
+
 	<group if="$(arg rviz)">
 		<node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find fast_livo)/rviz_cfg/fast_livo2.rviz" />
 	</group>
-	
+
 	<node pkg="image_transport" type="republish" name="republish" args="compressed in:=/left_camera/image raw out:=/left_camera/image" output="screen" respawn="true"/>
 
 launch-prefix="gdb -ex run --args"
 launch-prefix="valgrind --leak-check=full"
-</launch> 	
+</launch>
