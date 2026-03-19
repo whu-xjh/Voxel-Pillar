@@ -4,13 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is **fast_livo** (package name), a high-speed LiDAR-Inertial Odometry system. It supports multi-LiDAR fusion, visual-inertial odometry, and external IMU integration optimized for high-speed scenarios (>5 m/s). The system features 250Hz IMU propagation and efficient voxel-based mapping with LRU caching.
-
-**Recent Updates** (2025-01 to 2026-03):
-- Added pillar voxel ground detection system with configurable adjacency filtering and iterative plane fitting
-- Function renaming: `PerformInitialGroundDetection` → `GroundDetection`, `PerformAdjacentGroundDetection` → `AdjacentCheck`, `RefineGroundDetectionByPlaneFitting` → `PlaneFitting`, `UpdatePointGroundFlags` → `UpdateFlags`, `PublishPillarGroundPoints` → `PublishPillarPoints`
-- All pillar voxel functions are sequential (no parallelization)
-- Ground/isolated points excluded from ICP optimization to improve mapping accuracy
+This is **voxel_pillar** (package name), a modified FAST-LIVO2 system with pillar voxel ground detection. It's a high-speed LiDAR-Inertial Odometry system supporting multi-LiDAR fusion, visual-inertial odometry, and external IMU integration optimized for high-speed scenarios (>5 m/s). The system features 250Hz IMU propagation and efficient voxel-based mapping with LRU caching.
 
 ## Build System
 
@@ -43,7 +37,7 @@ catkin_make -DCMAKE_BUILD_TYPE=Debug
 
 **Executables:**
 - `fastlivo_mapping`: Main mapping node (src/main.cpp)
-- `livox_multi_lidar`: Multi-LiDAR data merger (fuses 3 Livox LiDARs)
+- `merge_lidar`: Multi-LiDAR data merger (fuses 3 Livox LiDARs)
 
 **Libraries:**
 - `laser_mapping`: Core LiDAR-IMU fusion (src/LIVMapper.cpp)
@@ -55,7 +49,7 @@ catkin_make -DCMAKE_BUILD_TYPE=Debug
 
 ### Data Flow
 
-1. **Multi-LiDAR Merger** (`livox_multi_lidar`) → `/livox/multi_lidar`
+1. **Multi-LiDAR Merger** (`merge_lidar`) → `/livox/multi_lidar`
 2. **Preprocessing** (`pre`) filters and voxelizes point clouds
 3. **IMU Processing** (`imu_proc`) propagates at 250Hz, estimates biases, supports external IMU fusion
 4. **LIO/VIO Fusion** (`laser_mapping`) performs state estimation
@@ -71,7 +65,7 @@ catkin_make -DCMAKE_BUILD_TYPE=Debug
 - Position, linear velocity, orientation (Euler angles), velocity covariance
 - Interpolated from odom messages via `findClosestExternalIMUs()` and `interpolateExternalIMU()`
 
-**Configuration** (config/livox_multi_lidar.yaml:111-119):
+**Configuration** (config/merge_lidar.yaml:107-114):
 - `enable`: Enable external IMU fusion
 - `external_imu_init_frame`: Frames for external IMU initialization (default: 30)
 - `external_imu_only`: Use only external IMU (default: false)
@@ -89,34 +83,39 @@ catkin_make -DCMAKE_BUILD_TYPE=Debug
 - Point-to-plane optimization with eigenvalue-based plane fitting
 - Neighbor search with configurable types (8-neighbor vs 24-neighbor)
 
-**Pillar Voxel System** (config/livox_multi_lidar.yaml:69-82):
+**Pillar Voxel System** (config/merge_lidar.yaml:68-79):
 - **Purpose**: Ground detection and isolation point identification using vertical pillar voxels
 - **Key Functions** (all sequential, no parallelization):
-  1. `BuildPillarMap()`: Organize point cloud into pillar voxels (voxel_map.cpp:1389-1436)
-  2. `GroundDetection()`: Initial ground voxel classification (voxel_map.cpp:1438-1453)
-  3. `AdjacentCheck()`: Adjacency-based filtering with `adjacent_check_en` toggle (voxel_map.cpp:1455-1565)
-  4. `PlaneFitting()`: Iterative RANSAC-style plane refinement (voxel_map.cpp:1567-1668)
-  5. `UpdateFlags()`: Update point cloud ground/isolated flags (voxel_map.cpp:1670-1697)
-  6. `PublishPillarPoints()`: Publish ground and isolated points (voxel_map.cpp:1699-1783)
+  1. `CheckHeightAngle()`: Optional height-based angle filtering (voxel_map.cpp:1321)
+  2. `BuildPillarMap()`: Organize point cloud into pillar voxels (voxel_map.cpp:1432)
+  3. `GroundDetection()`: Multi-step ground classification (voxel_map.cpp:1481)
+     - Method-specific processing:
+       - Method 0: No ground detection (only isolated points)
+       - Method 1: Initial detection → Adjacency check → Plane fitting
+       - Method 2: Initial detection → Adjacency check (no plane fitting)
+  4. `DefineSkipPoints()`: Apply skip filter to main point cloud
+  5. `PublishPillarPoints()`: Publish ground and isolated points (voxel_map.cpp:1767)
+  6. `ClearPillarVoxels()`: Memory cleanup (voxel_map.cpp:1865)
 
 **Configuration Parameters**:
-- `pillar_voxel_en`: Enable/disable entire system (default: false)
-- `adjacent_check_en`: Toggle adjacency filtering (default: true)
-- `plane_fitting_ground_en`: Enable iterative plane fitting (default: true)
-- `plane_fitting_iterations`: Number of RANSAC iterations (default: 3)
-- `plane_fitting_iteration_thresholds`: Distance thresholds per iteration [0.2, 0.1, 0.1]
-- `min_adjacent_num`: Minimum adjacent ground voxels required (default: 3)
-- `neighbor_search_type`: 0=8-neighbor, 1=24-neighbor (default: 0)
+- `pillar_voxel_en`: Enable/disable entire system (default: true)
+- `voxel_size`: Pillar voxel resolution (default: 1.0)
+- `min_adjacent_ground_num`: Minimum adjacent ground voxels required (default: 5, set 0 to disable)
+- `min_adjacent_isolated_num`: Minimum adjacent voxels for isolation check (default: 5)
+- `height_angle_check_en`: Enable height-angle pre-filtering (default: true)
+- `ground_height_angle_threshold`: Height-angle threshold in degrees (default: 0)
+- `ground_detection_method`: Ground detection method (0=none, 1=plane fitting, 2=neighborhood, default: 1)
+- `plane_fitting_distance_threshold`: Distance threshold for plane fitting - method 1 only (default: 0.2)
+- `skip_type`: Point filtering mode (0=none, 1=skip below ground, 2=skip ground+below) - method 1 only (default: 1)
 
-**Execution Flow** (LIVMapper.cpp:473-484):
+**Execution Flow** (LIVMapper.cpp:475-480):
 ```cpp
-BuildPillarMap(feats_down_world);
-GroundDetection(_state.pos_end);
-AdjacentCheck();  // Returns seed points for plane fitting
-PlaneFitting(seed_points);
-UpdateFlags(_pv_list);
-PublishPillarPoints(pubGroundCloud, pubIsolatedCloud);
-ClearPillarVoxels();  // Memory cleanup
+PointCloudXYZI::Ptr filtered_cloud = voxelmap_manager->pillar_map_.CheckHeightAngle(feats_down_world, _state.pos_end);
+voxelmap_manager->pillar_map_.BuildPillarMap(filtered_cloud);
+voxelmap_manager->pillar_map_.GroundDetection(_state.pos_end);
+voxelmap_manager->DefineSkipPoints(feats_down_world);
+voxelmap_manager->pillar_map_.PublishPillarPoints(pubGroundCloud, pubIsolatedCloud);
+voxelmap_manager->ClearPillarVoxels();
 ```
 
 **Output Topics**:
@@ -128,35 +127,32 @@ ClearPillarVoxels();  // Memory cleanup
 ### Multi-LiDAR Mapping with External IMU
 ```bash
 # Terminal 1: Launch mapping with multi-LiDAR fusion
-roslaunch fast_livo mapping_livox_multi_lidar.launch
+roslaunch voxel_pillar mapping_merge_lidar.launch
 
 # Terminal 2: Play rosbag data
 rosbag play your_multi_lidar.bag
 ```
 
 ### Available Launch Files
-- `mapping_livox_multi_lidar.launch`: Multi-LiDAR setup with external IMU support
+- `mapping_merge_lidar.launch`: Multi-LiDAR setup with external IMU support
 - `mapping_avia.launch`: Livox Avia LiDAR configuration
 - `mapping_avia_marslvig.launch`: Livox Avia with MARS LVIG visual-inertial dataset
-- `mapping_mid360.launch`: Livox Mid360 configuration
 - `mapping_hesaixt32_hilti22.launch`: Hesai XT32 + Hilti dataset setup
-- `mapping_hap.launch`: HAP dataset configuration
-- `mapping_kitti.launch`: KITTI dataset configuration
 - `mapping_ouster_ntu.launch`: Ouster NTU dataset configuration
 - `mapping_subt_mrs.launch`: SubT-MRS dataset (Velodyne VLP-16)
 
 **RViz Configurations**: Pre-configured visualization files in `rviz_cfg/`:
-- `livox_multi_lidar.rviz`: Multi-LiDAR setup visualization
-- `fast_livo2.rviz`, `fast_livo2_follow_view.rviz`: Standard and follow-view configs
+- `merge_lidar.rviz`: Multi-LiDAR setup visualization
+- `voxel_pillar.rviz`: General voxel pillar visualization
 - `hilti.rviz`, `ntu_viral.rviz`, `M300.rviz`: Dataset-specific visualizations
 
-### Debugging (launch/mapping_livox_multi_lidar.launch:29-30)
+### Debugging (launch/mapping_merge_lidar.launch:29-30)
 Uncomment and add to `<node>` tag:
 - `launch-prefix="gdb -ex run --args"` for GDB debugging
 - `launch-prefix="valgrind --leak-check=full"` for memory leak detection
 
-### Data Topics (livox_multi_lidar.yaml:2-5)
-- **LiDAR**: `/livox/multi_lidar` (merged multi-LiDAR data)
+### Data Topics (merge_lidar.yaml:2-5)
+- **LiDAR**: `/livox/lidar` (default input topic)
 - **IMU**: `/livox/imu_192_168_1_159` (default internal IMU from LiDAR 159)
 - **External IMU**: `/novatel/oem7/odom` (external IMU odometry)
 - **Camera**: `/left_camera/image` (optional, VIO mode when `img_en: 1`)
@@ -167,15 +163,15 @@ Uncomment and add to `<node>` tag:
 ## Configuration
 
 ### Key Configuration Files
-- `livox_multi_lidar.yaml`: Multi-LiDAR with external IMU (primary config)
+- `merge_lidar.yaml`: Multi-LiDAR with external IMU (primary config)
 - `HILTI22.yaml`: Hesai XT32 + Hilti industrial dataset
 - `NTU_VIRAL.yaml`: NTU viral dataset with visual-inertial data
 - `MARS_LVIG.yaml`: MARS LVIG visual-inertial dataset
-- `avia.yaml`, `mid360.yaml`, `kitti.yaml`, `hap.yaml`: Sensor-specific configs
+- `avia.yaml`: Livox Avia sensor-specific config
 - `camera_pinhole.yaml`: Pinhole camera intrinsics for VIO
 - `camera_*.yaml`: Dataset-specific camera configurations (fisheye, MARS_LVIG, NTU_VIRAL, SubT_MRS)
 
-### Important Parameters (livox_multi_lidar.yaml)
+### Important Parameters (merge_lidar.yaml)
 
 **Common** (lines 1-8):
 - `img_en`: Enable VIO mode (0 = LIO only, 1 = VIO enabled)
@@ -192,38 +188,41 @@ Uncomment and add to `<node>` tag:
 - `capacity`: LRU cache for visual feature map (0 = disable)
 - `exposure_estimate_en`: Enable exposure time estimation
 
-**Publish** (lines 90-96):
+**Publish** (lines 90-95):
 - `dense_map_en`: Publish dense map
 - `pub_effect_en`: Publish effective points for visualization
 - `pub_scan_num`: Number of scans to publish
 
-**Point Cloud Saving** (lines 102-108):
+**Point Cloud Saving** (lines 102-105):
 - `save_en`: Enable PCD file saving
 - `filter_size_pcd`: Voxel filter size for saved PCD
-- `interval`: Frames per PCD file (-1 = all in one file, may cause memory issues)
+- `interval`: Frames per PCD file (10 = save every 10 frames)
 
-**Evaluation** (lines 98-99):
+**Evaluation** (lines 97-99):
 - `seq_name`: Sequence name for trajectory evaluation output
 
-**External IMU** (lines 111-119):
+**External IMU** (lines 107-114):
 - `external_imu/enable`: Enable external IMU fusion
 - `external_imu/external_imu_init_frame`: Initialization frames (default: 30)
 - `external_imu/external_imu_only`: Use only external IMU (default: false)
 - `external_imu/external_R`, `external_T`: Extrinsic calibration
 
-**Voxel Mapping** (lines 54-66):
+**Voxel Mapping** (lines 54-65):
 - `lio/voxel_size`: Voxel resolution (default: 1.0 meter)
 - `lio/capacity`: LRU cache capacity (default: 0 = disabled)
 - `lio/intensity_fusion_en`: Enable intensity-based fusion
 
-**Pillar Voxel System** (lines 69-82):
-- `pillar_voxel/pillar_voxel_en`: Enable pillar voxel ground detection (default: false)
-- `pillar_voxel/adjacent_check_en`: Enable adjacency-based filtering (default: true)
-- `pillar_voxel/min_adjacent_num`: Minimum adjacent ground voxels (default: 3)
+**Pillar Voxel System** (lines 68-78):
+- `pillar_voxel/pillar_voxel_en`: Enable pillar voxel ground detection (default: true)
+- `pillar_voxel/voxel_size`: Pillar voxel resolution (default: 1.0)
+- `pillar_voxel/min_adjacent_ground_num`: Minimum adjacent ground voxels (default: 5)
+- `pillar_voxel/min_adjacent_isolated_num`: Minimum adjacent voxels for isolation (default: 5)
+- `pillar_voxel/neighbor_search_type`: 0=8-neighbor, 1=24-neighbor (default: 0)
+- `pillar_voxel/height_angle_check_en`: Enable height-angle filtering (default: true)
+- `pillar_voxel/ground_height_angle_threshold`: Height-angle threshold in degrees (default: 0)
 - `pillar_voxel/plane_fitting_ground_en`: Enable iterative plane fitting (default: true)
-- `pillar_voxel/plane_fitting_iterations`: RANSAC iterations (default: 3)
-- `pillar_voxel/plane_fitting_iteration_thresholds`: Per-iteration distance thresholds (default: [0.2, 0.1, 0.1])
-- `pillar_voxel/plane_fitting_distance_threshold`: Final classification threshold (default: 0.5)
+- `pillar_voxel/plane_fitting_distance_threshold`: Plane fitting distance threshold (default: 0.2)
+- `pillar_voxel/skip_type`: 0=none, 1=skip below ground, 2=skip ground+below (default: 1)
 
 **Multi-LiDAR Merger** (launch file lines 9-11):
 - Input topics: `/livox/lidar_192_168_1_159`, `_160`, `_161`
@@ -345,7 +344,7 @@ The `vk::camera_loader::loadFromRosNs()` uses `getParam<double>()` which expects
 
 **Fix**: Run `rosbag reindex your_file.bag`
 
-
+## Data Processing and Evaluation
 
 **Data Processing:**
 - `Log/plot.py`: Plot trajectory, IMU data, and state estimation results (requires `mat_pre.txt`, `mat_out.txt`, `imu.txt`)
@@ -400,27 +399,48 @@ The `vk::camera_loader::loadFromRosNs()` uses `getParam<double>()` which expects
 **Memory Management:**
 - Efficient voxel octree with LRU caching
 - VIO feature map LRU cache (`vio/capacity`: 0 = disable)
-- Pillar voxel cleanup: `ClearPillarVoxels()` called after each frame (LIVMapper.cpp:482)
+- Pillar voxel cleanup: `ClearPillarVoxels()` called after each frame (LIVMapper.cpp:480)
 - LAStools integration for point cloud processing (optional)
 - Architecture-specific compile flags for optimal performance
 
 **Pillar Voxel Ground Detection Pipeline:**
 The pillar voxel system operates independently of the main voxel map:
 1. **Input**: Downsampled world point cloud (`feats_down_world`)
-2. **Pillar Organization**: Points grouped by (x,y) coordinates, vertical voxels by z
-3. **Initial Classification**: Bottom voxel marked as ground if:
-   - Only one voxel in pillar → `is_isolated_voxel_ = true`
-   - Height angle check passes (if enabled)
-4. **Adjacency Filtering**: Ground voxels without enough adjacent ground neighbors removed
-5. **Plane Fitting**: Iterative RANSAC-style refinement:
-   - Compute SVD-based plane from seed points
-   - Filter points by distance threshold
-   - Repeat for configured iterations
+2. **Height-Angle Filter** (optional): `CheckHeightAngle()` filters points by height-angle threshold
+3. **Pillar Organization**: Points grouped by (x,y) coordinates, vertical voxels by z
+4. **Ground Detection** (all steps in `GroundDetection()`):
+   - Method-specific processing (controlled by `ground_detection_method`):
+     - **Method 0 (None)**: No ground detection, only isolated points are marked
+     - **Method 1 (Plane Fitting)**: Initial classification → Adjacency check → Plane fitting → Re-classify by plane distance
+     - **Method 2 (neighborhood)**: Initial classification → Adjacency check (no plane fitting)
+5. **Skip Point Definition**: `DefineSkipPoints()` marks points to exclude from ICP
+   - Method 0: Skips isolated points only
+   - Method 1: Skips isolated points + points based on plane distance (controlled by `skip_type`)
+   - Method 2: Skips isolated points + ground points
 6. **Point Flag Update**: All points marked with `is_ground` or `is_isolated`
 7. **Output**: Separate point clouds published for ground and isolated points
 8. **Cleanup**: All pillar voxels deleted after each frame (no persistence)
 
+**Ground Detection Methods:**
+- **Method 0 (None)**: No ground detection performed
+  - Only isolated points are identified and skipped
+  - All points participate in ICP optimization (except isolated)
+  - Use when you don't want any ground filtering
+- **Method 1 (Plane Fitting)**: Robust for structured environments with clear ground planes
+  - Fits a global plane using SVD on seed points from adjacency check
+  - Re-classifies voxels based on distance to fitted plane
+  - Better for flat terrain and structured scenes
+  - `skip_type` controls filtering: 0=none, 1=skip below ground, 2=skip ground+below
+- **Method 2 (neighborhood)**: Simpler, works better in unstructured environments
+  - Uses only local adjacency information
+  - No global plane assumption
+  - Better for rough terrain, stairs, and complex surfaces
+  - Always skips both isolated and ground points
+
 **Important Implementation Notes:**
 - Pillar voxel functions are **sequential only** - no parallelization (do not add OpenMP)
-- Ground/isolated points **excluded** from ICP optimization (BuildResidualListOMP:866-870)
-- `pv.is_ground` and `pv.is_isolated` flags must be reset in `BuildPillarMap` each frame
+- Ground/isolated points **excluded** from ICP optimization via `DefineSkipPoints()`
+- `is_ground` and `is_isolated` flags reset to `false` in `BuildPillarMap()` each frame
+- `skip_type` parameter only affects Method 1 (plane fitting)
+- Method 2 always skips both isolated and ground points
+- Method 0 only skips isolated points

@@ -75,10 +75,9 @@ void loadPillarVoxelConfig(ros::NodeHandle &nh, PillarVoxelConfig &config)
   nh.param<double>("pillar_voxel/voxel_size", config.voxel_size_, 1.0);
   nh.param<int>("pillar_voxel/min_adjacent_ground_num", config.min_adjacent_ground_num_, 3);
   nh.param<int>("pillar_voxel/min_adjacent_isolated_num", config.min_adjacent_isolated_num_, 3);
-  nh.param<int>("pillar_voxel/neighbor_search_type", config.neighbor_search_type_, 0);
-  nh.param<bool>("pillar_voxel/ground_height_angle_check_en", config.ground_height_angle_check_en_, false);
+  nh.param<bool>("pillar_voxel/height_angle_check_en", config.height_angle_check_en_, false);
   nh.param<double>("pillar_voxel/ground_height_angle_threshold", config.ground_height_angle_threshold_, 30.0);
-  nh.param<bool>("pillar_voxel/plane_fitting_ground_en", config.plane_fitting_ground_en_, false);
+  nh.param<int>("pillar_voxel/ground_detection_method", config.ground_detection_method_, 0);
   nh.param<double>("pillar_voxel/plane_fitting_distance_threshold", config.plane_fitting_distance_threshold_, 0.1);
   nh.param<int>("pillar_voxel/skip_type", config.skip_type_, 0);
 }
@@ -1208,38 +1207,20 @@ void PillarVoxelMap::initHorizontalNeighborOffsets()
 {
   neighbor_offsets_.clear();
 
-  if (config_.neighbor_search_type_ == 0) {
-    const std::vector<std::pair<int, int>> all_offsets = {
-      {-1, -1}, {-1, 0}, {-1, 1},
-      {0, -1},           {0, 1},
-      {1, -1},  {1, 0},  {1, 1}
-    };
+  // Fixed 8-neighbor pattern for ground detection
+  const std::vector<std::pair<int, int>> all_offsets = {
+    {-1, -1}, {-1, 0}, {-1, 1},
+    {0, -1},           {0, 1},
+    {1, -1},  {1, 0},  {1, 1}
+  };
 
-    neighbor_offsets_.reserve(8);
-    for (const auto& offset : all_offsets) {
-      VOXEL_LOCATION voxel_offset;
-      voxel_offset.x = offset.first;
-      voxel_offset.y = offset.second;
-      voxel_offset.z = 0;
-      neighbor_offsets_.push_back(voxel_offset);
-    }
-  } else if (config_.neighbor_search_type_ == 1) {
-    const std::vector<std::pair<int, int>> all_offsets = {
-      {-2, -2}, {-2, -1}, {-2, 0}, {-2, 1}, {-2, 2},
-      {-1, -2}, {-1, -1}, {-1, 0}, {-1, 1}, {-1, 2},
-      {0, -2},  {0, -1},           {0, 1},  {0, 2},
-      {1, -2},  {1, -1},  {1, 0},  {1, 1},  {1, 2},
-      {2, -2},  {2, -1},  {2, 0},  {2, 1},  {2, 2}
-    };
-
-    neighbor_offsets_.reserve(24);
-    for (const auto& offset : all_offsets) {
-      VOXEL_LOCATION voxel_offset;
-      voxel_offset.x = offset.first;
-      voxel_offset.y = offset.second;
-      voxel_offset.z = 0;
-      neighbor_offsets_.push_back(voxel_offset);
-    }
+  neighbor_offsets_.reserve(8);
+  for (const auto& offset : all_offsets) {
+    VOXEL_LOCATION voxel_offset;
+    voxel_offset.x = offset.first;
+    voxel_offset.y = offset.second;
+    voxel_offset.z = 0;
+    neighbor_offsets_.push_back(voxel_offset);
   }
 }
 
@@ -1299,27 +1280,25 @@ void PillarVoxelMap::UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_key
     }
   }
 
-  // Perform horizontal neighborhood review for candidate isolated voxels: if sufficient neighbors exist at similar height, not considered isolated
-  for (const auto& voxel_pair : pillar_voxels) {
-    VoxelOctoTree* voxel = voxel_pair.second;
-    if (!voxel->is_isolated_voxel_) {
-      continue;
-    }
+  // Perform horizontal neighborhood review for the TOP isolated voxel
+  if (!pillar_voxels.empty()) {
+    VoxelOctoTree* top_voxel = pillar_voxels.rbegin()->second;
+    if (top_voxel->is_isolated_voxel_) {
+      VOXEL_LOCATION voxel_loc;
+      voxel_loc.x = static_cast<int64_t>(std::floor(top_voxel->voxel_center_[0] / voxel_size_));
+      voxel_loc.y = static_cast<int64_t>(std::floor(top_voxel->voxel_center_[1] / voxel_size_));
+      voxel_loc.z = pillar_voxels.rbegin()->first;
 
-    VOXEL_LOCATION voxel_loc;
-    voxel_loc.x = static_cast<int64_t>(std::floor(voxel->voxel_center_[0] / voxel_size_));
-    voxel_loc.y = static_cast<int64_t>(std::floor(voxel->voxel_center_[1] / voxel_size_));
-    voxel_loc.z = voxel_pair.first;
-
-    if (hasAdjacentTopVoxel(voxel_loc)) {
-      setVoxelIsolatedFlag(voxel, false);
+      if (hasAdjacentTopVoxel(voxel_loc)) {
+        setVoxelIsolatedFlag(top_voxel, false);
+      }
     }
   }
 }
 
 PointCloudXYZI::Ptr PillarVoxelMap::CheckHeightAngle(const PointCloudXYZI::Ptr &input_cloud, const Eigen::Vector3d& current_pos)
 {
-  if (!config_.ground_height_angle_check_en_) {
+  if (!config_.height_angle_check_en_) {
     return input_cloud;
   }
 
@@ -1402,7 +1381,7 @@ bool PillarVoxelMap::hasAdjacentTopVoxel(const VOXEL_LOCATION &current_pos)
     VOXEL_LOCATION adjacent_pos = {
       current_pos.x + voxel_offset.x,
       current_pos.y + voxel_offset.y,
-      current_pos.z
+      current_pos.z + voxel_offset.z
     };
 
     PILLAR_LOCATION adjacent_pillar = GetPillarLocation(adjacent_pos);
@@ -1414,7 +1393,7 @@ bool PillarVoxelMap::hasAdjacentTopVoxel(const VOXEL_LOCATION &current_pos)
       if (last_voxel) {
         int64_t height_diff = std::abs(current_elevation - pillar_iter->second.rbegin()->first);
 
-        if (height_diff <= voxel_size_) {
+        if (height_diff <= last_voxel->quater_length_) {
           adjacent_count++;
         }
 
@@ -1481,6 +1460,21 @@ void PillarVoxelMap::GroundDetection(const Eigen::Vector3d& current_pos)
 {
   plane_fitted_ = false;
 
+  // Clear all ground flags first
+  for (const auto& pillar_key : current_pillars_)
+  {
+    auto pillar_iter = pillars_.find(pillar_key);
+    if (pillar_iter != pillars_.end() && !pillar_iter->second.empty())
+    {
+      for (auto& voxel_pair : pillar_iter->second)
+      {
+        voxel_pair.second->is_ground_voxel_ = false;
+      }
+    }
+  }
+
+  // Method 1: Plane fitting
+  // Method 2: neighborhood
   // Step 1: Initial ground detection
   for (const auto& pillar_key : current_pillars_)
   {
@@ -1491,7 +1485,7 @@ void PillarVoxelMap::GroundDetection(const Eigen::Vector3d& current_pos)
     }
   }
 
-  // Step 2: Adjacency check (only if min_adjacent_ground_num > 0)
+  // Step 2: Adjacency check
   if (config_.min_adjacent_ground_num_ > 0)
   {
     for (const auto& pillar_key : current_pillars_)
@@ -1518,58 +1512,11 @@ void PillarVoxelMap::GroundDetection(const Eigen::Vector3d& current_pos)
     }
   }
 
-  // Step 3: Collect seed points and fit plane
-  std::vector<Eigen::Vector3d> seed_points;
-  for (const auto& pillar_key : current_pillars_)
+  // Step 3: Method-specific processing
+  if (config_.ground_detection_method_ == 1)
   {
-    auto pillar_iter = pillars_.find(pillar_key);
-    if (pillar_iter == pillars_.end() || pillar_iter->second.empty())
-      continue;
-
-    VoxelOctoTree* bottom_voxel = pillar_iter->second.begin()->second;
-
-    if (bottom_voxel->is_ground_voxel_)
-    {
-      for (const auto& pv : bottom_voxel->temp_points_)
-      {
-        seed_points.push_back(pv.point_w);
-      }
-    }
-  }
-
-  // Plane fitting
-  if (config_.plane_fitting_ground_en_ && !seed_points.empty())
-  {
-    // Compute plane parameters
-    Eigen::Vector3d center = Eigen::Vector3d::Zero();
-    for (const auto& pt : seed_points)
-    {
-      center += pt;
-    }
-    center /= static_cast<double>(seed_points.size());
-
-    Eigen::Matrix3d covariance = Eigen::Matrix3d::Zero();
-    for (const auto& pt : seed_points)
-    {
-      const Eigen::Vector3d diff = pt - center;
-      covariance += diff * diff.transpose();
-    }
-    covariance /= static_cast<double>(seed_points.size());
-
-    Eigen::JacobiSVD<Eigen::Matrix3d> svd(covariance, Eigen::ComputeFullU | Eigen::ComputeFullV);
-    Eigen::Vector3d plane_normal = svd.matrixU().col(2);
-
-    if (plane_normal(2) < 0) plane_normal = -plane_normal;
-
-    double plane_d = -plane_normal.dot(center);
-
-    // Save plane parameters for subsequent use
-    fitted_plane_normal_ = plane_normal;
-    fitted_plane_d_ = plane_d;
-    plane_fitted_ = true;
-
-    // Update voxel ground flags
-    const double dist_threshold = config_.plane_fitting_distance_threshold_;
+    // Method 1: Plane fitting
+    std::vector<Eigen::Vector3d> seed_points;
     for (const auto& pillar_key : current_pillars_)
     {
       auto pillar_iter = pillars_.find(pillar_key);
@@ -1578,24 +1525,95 @@ void PillarVoxelMap::GroundDetection(const Eigen::Vector3d& current_pos)
 
       VoxelOctoTree* bottom_voxel = pillar_iter->second.begin()->second;
 
-      bool is_near_plane = false;
-
-      for (const auto& pv : bottom_voxel->temp_points_)
+      if (bottom_voxel->is_ground_voxel_)
       {
-        const double distance = plane_normal.dot(pv.point_w) + plane_d;
-
-        if (std::abs(distance) < dist_threshold)
+        for (const auto& pv : bottom_voxel->temp_points_)
         {
-          is_near_plane = true;
-          break;
+          seed_points.push_back(pv.point_w);
         }
       }
-
-      bottom_voxel->is_ground_voxel_ = is_near_plane;
     }
 
-    std::cout << "[GroundDetection] Fitted plane: normal=[" << plane_normal.transpose()
-              << "], d=" << plane_d << ", using " << seed_points.size() << " seed points" << std::endl;
+    // Plane fitting
+    if (!seed_points.empty())
+    {
+      // Compute plane parameters
+      Eigen::Vector3d center = Eigen::Vector3d::Zero();
+      for (const auto& pt : seed_points)
+      {
+        center += pt;
+      }
+      center /= static_cast<double>(seed_points.size());
+
+      Eigen::Matrix3d covariance = Eigen::Matrix3d::Zero();
+      for (const auto& pt : seed_points)
+      {
+        const Eigen::Vector3d diff = pt - center;
+        covariance += diff * diff.transpose();
+      }
+      covariance /= static_cast<double>(seed_points.size());
+
+      Eigen::JacobiSVD<Eigen::Matrix3d> svd(covariance, Eigen::ComputeFullU | Eigen::ComputeFullV);
+      Eigen::Vector3d plane_normal = svd.matrixU().col(2);
+
+      if (plane_normal(2) < 0) plane_normal = -plane_normal;
+
+      double plane_d = -plane_normal.dot(center);
+
+      // Save plane parameters for subsequent use
+      fitted_plane_normal_ = plane_normal;
+      fitted_plane_d_ = plane_d;
+      plane_fitted_ = true;
+
+      // Update voxel ground flags based on plane distance
+      const double dist_threshold = config_.plane_fitting_distance_threshold_;
+      for (const auto& pillar_key : current_pillars_)
+      {
+        auto pillar_iter = pillars_.find(pillar_key);
+        if (pillar_iter == pillars_.end() || pillar_iter->second.empty())
+          continue;
+
+        VoxelOctoTree* bottom_voxel = pillar_iter->second.begin()->second;
+
+        bool is_near_plane = false;
+
+        for (const auto& pv : bottom_voxel->temp_points_)
+        {
+          const double distance = plane_normal.dot(pv.point_w) + plane_d;
+
+          if (std::abs(distance) < dist_threshold)
+          {
+            is_near_plane = true;
+            break;
+          }
+        }
+
+        bottom_voxel->is_ground_voxel_ = is_near_plane;
+      }
+
+      std::cout << "[GroundDetection] Method 1 (Plane Fitting): normal=[" << plane_normal.transpose()
+                << "], d=" << plane_d << ", using " << seed_points.size() << " seed points" << std::endl;
+    }
+  }
+  else if (config_.ground_detection_method_ == 2)
+  {
+    // Method 2: neighborhood (use adjacency check result directly)
+    int ground_voxel_count = 0;
+    for (const auto& pillar_key : current_pillars_)
+    {
+      auto pillar_iter = pillars_.find(pillar_key);
+      if (pillar_iter == pillars_.end() || pillar_iter->second.empty())
+        continue;
+
+      VoxelOctoTree* bottom_voxel = pillar_iter->second.begin()->second;
+      if (bottom_voxel->is_ground_voxel_)
+      {
+        ground_voxel_count++;
+      }
+    }
+
+    std::cout << "[GroundDetection] Method 2 (neighborhood): " << ground_voxel_count
+              << " ground voxels detected via adjacency check" << std::endl;
   }
 }
 
@@ -1611,7 +1629,7 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
 
   const double inv_voxel_size = 1.0 / pillar_map_.voxel_size_;
 
-  // First pass: mark isolated voxels
+  // First pass: mark isolated voxels (common to all methods)
   int isolated_count = 0;
   for (size_t i = 0; i < point_num; ++i)
   {
@@ -1639,24 +1657,75 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
     }
   }
 
-  // If plane not fitted, keep only isolated voxel marks
-  if (!pillar_map_.plane_fitted_)
+  // Method-specific processing
+  if (pillar_map_.config_.ground_detection_method_ == 0)
   {
-    std::cout << "[DefineSkipPoints] Isolated: " << isolated_count
+    // Method 0: No operation - only skip isolated points
+    std::cout << "[DefineSkipPoints] Method 0 (None): Isolated: " << isolated_count
               << "/" << point_num << " ("
               << std::fixed << std::setprecision(1)
               << (100.0 * isolated_count / point_num) << "%)" << std::endl;
     return;
   }
+  else if (pillar_map_.config_.ground_detection_method_ == 2)
+  {
+    // Method 2: neighborhood - skip isolated + ground points
+    int ground_count = 0;
+    int final_skip_count = isolated_count;
 
-  // Second pass: apply plane-based filtering (combined with isolated voxel check)
+    for (size_t i = 0; i < point_num; ++i)
+    {
+      const PointType &point_world = feats_down_world->points[i];
+
+      VOXEL_LOCATION voxel_location;
+      voxel_location.x = static_cast<int64_t>(std::floor(point_world.x * inv_voxel_size));
+      voxel_location.y = static_cast<int64_t>(std::floor(point_world.y * inv_voxel_size));
+      voxel_location.z = static_cast<int64_t>(std::floor(point_world.z * inv_voxel_size));
+
+      PILLAR_LOCATION pillar_loc(voxel_location.x, voxel_location.y);
+
+      auto pillar_iter = pillar_map_.pillars_.find(pillar_loc);
+      if (pillar_iter == pillar_map_.pillars_.end())
+        continue;
+
+      auto voxel_iter = pillar_iter->second.find(voxel_location.z);
+      if (voxel_iter == pillar_iter->second.end())
+        continue;
+
+      VoxelOctoTree* voxel = voxel_iter->second;
+      if (voxel->is_ground_voxel_)
+      {
+        ground_count++;
+        skip_list[i] = true;
+        final_skip_count++;
+      }
+    }
+
+    std::cout << "[DefineSkipPoints] Method 2 (Neighborhood): Isolated: " << isolated_count
+              << ", Ground: " << ground_count
+              << ", Skip_total: " << final_skip_count
+              << "/" << point_num << " ("
+              << std::fixed << std::setprecision(1)
+              << (100.0 * final_skip_count / point_num) << "%)" << std::endl;
+    return;
+  }
+
+  // Method 1: Plane fitting - apply plane-based filtering (combined with isolated voxel check)
+  if (!pillar_map_.plane_fitted_)
+  {
+    // Plane was not fitted, should not happen for method 1
+    std::cout << "[DefineSkipPoints] Method 1 (Plane Fitting) but no plane fitted! Isolated: " << isolated_count
+              << "/" << point_num << std::endl;
+    return;
+  }
+
   const Eigen::Vector3d& plane_normal = pillar_map_.fitted_plane_normal_;
   const double plane_d = pillar_map_.fitted_plane_d_;
   const double distance_threshold = pillar_map_.config_.plane_fitting_distance_threshold_;
 
   int ground_near_count = 0;  // points near ground (within threshold)
   int ground_below_count = 0;  // points below ground (distance < -threshold)
-  int final_skip_count = 0;    // total points to skip
+  int final_skip_count = isolated_count;    // total points to skip
 
   for (size_t i = 0; i < point_num; ++i)
   {
@@ -1693,7 +1762,7 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
     }
   }
 
-  std::cout << "[DefineSkipPoints] Isolated: " << isolated_count
+  std::cout << "[DefineSkipPoints] Method 1 (Plane Fitting): Isolated: " << isolated_count
             << ", Ground_near: " << ground_near_count
             << ", Below_ground: " << ground_below_count
             << ", Skip_total: " << final_skip_count

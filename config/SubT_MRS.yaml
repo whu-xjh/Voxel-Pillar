@@ -65,7 +65,7 @@ lio:
   min_eigen_value: 0.0025
   voxel_size: 0.5
   max_layer: 2
-  max_points_num: 100
+  max_points_num: 50
   layer_init_num: [5, 5, 5, 5, 5]
   sigma_num: 3
   capacity: 0  # LRU cache (0 = disable)
@@ -75,14 +75,13 @@ lio:
 pillar_voxel:
   pillar_voxel_en: true
   voxel_size: 1.0
-  min_adjacent_ground_num: 3
-  min_adjacent_isolated_num: 8
-  neighbor_search_type: 1  # 0=8-neighbor, 1=24-neighbor
-  ground_height_angle_check_en: true
+  min_adjacent_ground_num: 5
+  min_adjacent_isolated_num: 2
+  height_angle_check_en: true
   ground_height_angle_threshold: 0  # degrees
-  plane_fitting_ground_en: false
-  plane_fitting_distance_threshold: 0.1
-  skip_type: 0  # 0=none, 1=skip below ground, 2=skip ground+below
+  ground_detection_method: 0  # 0=none, 1=plane fitting, 2=neighborhood
+  plane_fitting_distance_threshold: 0.1  # for method 1 (plane fitting)
+  skip_type: 0  # 0=none, 1=skip below ground, 2=skip ground+below (for method 1)
 
 local_map:
   map_sliding_en: false
