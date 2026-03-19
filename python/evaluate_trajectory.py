@@ -222,9 +222,8 @@ def plot_trajectory_alignment(traj_gt, traj_est, save_path=None):
     if save_path:
         plt.savefig(save_path, dpi=150, bbox_inches='tight')
         print(f"Plot saved to {save_path}")
-    else:
-        plt.show()
 
+    plt.show()
     plt.close()
 
 
@@ -347,13 +346,16 @@ def main():
     parser.add_argument("--visualize", action="store_true",
                        help="Show visualization plots")
     parser.add_argument("--save-plot", type=str, default=None,
-                       help="Path to save visualization plot")
-    parser.add_argument("--output", type=str, default="evaluation_results.csv",
-                       help="Output CSV file path")
+                       help="Path to save visualization plot (default: script_dir/{sequence}_trajectory.png)")
 
     args = parser.parse_args()
 
     t_B_prism = np.array(args.t_b_prism)
+
+    # Default save path: same directory as this script
+    if args.save_plot is None:
+        sequence_name = os.path.splitext(os.path.basename(args.pred))[0]
+        args.save_plot = os.path.join(os.path.dirname(__file__), f"{sequence_name}_trajectory.png")
 
     result = evaluate_txt_trajectory(
         args.pred,
@@ -369,9 +371,6 @@ def main():
     result["pred_path"] = args.pred
     result["gt_path"] = args.gt
 
-    results_df = pd.DataFrame([result])
-    results_df.to_csv(args.output, index=False)
-    print(f"\nResults saved to {args.output}")
     print("\n=== Evaluation Results ===")
     print(f"Sequence: {result['sequence']}")
     print(f"ATE (RMSE): {result['ate']:.4f} m")
@@ -392,18 +391,19 @@ if __name__ == "__main__":
         t_B_prism = np.array([0, 0, 0])
 
         if os.path.exists(pred_path) and os.path.exists(gt_path):
+            # Generate save path (same directory as this script)
+            save_plot_path = os.path.join(os.path.dirname(__file__), "comparison.png")
+
             result = evaluate_txt_trajectory(
                 pred_path, gt_path, t_B_prism,
                 visualize=True,
+                plot_save_path=save_plot_path,
                 align_fraction=1
             )
             result["sequence"] = os.path.splitext(os.path.basename(pred_path))[0]
             result["pred_path"] = pred_path
             result["gt_path"] = gt_path
 
-            results_df = pd.DataFrame([result])
-            results_df.to_csv("evaluation_results.csv", index=False)
-            print(f"\nResults saved to evaluation_results.csv")
             print("\n=== Evaluation Results ===")
             print(f"Sequence: {result['sequence']}")
             print(f"ATE (RMSE): {result['ate']:.4f} m")

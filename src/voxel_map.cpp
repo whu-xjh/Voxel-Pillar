@@ -1354,7 +1354,7 @@ bool PillarVoxelMap::hasAdjacentGroundVoxel(VoxelOctoTree *current_octo, const V
       if (first_voxel && first_voxel->is_ground_voxel_) {
         int64_t height_diff = std::abs(current_elevation - pillar_iter->second.begin()->first);
 
-        if (height_diff <= first_voxel->quater_length_) {
+        if (height_diff  <= 0) {
           adjacent_ground_count++;
         }
 
@@ -1393,7 +1393,7 @@ bool PillarVoxelMap::hasAdjacentTopVoxel(const VOXEL_LOCATION &current_pos)
       if (last_voxel) {
         int64_t height_diff = std::abs(current_elevation - pillar_iter->second.rbegin()->first);
 
-        if (height_diff <= last_voxel->quater_length_) {
+        if (height_diff  <= 1) {
           adjacent_count++;
         }
 

@@ -99,7 +99,7 @@ def _set_axes_equal_3d(ax):
         pass
 
 
-def plot_trajectory_alignment(traj_gt, traj_est):
+def plot_trajectory_alignment(traj_gt, traj_est, save_path=None):
     fig = plt.figure(figsize=(18, 6))
 
     # 3D view
@@ -153,6 +153,9 @@ def plot_trajectory_alignment(traj_gt, traj_est):
     ax_xz.set_aspect("equal", adjustable="box")
 
     plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"Plot saved to {save_path}")
     plt.show()
 
 
@@ -162,6 +165,7 @@ def evaluate_txt_trajectory(
     t_B_prism=None,
     min_completeness=90.0,
     visualize=False,
+    save_plot_path=None,
     *,
     align_fraction=1.0,
 ):
@@ -208,7 +212,7 @@ def evaluate_txt_trajectory(
         ate = float("inf")
 
     if visualize:
-        plot_trajectory_alignment(traj_gt_interp, traj_est)
+        plot_trajectory_alignment(traj_gt_interp, traj_est, save_path=save_plot_path)
 
     results = {
         "ate": ate,
@@ -226,13 +230,15 @@ if __name__ == "__main__":
     gt_path = "/home/whuxjh/data/SubT_MRS/ground_truth/Laurel_Cavern/ground_truth_path.csv"
     t_B_prism = np.array([0, 0, 0])
 
+    # Generate save path (same directory as this script)
+    save_plot_path = os.path.join(os.path.dirname(__file__), "comparison.png")
+
     # Example: only use first 50% of common data to estimate alignment
-    result = evaluate_txt_trajectory(pred_path, gt_path, t_B_prism, visualize=True, align_fraction=0.5)
-    result["sequence"] = os.path.splitext(os.path.basename(pred_path))[0]
+    result = evaluate_txt_trajectory(pred_path, gt_path, t_B_prism, visualize=True, save_plot_path=save_plot_path, align_fraction=0.5)
+    result["sequence"] = sequence_name
     result["pred_path"] = pred_path
     result["gt_path"] = gt_path
 
-    results_df = pd.DataFrame([result])
-    results_df.to_csv("evaluation_results.csv", index=False)
-    print(f"Results saved to evaluation_results.csv")
-    print(results_df[["sequence", "ate", "completeness"]])
+    print(f"ATE: {result['ate']:.4f} m")
+    print(f"Completeness: {result['completeness']}%")
+    print(f"Num poses: {result['num_poses']}")
