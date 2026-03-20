@@ -75,8 +75,8 @@ lio:
 pillar_voxel:
   pillar_voxel_en: true
   voxel_size: 0.5
-  min_adjacent_ground_num: 3
-  min_adjacent_isolated_num: 2
+  min_adjacent_ground_num: 5
+  min_adjacent_isolated_num: 1
   height_angle_check_en: true
   ground_height_angle_threshold: 0  # degrees
   ground_detection_method: 2  # 0=none, 1=plane fitting, 2=neighborhood
@@ -101,7 +101,7 @@ publish:
   blind_rgb_points: 0.0
 
 evo:
-  seq_name: "Laurel_Caverns_enhanced_pillar"
+  seq_name: "laurel_cavern"
   pose_output_en: true
 
 lidar_save:

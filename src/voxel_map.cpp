@@ -1306,13 +1306,16 @@ PointCloudXYZI::Ptr PillarVoxelMap::CheckHeightAngle(const PointCloudXYZI::Ptr &
   filtered_cloud->points.reserve(input_cloud->points.size());
 
   for (const auto& point : input_cloud->points) {
-    double point_height = point.z;
-    double horizontal_distance = sqrt(point.x * point.x + point.y * point.y);
+    // Compute relative position to current sensor position
+    double dx = point.x - current_pos(0);
+    double dy = point.y - current_pos(1);
+    double dz = point.z - current_pos(2);
 
-    double height_diff = point_height - current_pos(2);
+    double horizontal_distance = sqrt(dx * dx + dy * dy);
+
     double height_angle = 0.0;
     if (horizontal_distance > 1e-9) {
-      height_angle = atan(height_diff / horizontal_distance) * 180.0 / M_PI;
+      height_angle = atan2(dz, horizontal_distance) * 180.0 / M_PI;
     }
 
     if (height_angle <= config_.ground_height_angle_threshold_) {
@@ -1392,7 +1395,7 @@ bool PillarVoxelMap::hasAdjacentTopVoxel(const VOXEL_LOCATION &current_pos)
 
       if (last_voxel) {
         int64_t height_diff = std::abs(current_elevation - pillar_iter->second.rbegin()->first);
-
+  
         if (height_diff  <= 1) {
           adjacent_count++;
         }

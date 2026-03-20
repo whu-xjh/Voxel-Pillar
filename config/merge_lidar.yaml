@@ -1,6 +1,6 @@
 common:
   img_topic: "/left_camera/image"
-  lid_topic: "/livox/lidar"
+  lid_topic: "/livox/multi_lidar"
   imu_topic: "/livox/imu_192_168_1_159"
   external_imu_topic: "/novatel/oem7/odom"
   img_en: 0
@@ -67,14 +67,14 @@ lio:
 # Pillar Voxel Ground Detection
 pillar_voxel:
   pillar_voxel_en: true
-  voxel_size: 1.0
-  min_adjacent_ground_num: 5
+  voxel_size: 1
+  min_adjacent_ground_num: 3
   min_adjacent_isolated_num: 5
   height_angle_check_en: true
   ground_height_angle_threshold: 0  # degrees
-  ground_detection_method: 1  # 0=none (skip isolated only), 1=plane fitting, 2=neighborhood
-  plane_fitting_distance_threshold: 0.2  # for method 1 (plane fitting)
-  skip_type: 1  # 0=none, 1=skip below ground, 2=skip ground+below (for method 1)
+  ground_detection_method: 2  # 0=none (skip isolated only), 1=plane fitting, 2=neighborhood
+  plane_fitting_distance_threshold: 0.1  # for method 1 (plane fitting)
+  skip_type: 0  # 0=none, 1=skip below ground, 2=skip ground+below (for method 1)
 
 local_map:
   map_sliding_en: false
@@ -94,7 +94,7 @@ publish:
   blind_rgb_points: 0.0
 
 evo:
-  seq_name: "shawan_tunnel_back_ground"
+  seq_name: "shawan_tunnel"
   pose_output_en: true
 
 lidar_save:

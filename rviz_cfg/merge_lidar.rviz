@@ -42,7 +42,7 @@ Panels:
   - Class: rviz/Time
     Name: Time
     SyncMode: 0
-    SyncSource: currPoints
+    SyncSource: surround
 Preferences:
   PromptSaveOnExit: true
 Toolbars:
@@ -107,7 +107,7 @@ Visualization Manager:
           Use Fixed Frame: true
           Use rainbow: false
           Value: true
-        - Alpha: 0.05000000074505806
+        - Alpha: 0.02500000037252903
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
             Max Value: 15
@@ -120,7 +120,7 @@ Visualization Manager:
           Color Transformer: Intensity
           Decay Time: 30
           Enabled: true
-          Invert Rainbow: true
+          Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
           Name: surround
@@ -547,7 +547,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 121.00309753417969
+      Distance: 335.5511169433594
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -563,9 +563,9 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.7853981852531433
+      Pitch: 0.30539852380752563
       Target Frame: aft_mapped
-      Yaw: 0.7853981852531433
+      Yaw: 5.438571929931641
     Saved:
       - Class: rviz/Orbit
         Distance: 117.53474426269531

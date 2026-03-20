@@ -385,8 +385,8 @@ if __name__ == "__main__":
     if len(sys.argv) == 1:
         # Default example - modify these paths
         # Paths relative to catkin_ws directory
-        pred_path = "/home/whuxjh/code/voxel-pillar/catkin_ws/src/Voxel-Pillar/Log/result/Laurel_Caverns_enhanced_pillar.txt"
-        gt_path = "/home/whuxjh/data/SubT_MRS/ground_truth/Laurel_Cavern/ground_truth_path.csv"
+        pred_path = "./Log/result/laurel_cavern.txt"
+        gt_path = "./python/ground_truth/laurel_cavern_ground_truth_path.csv"
 
         t_B_prism = np.array([0, 0, 0])
 
