@@ -1,0 +1,121 @@
+common:
+  img_topic: "/camera_1/image_raw"
+  lid_topic: "/velodyne_points"
+  imu_topic: "/imu/data"
+
+  img_en: 0
+  lidar_en: 1
+  ros_driver_bug_fix: false
+
+extrin_calib:
+  # LiDAR to IMU extrinsic
+  # Cave: extrinsic_T: [0.080, 0.029, 0.030]
+  # Corridor: extrinsic_R: [0.999954875339377, 0.0, 0.009499857104811, 0.0, 1.0, 0.0, -0.009499857104811, 0.0, 0.999954875339377]
+
+  # UGV1
+  extrinsic_T: [0.0, 0.0, 0.0]
+  extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+
+  # Camera to IMU extrinsic (Corridor)
+  Rcl: [-0.01578308, -0.01124397,  0.99981222,
+        -0.99975463, -0.01536642, -0.01595499,
+         0.01554293, -0.99981871, -0.01099868]
+  Pcl: [0.17313616, 0.0476788, -0.01933398]
+
+time_offset:
+  imu_time_offset: 0.1
+  img_time_offset: 0.1
+  exposure_time_init: 0.0
+
+preprocess:
+  point_filter_num: 1
+  filter_size_surf: 0.1
+  lidar_type: 2  # Velodyne
+  scan_line: 16
+  blind: 0.4
+
+# Visual Odometry
+vio:
+  max_iterations: 5
+  outlier_threshold: 1000
+  img_point_cov: 100
+  patch_size: 8
+  patch_pyrimid_level: 4
+  normal_en: true
+  raycast_en: false
+  inverse_composition_en: false
+  exposure_estimate_en: true
+  inv_expo_cov: 0.1
+  capacity: 0  # LRU cache (0 = disable)
+
+# IMU
+imu:
+  imu_en: true
+  imu_int_frame: 30
+  acc_cov: 0.2
+  gyr_cov: 0.1
+  b_acc_cov: 0.0005
+  b_gyr_cov: 0.0005
+
+# LiDAR-Inertial Odometry
+lio:
+  max_iterations: 5
+  dept_err: 0.03
+  beam_err: 0.05
+  min_eigen_value: 0.0025
+  voxel_size: 0.5
+  max_layer: 2
+  max_points_num: 100
+  layer_init_num: [5, 5, 5, 5, 5]
+  sigma_num: 3
+  capacity: 0  # LRU cache (0 = disable)
+  rf_enhance_en: true  # Range Field enhancement
+  intensity_fusion_en: true
+
+# Pillar Voxel Ground Detection
+pillar_voxel:
+  pillar_voxel_en: true
+  voxel_size: 0.5
+  min_adjacent_ground_num: 5
+  min_adjacent_isolated_num: 2
+  height_angle_check_en: false
+  height_angle_threshold: 0  # degrees
+  ground_detection_method: 2  # 0=none, 1=plane fitting, 2=neighborhood
+  plane_fitting_distance_threshold: 0.1  # for method 1 (plane fitting)
+  skip_type: 0  # 0=none, 1=skip below ground, 2=skip ground+below (for method 1)
+
+local_map:
+  map_sliding_en: false
+  half_map_size: 1000
+  sliding_thresh: 8
+
+uav:
+  imu_rate_odom: true
+  gravity_align_en: true
+
+publish:
+  dense_map_en: false
+  pub_effect_en: true
+  pub_plane_en: false
+  pub_body_en: false
+  pub_scan_num: 1
+  blind_rgb_points: 0.0
+
+evo:
+  seq_name: "laurel_cavern"
+  pose_output_en: true
+
+lidar_save:
+  save_en: false
+  colmap_output_en: false
+  filter_size_pcd: 0.15
+  interval: -1  # -1 = save all in one file (memory risk)
+
+external_imu:
+  enable: false
+  external_imu_init_frame: 30
+  time_offset: 0
+  buffer_size: 100000
+  external_R: [0, 0, -1, 1, 0, 0, 0, -1, 0]
+  external_T: [0, 0, 0]
+  external_imu_only: false
