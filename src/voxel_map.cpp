@@ -75,8 +75,6 @@ void loadPillarVoxelConfig(ros::NodeHandle &nh, PillarVoxelConfig &config)
   nh.param<double>("pillar_voxel/voxel_size", config.voxel_size_, 1.0);
   nh.param<int>("pillar_voxel/min_adjacent_ground_num", config.min_adjacent_ground_num_, 3);
   nh.param<int>("pillar_voxel/min_adjacent_isolated_num", config.min_adjacent_isolated_num_, 3);
-  nh.param<bool>("pillar_voxel/height_angle_check_en", config.height_angle_check_en_, false);
-  nh.param<double>("pillar_voxel/height_angle_threshold", config.height_angle_threshold_, 30.0);
   nh.param<int>("pillar_voxel/ground_detection_method", config.ground_detection_method_, 0);
   nh.param<double>("pillar_voxel/plane_fitting_distance_threshold", config.plane_fitting_distance_threshold_, 0.1);
   nh.param<int>("pillar_voxel/skip_type", config.skip_type_, 0);
@@ -1343,39 +1341,6 @@ void PillarVoxelMap::UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_key
   }
 }
 
-PointCloudXYZI::Ptr PillarVoxelMap::CheckHeightAngle(const PointCloudXYZI::Ptr &input_cloud, const Eigen::Vector3d& current_pos)
-{
-  if (!config_.height_angle_check_en_) {
-    return input_cloud;
-  }
-
-  PointCloudXYZI::Ptr filtered_cloud(new PointCloudXYZI());
-  filtered_cloud->points.reserve(input_cloud->points.size());
-
-  for (const auto& point : input_cloud->points) {
-    // Compute relative position to current sensor position
-    double dx = point.x - current_pos(0);
-    double dy = point.y - current_pos(1);
-    double dz = point.z - current_pos(2);
-
-    double horizontal_distance = sqrt(dx * dx + dy * dy);
-
-    double height_angle = 0.0;
-    if (horizontal_distance > 1e-9) {
-      height_angle = atan2(dz, horizontal_distance) * 180.0 / M_PI;
-    }
-
-    if (height_angle <= config_.height_angle_threshold_) {
-      filtered_cloud->points.push_back(point);
-    }
-  }
-
-  std::cout << "[CheckHeightAngle] Filtered from " << input_cloud->points.size()
-            << " to " << filtered_cloud->points.size() << " points" << std::endl;
-
-  return filtered_cloud;
-}
-
 bool PillarVoxelMap::hasAdjacentGroundVoxel(const PillarVoxel *voxel, const VOXEL_LOCATION &current_pos)
 {
   (void)voxel;
@@ -1404,7 +1369,7 @@ bool PillarVoxelMap::hasAdjacentGroundVoxel(const PillarVoxel *voxel, const VOXE
       if (first_voxel && first_voxel->is_ground_voxel_) {
         int64_t height_diff = std::abs(current_elevation - pillar_iter->second.begin()->first);
 
-        if (height_diff  <= 0) {
+        if (height_diff  <= 1) {
           adjacent_ground_count++;
         }
 

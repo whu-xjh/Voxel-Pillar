@@ -258,14 +258,12 @@ typedef struct PillarVoxelConfig
   double voxel_size_;
   int min_adjacent_ground_num_;
   int min_adjacent_isolated_num_;
-  bool height_angle_check_en_;
-  double height_angle_threshold_;
   int ground_detection_method_;
   double plane_fitting_distance_threshold_;
   int skip_type_;
 
   PillarVoxelConfig() : pillar_voxel_en_(false), voxel_size_(1.0), min_adjacent_ground_num_(3),
-                       min_adjacent_isolated_num_(3), height_angle_check_en_(true), height_angle_threshold_(5.0),
+                       min_adjacent_isolated_num_(3),
                        ground_detection_method_(0), plane_fitting_distance_threshold_(0.1),
                        skip_type_(0) {}
 } PillarVoxelConfig;
@@ -289,7 +287,6 @@ public:
   double fitted_plane_d_ = 0.0;
   bool plane_fitted_ = false;
   void init(const PillarVoxelConfig &config, double voxel_size);
-  PointCloudXYZI::Ptr CheckHeightAngle(const PointCloudXYZI::Ptr &input_cloud, const Eigen::Vector3d& current_pos);
   void BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud);
   void GroundDetection(const Eigen::Vector3d& current_pos);
   void PublishPillarPoints(const ros::Publisher &pubGround, const ros::Publisher &pubIsolated);
@@ -302,7 +299,6 @@ private:
   void initHorizontalNeighborOffsets();
   PILLAR_LOCATION GetPillarLocation(const VOXEL_LOCATION &position) const;
   void UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_key, std::map<int64_t, PillarVoxel> &pillar_voxels, const Eigen::Vector3d& current_pos);
-  bool checkHeightAngle(const PillarVoxel *voxel, const Eigen::Vector3d& current_pos, double voxel_z);
   bool hasAdjacentGroundVoxel(const PillarVoxel *voxel, const VOXEL_LOCATION &current_pos);
   bool hasAdjacentTopVoxel(const VOXEL_LOCATION &current_pos);
 };

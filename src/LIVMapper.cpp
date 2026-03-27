@@ -248,7 +248,6 @@ void LIVMapper::initializeSubscribersAndPublishers(ros::NodeHandle &nh, image_tr
   sub_imu = nh.subscribe(imu_topic, 200000, &LIVMapper::imu_cbk, this);
   sub_img = nh.subscribe(img_topic, 200000, &LIVMapper::img_cbk, this);
   
-  // Only subscribe to external IMU topics when enabled
   if (external_imu_enable) {
       sub_external_imu = nh.subscribe(external_imu_topic, 200000, &LIVMapper::odom_cbk, this);
       ROS_INFO("External IMU enabled, subscribing to topic: %s", external_imu_topic.c_str());
@@ -472,8 +471,7 @@ void LIVMapper::handleLIO()
     // *origin_feats_down_world_ = *feats_down_world;
     // origin_feats_down_size_ = feats_down_size;
 
-    PointCloudXYZI::Ptr filtered_cloud = voxelmap_manager->pillar_map_.CheckHeightAngle(feats_down_world, _state.pos_end);
-    voxelmap_manager->pillar_map_.BuildPillarMap(filtered_cloud);
+    voxelmap_manager->pillar_map_.BuildPillarMap(feats_down_world);
     voxelmap_manager->pillar_map_.GroundDetection(_state.pos_end);
     voxelmap_manager->DefineSkipPoints(feats_down_world);
     voxelmap_manager->pillar_map_.PublishPillarPoints(pubGroundCloud, pubIsolatedCloud);

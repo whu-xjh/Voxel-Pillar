@@ -103,8 +103,6 @@ find_package(OpenCV REQUIRED)
 find_package(Sophus REQUIRED)
 find_package(Boost REQUIRED COMPONENTS thread)
 
-
-
 set(Sophus_LIBRARIES libSophus.so)
 
 # Define the catkin package
@@ -122,7 +120,6 @@ include_directories(
   ${Sophus_INCLUDE_DIRS}
   include
 )
-
 
 # Add libraries
 add_library(vio src/vio.cpp src/frame.cpp src/visual_point.cpp)

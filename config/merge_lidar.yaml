@@ -21,7 +21,7 @@ time_offset:
   exposure_time_init: 0.0
 
 preprocess:
-  point_filter_num: 1
+  point_filter_num: 5
   filter_size_surf: 0.5
   lidar_type: 1  # Livox Avia
   scan_line: 6  # Avia: 6, Mid360: 4
@@ -47,8 +47,8 @@ imu:
   imu_int_frame: 30
   acc_cov: 0.5
   gyr_cov: 0.3
-  b_acc_cov: 0.001
-  b_gyr_cov: 0.001
+  b_acc_cov: 0.0001
+  b_gyr_cov: 0.0001
 
 # LiDAR-Inertial Odometry
 lio:
@@ -56,7 +56,7 @@ lio:
   dept_err: 0.02
   beam_err: 0.05
   min_eigen_value: 0.0025
-  voxel_size: 2
+  voxel_size: 1
   max_layer: 2
   max_points_num: 100
   layer_init_num: [5, 5, 5, 5, 5]
@@ -70,9 +70,7 @@ pillar_voxel:
   pillar_voxel_en: true
   voxel_size: 1
   min_adjacent_ground_num: 5
-  min_adjacent_isolated_num: 5
-  height_angle_check_en: true
-  height_angle_threshold: 0  # degrees
+  min_adjacent_isolated_num: 1
   ground_detection_method: 2  # 0=none, 1=plane fitting, 2=neighborhood
   plane_fitting_distance_threshold: 0.2  # for method 1 (plane fitting)
   skip_type: 1  # 0=none, 1=skip below ground, 2=skip ground+below (for method 1)

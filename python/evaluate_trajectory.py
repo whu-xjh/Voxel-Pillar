@@ -385,7 +385,7 @@ if __name__ == "__main__":
     if len(sys.argv) == 1:
         # Default example - modify these paths
         # Paths relative to catkin_ws directory
-        pred_path = "./Log/result/laurel_cavern.txt"
+        pred_path = "./Log/result/laurel_cavern_best.txt"
         gt_path = "./python/ground_truth/laurel_cavern_ground_truth_path.csv"
 
         t_B_prism = np.array([0, 0, 0])
