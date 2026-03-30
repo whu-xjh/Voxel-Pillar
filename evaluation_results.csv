@@ -1,2 +1,0 @@
-ate,completeness,num_poses,time_range,align_fraction,num_poses_align,sequence,pred_path,gt_path
-438.7403056726882,99.85,3030,"(np.float64(1766147816.935078), np.float64(1766148201.734867))",1.0,3030,shawan_tunnel,./Log/result/shawan_tunnel.txt,./python/ground_truth/shawan_tunnel_odom.txt

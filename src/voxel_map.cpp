@@ -1369,7 +1369,7 @@ bool PillarVoxelMap::hasAdjacentGroundVoxel(const PillarVoxel *voxel, const VOXE
       if (first_voxel && first_voxel->is_ground_voxel_) {
         int64_t height_diff = std::abs(current_elevation - pillar_iter->second.begin()->first);
 
-        if (height_diff  <= 1) {
+        if (height_diff  <= 0) {
           adjacent_ground_count++;
         }
 
