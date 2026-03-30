@@ -1369,7 +1369,7 @@ bool PillarVoxelMap::hasAdjacentGroundVoxel(const PillarVoxel *voxel, const VOXE
       if (first_voxel && first_voxel->is_ground_voxel_) {
         int64_t height_diff = std::abs(current_elevation - pillar_iter->second.begin()->first);
 
-        if (height_diff  <= 0) {
+        if (height_diff <= 0) {
           adjacent_ground_count++;
         }
 
@@ -1659,6 +1659,11 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
               << "/" << point_num << " ("
               << std::fixed << std::setprecision(1)
               << (100.0 * isolated_count / point_num) << "%)" << std::endl;
+
+    // Update statistics
+    current_skip_count_ = final_skip_count;
+    total_skip_count_ += final_skip_count;
+    total_point_count_ += point_num;
     return;
   }
   else if (pillar_map_.config_.ground_detection_method_ == 2)
@@ -1681,6 +1686,11 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
               << "/" << point_num << " ("
               << std::fixed << std::setprecision(1)
               << (100.0 * final_skip_count / point_num) << "%)" << std::endl;
+
+    // Update statistics
+    current_skip_count_ = final_skip_count;
+    total_skip_count_ += final_skip_count;
+    total_point_count_ += point_num;
     return;
   }
 
@@ -1688,6 +1698,11 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
   {
     std::cout << "[DefineSkipPoints] Method 1 (Plane Fitting) but no plane fitted! Isolated: " << isolated_count
               << "/" << point_num << std::endl;
+
+    // Update statistics
+    current_skip_count_ = final_skip_count;
+    total_skip_count_ += final_skip_count;
+    total_point_count_ += point_num;
     return;
   }
 
@@ -1741,6 +1756,11 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
             << "/" << point_num << " ("
             << std::fixed << std::setprecision(1)
             << (100.0 * final_skip_count / point_num) << "%)" << std::endl;
+
+  // Update statistics
+  current_skip_count_ = final_skip_count;
+  total_skip_count_ += final_skip_count;
+  total_point_count_ += point_num;
 }
 
 void PillarVoxelMap::PublishPillarPoints(const ros::Publisher &pubGround, const ros::Publisher &pubIsolated)

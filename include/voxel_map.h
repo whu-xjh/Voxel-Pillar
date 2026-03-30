@@ -340,6 +340,11 @@ public:
   std::vector<PointToPlane> ptpl_list_;
   std::vector<bool> skip_list;
 
+  // Skip point statistics
+  int current_skip_count_ = 0;
+  int total_skip_count_ = 0;
+  int total_point_count_ = 0;
+
   PillarVoxelMap pillar_map_;
 
   VoxelMapManager(VoxelMapConfig &config_setting, std::unordered_map<VOXEL_LOCATION, std::list<std::pair<VOXEL_LOCATION, VoxelOctoTree*>>::iterator> &voxel_map)

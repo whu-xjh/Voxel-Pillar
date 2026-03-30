@@ -687,6 +687,16 @@ void LIVMapper::handleLIO()
   printf("\033[1;36m| %-29s | %-27f |\033[0m\n", "Average Total Time", aver_time_consu);
   printf("\033[1;34m+-------------------------------------------------------------+\033[0m\n");
 
+  // Skip point statistics
+  if (feats_down_world->points.size() > 0)
+  {
+    double current_skip_pct = 100.0 * voxelmap_manager->current_skip_count_ / feats_down_world->points.size();
+    double avg_skip_pct = (voxelmap_manager->total_point_count_ > 0) ?
+                          100.0 * voxelmap_manager->total_skip_count_ / voxelmap_manager->total_point_count_ : 0.0;
+    printf("\033[1;36m| %-29s | %-13f %-13f |\033[0m\n", "Skip Points", current_skip_pct, avg_skip_pct);
+    printf("\033[1;34m+-------------------------------------------------------------+\033[0m\n");
+  }
+
   euler_cur = RotMtoEuler(_state.rot_end);
   fout_out << std::setw(20) << LidarMeasures.last_lio_update_time - _first_lidar_time << " " << euler_cur.transpose() * 57.3 << " "
             << _state.pos_end.transpose() << " " << _state.vel_end.transpose() << " " << _state.bias_g.transpose() << " "
