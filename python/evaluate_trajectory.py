@@ -417,7 +417,7 @@ Examples:
   python %(prog)s --pred result.txt --gt ground_truth.csv --visualize
 
   # Custom alignment fraction
-  python %(prog)s --pred result.txt --gt ground_truth.csv --align-fraction 0.5
+  python %(prog)s --pred result.txt --gt ground_truth.csv --align-fraction 1
 
   # No arguments: auto-detect and evaluate default files
   python %(prog)s

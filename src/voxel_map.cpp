@@ -986,7 +986,8 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
           double intensity_diff = static_cast<double>(pv.intensity) - plane.mean_intensity_;
           double intensity_prob = 1.0 / (sqrt(2.0 * M_PI) * intensity_std_safe) *
                                   exp(-0.5 * intensity_diff * intensity_diff / intensity_std_sq);
-          this_prob = 0.5 * this_prob + 0.5 * intensity_prob;
+          // this_prob = 0.5 * this_prob + 0.5 * intensity_prob;
+          this_prob = this_prob * intensity_prob;
         }
 
         if (this_prob > prob) // When point may match multiple planes, select the one with highest probability
