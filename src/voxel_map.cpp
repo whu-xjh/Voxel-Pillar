@@ -1465,25 +1465,21 @@ void PillarVoxelMap::GroundDetection(const Eigen::Vector3d& current_pos)
 {
   plane_fitted_ = false;
 
+  // OPTIMIZATION: Merge two loops to reduce hash lookups by 50%
   for (const auto& pillar_key : current_pillars_)
   {
     auto pillar_iter = pillars_.find(pillar_key);
-    if (pillar_iter != pillars_.end() && !pillar_iter->second.empty())
-    {
-      for (auto& voxel_pair : pillar_iter->second)
-      {
-        voxel_pair.second.is_ground_voxel_ = false;
-      }
-    }
-  }
+    if (pillar_iter == pillars_.end() || pillar_iter->second.empty())
+      continue;
 
-  for (const auto& pillar_key : current_pillars_)
-  {
-    auto pillar_iter = pillars_.find(pillar_key);
-    if (pillar_iter != pillars_.end() && !pillar_iter->second.empty())
+    // Reset ground flags first
+    for (auto& voxel_pair : pillar_iter->second)
     {
-      UpdateGroundFlagForPillar(pillar_key, pillar_iter->second, current_pos);
+      voxel_pair.second.is_ground_voxel_ = false;
     }
+
+    // Update ground flags in same iteration
+    UpdateGroundFlagForPillar(pillar_key, pillar_iter->second, current_pos);
   }
 
   if (config_.min_adjacent_ground_num_ > 0)
@@ -1766,77 +1762,34 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
 
 void PillarVoxelMap::PublishPillarPoints(const ros::Publisher &pubGround, const ros::Publisher &pubIsolated)
 {
-  size_t total_ground_points = 0;
-  size_t total_isolated_points = 0;
+  // OPTIMIZATION: Use direct point_labels_ iteration instead of two-pass pillar traversal
+  // This reduces complexity from O(pillars * voxels * points) to O(points)
 
-  // First pass: count all ground and isolated points across ALL voxel layers
-  for (const auto& pillar_key : current_pillars_)
-  {
-    auto pillar_iter = pillars_.find(pillar_key);
-    if (pillar_iter != pillars_.end() && !pillar_iter->second.empty())
-    {
-      for (const auto& voxel_pair : pillar_iter->second)
-      {
-        const PillarVoxel& voxel = voxel_pair.second;
-        if (voxel.is_ground_voxel_)
-        {
-          total_ground_points += voxel.point_indices_.size();
-        }
-        else if (voxel.is_isolated_voxel_)
-        {
-          total_isolated_points += voxel.point_indices_.size();
-        }
-      }
-    }
-  }
-
-  if (total_ground_points == 0 && total_isolated_points == 0) return;
+  if (!point_cloud_ptr_ || point_cloud_ptr_->points.empty()) return;
 
   PointCloudXYZI::Ptr ground_cloud(new PointCloudXYZI());
   PointCloudXYZI::Ptr isolated_cloud(new PointCloudXYZI());
 
-  if (total_ground_points > 0)
-  {
-    ground_cloud->points.reserve(total_ground_points);
-  }
+  // Reserve estimated capacity (typically ground < 20%, isolated < 5%)
+  const size_t estimated_points = point_cloud_ptr_->points.size();
+  ground_cloud->points.reserve(estimated_points / 5);
+  isolated_cloud->points.reserve(estimated_points / 20);
 
-  if (total_isolated_points > 0)
+  // Single pass through point labels
+  for (size_t i = 0; i < point_labels_.size() && i < point_cloud_ptr_->points.size(); ++i)
   {
-    isolated_cloud->points.reserve(total_isolated_points);
-  }
-
-  for (const auto& pillar_key : current_pillars_)
-  {
-    auto pillar_iter = pillars_.find(pillar_key);
-    if (pillar_iter == pillars_.end() || pillar_iter->second.empty())
-      continue;
-
-    for (const auto& voxel_pair : pillar_iter->second)
+    if (point_labels_[i] == LABEL_GROUND)
     {
-      const PillarVoxel& voxel = voxel_pair.second;
-
-      if (voxel.is_ground_voxel_)
-      {
-        for (size_t idx : voxel.point_indices_)
-        {
-          if (idx < point_cloud_ptr_->points.size()) {
-            ground_cloud->points.push_back(point_cloud_ptr_->points[idx]);
-          }
-        }
-      }
-      else if (voxel.is_isolated_voxel_)
-      {
-        for (size_t idx : voxel.point_indices_)
-        {
-          if (idx < point_cloud_ptr_->points.size()) {
-            isolated_cloud->points.push_back(point_cloud_ptr_->points[idx]);
-          }
-        }
-      }
+      ground_cloud->points.push_back(point_cloud_ptr_->points[i]);
+    }
+    else if (point_labels_[i] == LABEL_ISOLATED)
+    {
+      isolated_cloud->points.push_back(point_cloud_ptr_->points[i]);
     }
   }
 
-  if (total_ground_points > 0)
+  // Publish ground cloud
+  if (!ground_cloud->points.empty())
   {
     ground_cloud->width = ground_cloud->points.size();
     ground_cloud->height = 1;
@@ -1849,7 +1802,8 @@ void PillarVoxelMap::PublishPillarPoints(const ros::Publisher &pubGround, const 
     pubGround.publish(ground_msg);
   }
 
-  if (total_isolated_points > 0)
+  // Publish isolated cloud
+  if (!isolated_cloud->points.empty())
   {
     isolated_cloud->width = isolated_cloud->points.size();
     isolated_cloud->height = 1;

@@ -51,11 +51,11 @@ vio:
 # IMU
 imu:
   imu_en: true
-  imu_int_frame: 30
+  imu_int_frame: 50
   acc_cov: 0.2
-  gyr_cov: 0.1
-  b_acc_cov: 0.0001
-  b_gyr_cov: 0.0001
+  gyr_cov: 0.05
+  b_acc_cov: 0.00005
+  b_gyr_cov: 0.00005
 
 # LiDAR-Inertial Odometry
 lio:
@@ -69,7 +69,7 @@ lio:
   layer_init_num: [5, 5, 5, 5, 5]
   sigma_num: 3
   capacity: 0  # LRU cache (0 = disable)
-  rf_enhance_en: true  # Range Field enhancement
+  rf_enhance_en: false  # Range Field enhancement
   intensity_fusion_en: true
 
 # Pillar Voxel Ground Detection
