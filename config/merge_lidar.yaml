@@ -1,6 +1,6 @@
 common:
   img_topic: "/left_camera/image"
-  lid_topic: "/livox/lidar_192_168_1_161"
+  lid_topic: "/livox/multi_lidar"
   imu_topic: "/livox/imu_192_168_1_159"
   external_imu_topic: "/novatel/oem7/odom"
   img_en: 0
@@ -62,15 +62,15 @@ lio:
   layer_init_num: [5, 5, 5, 5, 5]
   sigma_num: 3
   capacity: 0  # LRU cache (0 = disable)
-  rf_enhance_en: false  # Range Field enhancement
-  intensity_fusion_en: false
+  rf_enhance_en: true  # Range Field enhancement
+  intensity_fusion_en: true
 
 # Pillar Voxel Ground Detection
 pillar_voxel:
-  pillar_voxel_en: false
+  pillar_voxel_en: true
   voxel_size: 1
-  min_adjacent_ground_num: 4
-  min_adjacent_isolated_num: 4
+  min_adjacent_ground_num: 5
+  min_adjacent_isolated_num: 5
   ground_detection_method: 2  # 0=none, 1=plane fitting, 2=neighborhood
   plane_fitting_distance_threshold: 0.2  # for method 1 (plane fitting)
   skip_type: 1  # 0=none, 1=skip below ground, 2=skip ground+below (for method 1)
@@ -97,13 +97,13 @@ evo:
   pose_output_en: true
 
 lidar_save:
-  save_en: true
+  save_en: false
   colmap_output_en: false
   filter_size_pcd: 0.10
   interval: 100
 
 external_imu:
-  enable: true
+  enable: false
   external_imu_init_frame: 30
   time_offset: 0
   buffer_size: 100000

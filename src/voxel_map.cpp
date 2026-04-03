@@ -1615,8 +1615,8 @@ void PillarVoxelMap::GroundDetection(const Eigen::Vector3d& current_pos)
       }
     }
 
-    std::cout << "[GroundDetection] Method 2 (neighborhood): " << ground_voxel_count
-              << " ground voxels detected via adjacency check" << std::endl;
+    // std::cout << "[GroundDetection] Method 2 (neighborhood): " << ground_voxel_count
+    //           << " ground voxels detected via adjacency check" << std::endl;
   }
 }
 
@@ -1677,12 +1677,12 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
       }
     }
 
-    std::cout << "[DefineSkipPoints] Method 2 (Neighborhood): Isolated: " << isolated_count
-              << ", Ground: " << ground_count
-              << ", Skip_total: " << final_skip_count
-              << "/" << point_num << " ("
-              << std::fixed << std::setprecision(1)
-              << (100.0 * final_skip_count / point_num) << "%)" << std::endl;
+    // std::cout << "[DefineSkipPoints] Method 2 (Neighborhood): Isolated: " << isolated_count
+    //           << ", Ground: " << ground_count
+    //           << ", Skip_total: " << final_skip_count
+    //           << "/" << point_num << " ("
+    //           << std::fixed << std::setprecision(1)
+    //           << (100.0 * final_skip_count / point_num) << "%)" << std::endl;
 
     // Update statistics
     current_skip_count_ = final_skip_count;

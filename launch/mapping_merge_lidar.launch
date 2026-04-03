@@ -1,7 +1,7 @@
 <launch>
 <!-- Launch file for merged Livox LiDAR (159, 160, 161) and FAST-LIVO2 mapping -->
 
-	<arg name="rviz" default="true" />
+	<arg name="rviz" default="false" />
 
 	<!-- LiDAR topic merger node -->
 	<node pkg="voxel_pillar" type="merge_lidar" name="merge_lidar" output="screen">
