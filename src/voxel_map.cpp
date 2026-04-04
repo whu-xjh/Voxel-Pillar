@@ -1613,8 +1613,8 @@ void PillarVoxelMap::GroundDetection(const Eigen::Vector3d& current_pos)
       {
         ground_voxel_count++;
       }
-    }
-
+    }                  
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
     // std::cout << "[GroundDetection] Method 2 (neighborhood): " << ground_voxel_count
     //           << " ground voxels detected via adjacency check" << std::endl;
   }
