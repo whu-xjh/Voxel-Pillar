@@ -1,0 +1,24 @@
+<launch>
+<!-- Launch file for GEODE Livox Avia datasets (Shield & Tunneling) -->
+
+	<arg name="rviz" default="false" />
+
+	<!-- Image transport for Livox datasets (topic: /left_camera/image/compressed) -->
+	<node pkg="image_transport" type="republish" name="left_camera_republish"
+	      args="compressed in:=/left_camera/image raw out:=/left_camera/image_raw" />
+
+	<rosparam command="load" file="$(find voxel_pillar)/config/GEODE.yaml" />
+	<node pkg="voxel_pillar" type="fastlivo_mapping" name="laserMapping" output="screen">
+		<rosparam file="$(find voxel_pillar)/config/camera_GEODE.yaml" />
+	</node>
+
+	<group if="$(arg rviz)">
+		<node launch-prefix="nice" pkg="rviz" type="rviz" name="rviz" args="-d $(find voxel_pillar)/rviz_cfg/voxel_pillar.rviz" />
+	</group>
+
+	<!-- For debugging, add launch-prefix to node tag above:
+	     launch-prefix="gdb"
+	     launch-prefix="valgrind"
+	-->
+
+</launch>

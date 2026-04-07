@@ -22,7 +22,7 @@ extrin_calib:
   Pcl: [0.17313616, 0.0476788, -0.01933398]
 
 time_offset:
-  imu_time_offset: 0.1
+  imu_time_offset: 0.0
   img_time_offset: 0.1
   exposure_time_init: 0.0
 

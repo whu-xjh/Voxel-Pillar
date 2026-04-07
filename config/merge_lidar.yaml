@@ -1,6 +1,6 @@
 common:
   img_topic: "/left_camera/image"
-  lid_topic: "/livox/multi_lidar"
+  lid_topic: "/livox/lidar"
   imu_topic: "/livox/imu_192_168_1_159"
   external_imu_topic: "/novatel/oem7/odom"
   img_en: 0
@@ -16,7 +16,7 @@ extrin_calib:
   Pcl: [0.0194384, 0.104689,-0.0251952]
 
 time_offset:
-  imu_time_offset: 0.1
+  imu_time_offset: 0.0
   img_time_offset: 0.1
   exposure_time_init: 0.0
 
@@ -45,8 +45,8 @@ vio:
 imu:
   imu_en: true
   imu_int_frame: 30
-  acc_cov: 0.3
-  gyr_cov: 0.1
+  acc_cov: 0.5
+  gyr_cov: 0.3
   b_acc_cov: 0.0001
   b_gyr_cov: 0.0001
 
@@ -93,7 +93,7 @@ publish:
   blind_rgb_points: 0.0
 
 evo:
-  seq_name: "shawan_tunnel"
+  seq_name: "fenhe_tunnel"
   pose_output_en: true
 
 lidar_save:

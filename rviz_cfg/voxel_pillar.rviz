@@ -42,7 +42,7 @@ Panels:
   - Class: rviz/Time
     Name: Time
     SyncMode: 0
-    SyncSource: currPoints
+    SyncSource: surround
 Preferences:
   PromptSaveOnExit: true
 Toolbars:
@@ -565,9 +565,9 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 1.5697963237762451
+      Pitch: 0.3047965466976166
       Target Frame: aft_mapped
-      Yaw: 0.8003981113433838
+      Yaw: 1.1303980350494385
     Saved:
       - Class: rviz/Orbit
         Distance: 117.53474426269531
@@ -667,5 +667,5 @@ Window Geometry:
   Views:
     collapsed: false
   Width: 2548
-  X: 2528
+  X: -32
   Y: -32

@@ -1,0 +1,169 @@
+# ===================================================================
+# GEODE Livox Avia Dataset Configuration
+# ===================================================================
+# 本配置文件适用于GEODE数据集的Livox Avia场景
+#
+# 数据集列表:
+# 1. Shield_tunnel1_gamma.bag   - 盾构隧道 (4.2GB, 542秒)
+# 2. Tunneling_tunnel1_gamma.bag - 掘进隧道 (1.7GB, 208秒)
+#
+# 使用方法:
+# 1. 根据数据集修改下方 evo/seq_name 参数
+# 2. 运行: roslaunch voxel_pillar mapping_geode.launch
+# 3. 播放bag: rosbag play /home/wsl-4080/data/geode/[对应bag文件]
+#
+# 数据集环境差异:
+# - Shield_Tunnel: 盾构机施工隧道，圆形截面，特征相对单一
+# - Tunneling_Tunnel: 掘进机施工隧道，环境更加复杂
+# ===================================================================
+
+common:
+  img_topic: "/left_camera/image_raw"
+  lid_topic: "/livox/lidar"
+  imu_topic: "/imu/data"
+  img_en: 0
+  lidar_en: 1
+  ros_driver_bug_fix: false
+
+extrin_calib:
+  # LiDAR to IMU extrinsic (from gamma_config.yaml T_IMU_LiDAR)
+  # Rotation matrix (3x3) flattened:
+  # [0.999620,  0.027463,  0.002445]
+  # [-0.027517,  0.999299,  0.025398]
+  # [-0.001746, -0.025456,  0.999674]
+  extrinsic_R: [0.999620, 0.027463, 0.002445,
+                -0.027517, 0.999299, 0.025398,
+                -0.001746, -0.025456, 0.999674]
+
+  # Translation: [0.049258, -0.012500, 0.026946]
+  extrinsic_T: [0.049258, -0.012500, 0.026946]
+
+  # Left camera to IMU extrinsic (from T_IMU_CamL)
+  Rcl: [ 0.00775254, -0.00773646,  0.99994002,
+        -0.99996315,  0.0036284 ,  0.00778079,
+        -0.00368837, -0.99996349, -0.00770804]
+  Pcl: [0.02005992, 0.04730513, -0.02083495]
+
+time_offset:
+  imu_time_offset: 0.0
+  img_time_offset: 0.0
+  exposure_time_init: 0.0
+
+preprocess:
+  point_filter_num: 1
+  filter_size_surf: 0.5
+  lidar_type: 1  # Livox Avia
+  scan_line: 6   # Livox Avia: 6 lines
+  blind: 0.8
+  # === 不同数据集的参数建议 ===
+  # Shield_Tunnel:    blind=0.3 (盾构隧道)
+  # Tunneling_Tunnel: blind=0.8 (掘进隧道，环境更复杂)
+
+# Visual Odometry
+vio:
+  max_iterations: 5
+  outlier_threshold: 1000
+  img_point_cov: 100
+  patch_size: 8
+  patch_pyrimid_level: 4
+  normal_en: true
+  raycast_en: false
+  inverse_composition_en: false
+  exposure_estimate_en: true
+  inv_expo_cov: 0.1
+  capacity: 0  # LRU cache (0 = disable)
+
+# IMU
+imu:
+  imu_en: true
+  imu_int_frame: 30
+  acc_cov: 0.5
+  gyr_cov: 0.3
+  b_acc_cov: 0.0001
+  b_gyr_cov: 0.0001
+
+# LiDAR-Inertial Odometry
+lio:
+  max_iterations: 10
+  dept_err: 0.02
+  beam_err: 0.05
+  min_eigen_value: 0.0025
+  voxel_size: 1
+  max_layer: 2
+  max_points_num: 100
+  layer_init_num: [5, 5, 5, 5, 5]
+  sigma_num: 3
+  capacity: 0  # LRU cache (0 = disable)
+  rf_enhance_en: true  # Range Field enhancement
+  intensity_fusion_en: true
+
+# Pillar Voxel Ground Detection
+pillar_voxel:
+  pillar_voxel_en: true
+  voxel_size: 0.5
+  min_adjacent_ground_num: 5
+  min_adjacent_isolated_num: 5
+  ground_detection_method: 2  # 0=none, 1=plane fitting, 2=neighborhood
+  plane_fitting_distance_threshold: 0.1  # for method 1 (plane fitting)
+  skip_type: 0  # 0=none, 1=skip below ground, 2=skip ground+below (for method 1)
+
+local_map:
+  map_sliding_en: false
+  half_map_size: 1000
+  sliding_thresh: 8
+
+uav:
+  imu_rate_odom: true
+  gravity_align_en: true
+
+publish:
+  dense_map_en: true
+  pub_effect_en: false
+  pub_plane_en: false
+  pub_body_en: false
+  pub_scan_num: 1
+  blind_rgb_points: 0.0
+
+evo:
+  # === 选择对应的数据集序列名称 ===
+  # Shield_Tunnel:    seq_name: "shield_tunnel1"
+  # Tunneling_Tunnel: seq_name: "tunneling_tunnel1"
+  seq_name: "tunneling_tunnel5"
+  pose_output_en: true
+
+lidar_save:
+  save_en: false
+  colmap_output_en: false
+  filter_size_pcd: 0.15
+  interval: -1  # -1 = save all in one file (memory risk)
+
+external_imu:
+  enable: false
+  external_imu_init_frame: 30
+  time_offset: 0
+  buffer_size: 100000
+  external_R: [0, 0, -1, 1, 0, 0, 0, -1, 0]
+  external_T: [0, 0, 0]
+  external_imu_only: false
+
+# ===================================================================
+# 快速使用指南
+# ===================================================================
+#
+# 1. Shield_tunnel1_gamma (盾构隧道 - Livox Avia):
+#    - seq_name: "GEODE_Shield_Tunnel1"
+#    - 可选: ground_detection_method=1 (平面拟合更适应圆形截面)
+#    - 可选: blind=0.3
+#    - 运行: rosbag play /home/wsl-4080/data/geode/Shield_tunnel1_gamma.bag
+#
+# 2. Tunneling_tunnel1_gamma (掘进隧道 - Livox Avia):
+#    - seq_name: "GEODE_Tunneling_Tunnel1"
+#    - 可选: blind=0.8 (掘进环境更复杂)
+#    - 运行: rosbag play /home/wsl-4080/data/geode/Tunneling_tunnel1_gamma.bag
+#
+# Ground Truth文件位置:
+#    - Shield:     /home/wsl-4080/data/geode/traj/metro_tunnel/Shield_tunnel1.txt
+#    - Tunneling:  /home/wsl-4080/data/geode/traj/metro_tunnel/Tunneling_tunnel1.txt
+#
+# 外参标定来源: gamma_config.yaml
+# ===================================================================
