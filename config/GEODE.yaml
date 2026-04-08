@@ -118,7 +118,7 @@ uav:
 
 publish:
   dense_map_en: true
-  pub_effect_en: false
+  pub_effect_en: true
   pub_plane_en: false
   pub_body_en: false
   pub_scan_num: 1
@@ -128,7 +128,7 @@ evo:
   # === 选择对应的数据集序列名称 ===
   # Shield_Tunnel:    seq_name: "shield_tunnel1"
   # Tunneling_Tunnel: seq_name: "tunneling_tunnel1"
-  seq_name: "tunneling_tunnel5"
+  seq_name: "shield_tunnel6"
   pose_output_en: true
 
 lidar_save:
@@ -145,25 +145,3 @@ external_imu:
   external_R: [0, 0, -1, 1, 0, 0, 0, -1, 0]
   external_T: [0, 0, 0]
   external_imu_only: false
-
-# ===================================================================
-# 快速使用指南
-# ===================================================================
-#
-# 1. Shield_tunnel1_gamma (盾构隧道 - Livox Avia):
-#    - seq_name: "GEODE_Shield_Tunnel1"
-#    - 可选: ground_detection_method=1 (平面拟合更适应圆形截面)
-#    - 可选: blind=0.3
-#    - 运行: rosbag play /home/wsl-4080/data/geode/Shield_tunnel1_gamma.bag
-#
-# 2. Tunneling_tunnel1_gamma (掘进隧道 - Livox Avia):
-#    - seq_name: "GEODE_Tunneling_Tunnel1"
-#    - 可选: blind=0.8 (掘进环境更复杂)
-#    - 运行: rosbag play /home/wsl-4080/data/geode/Tunneling_tunnel1_gamma.bag
-#
-# Ground Truth文件位置:
-#    - Shield:     /home/wsl-4080/data/geode/traj/metro_tunnel/Shield_tunnel1.txt
-#    - Tunneling:  /home/wsl-4080/data/geode/traj/metro_tunnel/Tunneling_tunnel1.txt
-#
-# 外参标定来源: gamma_config.yaml
-# ===================================================================

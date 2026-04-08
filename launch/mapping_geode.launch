@@ -1,7 +1,7 @@
 <launch>
 <!-- Launch file for GEODE Livox Avia datasets (Shield & Tunneling) -->
 
-	<arg name="rviz" default="false" />
+	<arg name="rviz" default="true" />
 
 	<!-- Image transport for Livox datasets (topic: /left_camera/image/compressed) -->
 	<node pkg="image_transport" type="republish" name="left_camera_republish"
