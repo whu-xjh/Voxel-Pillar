@@ -93,8 +93,7 @@ catkin_make -DCMAKE_BUILD_TYPE=Debug
   3. `GroundDetection()`: Multi-step ground classification (voxel_map.cpp:1481)
      - Method-specific processing:
        - Method 0: No ground detection (only isolated points)
-       - Method 1: Initial detection → Adjacency check → Plane fitting
-       - Method 2: Initial detection → Adjacency check (no plane fitting)
+       - Method 1: Initial detection → Adjacency check (no plane fitting)
   4. `DefineSkipPoints()`: Apply skip filter to main point cloud
   5. `PublishPillarPoints()`: Publish ground and isolated points (voxel_map.cpp:1767)
   6. `ClearPillarVoxels()`: Memory cleanup (voxel_map.cpp:1865)
@@ -106,9 +105,8 @@ catkin_make -DCMAKE_BUILD_TYPE=Debug
 - `min_adjacent_isolated_num`: Minimum adjacent voxels for isolation check (default: 5)
 - `height_angle_check_en`: Enable height-angle pre-filtering (default: true)
 - `height_angle_threshold`: Height-angle threshold in degrees (default: 0)
-- `ground_detection_method`: Ground detection method (0=none, 1=plane fitting, 2=neighborhood, default: 1)
-- `plane_fitting_distance_threshold`: Distance threshold for plane fitting - method 1 only (default: 0.2)
-- `skip_type`: Point filtering mode (0=none, 1=skip below ground, 2=skip ground+below) - method 1 only (default: 1)
+- `ground_detection_method`: Ground detection method (0=none, 1=neighborhood, default: 1)
+- `neighbor_type`: Neighbor search type (0=4-neighbor N,S,E,W, 1=8-neighbor with diagonals, default: 1)
 
 **Execution Flow** (LIVMapper.cpp:475-480):
 ```cpp
@@ -222,9 +220,6 @@ Uncomment and add to `<node>` tag:
 - `pillar_voxel/neighbor_search_type`: 0=8-neighbor, 1=24-neighbor (default: 0)
 - `pillar_voxel/height_angle_check_en`: Enable height-angle filtering (default: true)
 - `pillar_voxel/height_angle_threshold`: Height-angle threshold in degrees (default: 0)
-- `pillar_voxel/plane_fitting_ground_en`: Enable iterative plane fitting (default: true)
-- `pillar_voxel/plane_fitting_distance_threshold`: Plane fitting distance threshold (default: 0.2)
-- `pillar_voxel/skip_type`: 0=none, 1=skip below ground, 2=skip ground+below (default: 1)
 
 **Multi-LiDAR Merger** (launch file lines 9-11):
 - Input topics: `/livox/lidar_192_168_1_159`, `_160`, `_161`
@@ -387,7 +382,7 @@ The `vk::camera_loader::loadFromRosNs()` uses `getParam<double>()` which expects
 - `PointToPlane` (voxel_map.h:61-75): Point-to-plane correspondence for optimization
 - `PillarVoxelConfig` (voxel_map.h:218-241): Pillar voxel system configuration
   - Controls ground detection pipeline behavior
-  - Includes adjacency filtering, plane fitting, and threshold parameters
+  - Includes adjacency filtering and threshold parameters
 - `pointWithVar` (common_lib.h): Point with variance and ground/isolated flags
   - `is_ground`: Set by pillar voxel ground detection
   - `is_isolated`: Set for isolated points (single voxels without neighbors)
@@ -428,12 +423,10 @@ The pillar voxel system operates independently of the main voxel map:
 4. **Ground Detection** (all steps in `GroundDetection()`):
    - Method-specific processing (controlled by `ground_detection_method`):
      - **Method 0 (None)**: No ground detection, only isolated points are marked
-     - **Method 1 (Plane Fitting)**: Initial classification → Adjacency check → Plane fitting → Re-classify by plane distance
-     - **Method 2 (neighborhood)**: Initial classification → Adjacency check (no plane fitting)
+     - **Method 1 (neighborhood)**: Initial classification → Adjacency check (no plane fitting)
 5. **Skip Point Definition**: `DefineSkipPoints()` marks points to exclude from ICP
    - Method 0: Skips isolated points only
-   - Method 1: Skips isolated points + points based on plane distance (controlled by `skip_type`)
-   - Method 2: Skips isolated points + ground points
+   - Method 1: Skips isolated points + ground points
 6. **Point Flag Update**: All points marked with `is_ground` or `is_isolated`
 7. **Output**: Separate point clouds published for ground and isolated points
 8. **Cleanup**: All pillar voxels deleted after each frame (no persistence)
@@ -443,12 +436,7 @@ The pillar voxel system operates independently of the main voxel map:
   - Only isolated points are identified and skipped
   - All points participate in ICP optimization (except isolated)
   - Use when you don't want any ground filtering
-- **Method 1 (Plane Fitting)**: Robust for structured environments with clear ground planes
-  - Fits a global plane using SVD on seed points from adjacency check
-  - Re-classifies voxels based on distance to fitted plane
-  - Better for flat terrain and structured scenes
-  - `skip_type` controls filtering: 0=none, 1=skip below ground, 2=skip ground+below
-- **Method 2 (neighborhood)**: Simpler, works better in unstructured environments
+- **Method 1 (neighborhood)**: Works better in unstructured environments
   - Uses only local adjacency information
   - No global plane assumption
   - Better for rough terrain, stairs, and complex surfaces
@@ -458,6 +446,5 @@ The pillar voxel system operates independently of the main voxel map:
 - Pillar voxel functions are **sequential only** - no parallelization (do not add OpenMP)
 - Ground/isolated points **excluded** from ICP optimization via `DefineSkipPoints()`
 - `is_ground` and `is_isolated` flags reset to `false` in `BuildPillarMap()` each frame
-- `skip_type` parameter only affects Method 1 (plane fitting)
-- Method 2 always skips both isolated and ground points
+- Method 1 always skips both isolated and ground points
 - Method 0 only skips isolated points

@@ -65,9 +65,8 @@ pillar_voxel:
   voxel_size: 0.25
   min_adjacent_ground_num: 5
   min_adjacent_isolated_num: 5
-  ground_detection_method: 1  # 0=none, 1=plane fitting, 2=neighborhood
-  plane_fitting_distance_threshold: 0.1  # for method 1 (plane fitting)
-  skip_type: 1  # 0=none, 1=skip below ground, 2=skip ground+below (for method 1)
+  ground_detection_method: 1  # 0=none, 1=neighborhood
+  neighbor_type: 1  # 0=4-neighbor (N,S,E,W), 1=8-neighbor (includes diagonals)
 
 local_map:
   map_sliding_en: false

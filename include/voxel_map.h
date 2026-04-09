@@ -259,13 +259,11 @@ typedef struct PillarVoxelConfig
   int min_adjacent_ground_num_;
   int min_adjacent_isolated_num_;
   int ground_detection_method_;
-  double plane_fitting_distance_threshold_;
-  int skip_type_;
+  int neighbor_type_;  // 0=4-neighbor (N,S,E,W), 1=8-neighbor (includes diagonals)
 
   PillarVoxelConfig() : pillar_voxel_en_(false), voxel_size_(1.0), min_adjacent_ground_num_(3),
                        min_adjacent_isolated_num_(3),
-                       ground_detection_method_(0), plane_fitting_distance_threshold_(0.1),
-                       skip_type_(0) {}
+                       ground_detection_method_(0), neighbor_type_(1) {}
 } PillarVoxelConfig;
 
 void loadPillarVoxelConfig(ros::NodeHandle &nh, PillarVoxelConfig &config);
@@ -283,9 +281,6 @@ public:
   std::vector<int8_t> point_labels_;
   PointCloudXYZI::Ptr point_cloud_ptr_;
 
-  Eigen::Vector3d fitted_plane_normal_ = Eigen::Vector3d::Zero();
-  double fitted_plane_d_ = 0.0;
-  bool plane_fitted_ = false;
   void init(const PillarVoxelConfig &config, double voxel_size);
   void BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud);
   void GroundDetection(const Eigen::Vector3d& current_pos);
