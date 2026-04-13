@@ -1605,9 +1605,6 @@ void PillarVoxelMap::GroundDetection(const Eigen::Vector3d& current_pos)
 
     if (!seed_points.empty())
     {
-
-      if (!seed_points.empty())
-      {
         // Step 4: Plane fitting via SVD
         Eigen::Vector3d center = Eigen::Vector3d::Zero();
         for (const auto& pt : seed_points)
@@ -1672,7 +1669,6 @@ void PillarVoxelMap::GroundDetection(const Eigen::Vector3d& current_pos)
                   << "], d=" << plane_d
                   << ", seeds=" << seed_points.size()
                   << " (sensor_z=" << z_threshold << ")" << std::endl;
-      }
     }
   }
   else if (config_.ground_detection_method_ == 2)
