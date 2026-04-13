@@ -213,6 +213,7 @@ private:
   ros::Publisher pubLaserCloudMap;
   ros::Publisher pubGroundCloud;
   ros::Publisher pubIsolatedCloud;
+  ros::Publisher pubBelowPlaneCloud;
   ros::Publisher pubOdomAftMapped;
   ros::Publisher pubPath;
   ros::Publisher pubLaserCloudDyn;

@@ -95,6 +95,9 @@ typedef struct VoxelPlane
   bool is_update_ = false;
   double mean_intensity_ = 0.0f;
   double intensity_std_ = 1.0f;
+  // Welford online algorithm state for incremental intensity statistics
+  double intensity_m2_ = 0.0;   // Sum of squared deviations from mean
+  int intensity_count_ = 0;     // Number of observations processed by Welford tracker
   VoxelPlane()
   {
     plane_var_ = Eigen::Matrix<double, 6, 6>::Zero();
@@ -218,7 +221,8 @@ enum PointLabel
 {
   LABEL_NORMAL = 0,
   LABEL_GROUND = 1,
-  LABEL_ISOLATED = 2
+  LABEL_ISOLATED = 2,
+  LABEL_BELOW_PLANE = 3
 };
 
 // Lightweight voxel structure for Pillar Voxel Map (decoupled from VoxelOctoTree)
@@ -259,11 +263,15 @@ typedef struct PillarVoxelConfig
   int min_adjacent_ground_num_;
   int min_adjacent_isolated_num_;
   int ground_detection_method_;
-  int neighbor_type_;  // 0=4-neighbor (N,S,E,W), 1=8-neighbor (includes diagonals)
+  int ground_neighbor_type_;     // 0=4-neighbor, 1=8-neighbor (for ground detection)
+  int isolated_neighbor_type_;   // 0=4-neighbor, 1=8-neighbor (for isolated detection)
+  double plane_fitting_distance_threshold_;
+  int skip_type_;  // 0=skip nothing extra, 1=skip below plane, 2=skip below+near plane
 
   PillarVoxelConfig() : pillar_voxel_en_(false), voxel_size_(1.0), min_adjacent_ground_num_(3),
                        min_adjacent_isolated_num_(3),
-                       ground_detection_method_(0), neighbor_type_(1) {}
+                       ground_detection_method_(0), ground_neighbor_type_(1), isolated_neighbor_type_(1),
+                       plane_fitting_distance_threshold_(0.1), skip_type_(0) {}
 } PillarVoxelConfig;
 
 void loadPillarVoxelConfig(ros::NodeHandle &nh, PillarVoxelConfig &config);
@@ -276,15 +284,21 @@ public:
   double voxel_size_;
   std::unordered_map<PILLAR_LOCATION, std::map<int64_t, PillarVoxel>> pillars_;
   std::unordered_set<PILLAR_LOCATION> current_pillars_;
-  std::vector<VOXEL_LOCATION> neighbor_offsets_;
+  std::vector<VOXEL_LOCATION> ground_neighbor_offsets_;
+  std::vector<VOXEL_LOCATION> isolated_neighbor_offsets_;
 
   std::vector<int8_t> point_labels_;
   PointCloudXYZI::Ptr point_cloud_ptr_;
 
+  // Fitted plane parameters (Method 1: plane fitting)
+  Eigen::Vector3d fitted_plane_normal_ = Eigen::Vector3d::Zero();
+  double fitted_plane_d_ = 0.0;
+  bool plane_fitted_ = false;
+
   void init(const PillarVoxelConfig &config, double voxel_size);
   void BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud);
   void GroundDetection(const Eigen::Vector3d& current_pos);
-  void PublishPillarPoints(const ros::Publisher &pubGround, const ros::Publisher &pubIsolated);
+  void PublishPillarPoints(const ros::Publisher &pubGround, const ros::Publisher &pubIsolated, const ros::Publisher &pubBelowPlane);
 
   inline int8_t GetPointLabel(size_t index) const {
     return (index < point_labels_.size()) ? point_labels_[index] : LABEL_NORMAL;

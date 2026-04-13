@@ -65,10 +65,13 @@ lio:
 pillar_voxel:
   pillar_voxel_en: true
   voxel_size: 1.0
+
+  ground_detection_method: 2  # 0=none, 1=plane fitting, 2=neighborhood
+  ground_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
   min_adjacent_ground_num: 1
+
+  isolated_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
   min_adjacent_isolated_num: 1
-  ground_detection_method: 1  # 0=none, 1=neighborhood
-  neighbor_type: 1  # 0=4-neighbor (N,S,E,W), 1=8-neighbor (includes diagonals)
 
 local_map:
   map_sliding_en: false

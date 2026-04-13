@@ -118,7 +118,7 @@ Visualization Manager:
           Class: rviz/PointCloud2
           Color: 238; 238; 236
           Color Transformer: Intensity
-          Decay Time: 30
+          Decay Time: 5
           Enabled: true
           Invert Rainbow: false
           Max Color: 255; 255; 255
@@ -565,9 +565,9 @@ Visualization Manager:
       Invert Z Axis: false
       Name: Current View
       Near Clip Distance: 0.009999999776482582
-      Pitch: 0.3047965466976166
+      Pitch: 1.5697963237762451
       Target Frame: aft_mapped
-      Yaw: 1.1303980350494385
+      Yaw: 2.330397844314575
     Saved:
       - Class: rviz/Orbit
         Distance: 117.53474426269531

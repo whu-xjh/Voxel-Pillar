@@ -22,7 +22,7 @@ extrin_calib:
   Pcl: [0.17313616, 0.0476788, -0.01933398]
 
 time_offset:
-  imu_time_offset: 0.0
+  imu_time_offset: 0.1
   img_time_offset: 0.1
   exposure_time_init: 0.0
 
@@ -75,10 +75,13 @@ lio:
 pillar_voxel:
   pillar_voxel_en: true
   voxel_size: 0.5
-  min_adjacent_ground_num: 5 
-  min_adjacent_isolated_num: 5
-  ground_detection_method: 1  # 0=none, 1=neighborhood
-  neighbor_type: 1  # 0=4-neighbor (N,S,E,W), 1=8-neighbor (includes diagonals)
+  
+  ground_detection_method: 2  # 0=none, 1=plane fitting, 2=neighborhood
+  ground_neighbor_type: 0  # 0=4-neighbor, 1=8-neighbor
+  min_adjacent_ground_num: 4 
+
+  isolated_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
+  min_adjacent_isolated_num: 8
 
 local_map:
   map_sliding_en: false
@@ -90,7 +93,7 @@ uav:
   gravity_align_en: true
 
 publish:
-  dense_map_en: false
+  dense_map_en: true
   pub_effect_en: true
   pub_plane_en: false
   pub_body_en: false
@@ -98,8 +101,8 @@ publish:
   blind_rgb_points: 0.0
 
 evo:
-  seq_name: "TartanAir_lidar_ocean"
-  pose_output_en: false
+  seq_name: "laurel_cavern"
+  pose_output_en: true
 
 lidar_save:
   save_en: false

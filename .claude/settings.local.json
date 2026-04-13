@@ -5,7 +5,10 @@
       "Bash(find:*)",
       "Bash(rm:*)",
       "Read(//home/xjh/Doc/dufomap/build/**)",
-      "Read(//home/xjh/Doc/dufomap/**)"
+      "Read(//home/xjh/Doc/dufomap/**)",
+      "Read(//home/wsl-4080/code/Voxel-Pillar/catkin_ws/**)",
+      "Bash(source /opt/ros/noetic/setup.bash)",
+      "Bash(catkin_make)"
     ],
     "deny": []
   }
