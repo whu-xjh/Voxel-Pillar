@@ -433,6 +433,8 @@ Examples:
                        help="Minimum completeness percentage, default: 90.0")
     parser.add_argument("--visualize", action="store_true",
                        help="Show interactive visualization plots")
+    parser.add_argument("--save", action="store_true",
+                       help="Save visualization plot to file")
     parser.add_argument("--save-plot", type=str, default=None,
                        help="Path to save visualization plot (PNG)")
 
@@ -456,10 +458,11 @@ Examples:
             print("Please specify --pred and --gt arguments.")
             sys.exit(1)
 
-    # Setup plot save path
-    plot_save_path = args.save_plot
-    if plot_save_path is None and args.visualize is False:
-        # Default: save plot in script directory
+    # Setup plot save path: only save when --save or --save-plot is explicitly given
+    plot_save_path = None
+    if args.save_plot:
+        plot_save_path = args.save_plot
+    elif args.save:
         sequence_name = os.path.splitext(os.path.basename(pred_path))[0]
         script_dir = os.path.dirname(os.path.abspath(__file__))
         plot_save_path = os.path.join(script_dir, f"{sequence_name}_trajectory.png")
