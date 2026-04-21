@@ -74,7 +74,7 @@ pillar_voxel:
   plane_fitting_distance_threshold: 0.1
   skip_type: 1  # 0=skip nothing extra, 1=skip below plane, 2=skip below+near plane
   ground_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
-  min_adjacent_ground_num: 6
+  min_adjacent_ground_num: 5
 
   isolated_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
   min_adjacent_isolated_num: 5

@@ -95,9 +95,8 @@ typedef struct VoxelPlane
   bool is_update_ = false;
   double mean_intensity_ = 0.0f;
   double intensity_std_ = 1.0f;
-  // Welford online algorithm state for incremental intensity statistics
-  double intensity_m2_ = 0.0;   // Sum of squared deviations from mean
-  int intensity_count_ = 0;     // Number of observations processed by Welford tracker
+  // EMA alpha for intensity statistics update (higher = faster adaptation)
+  static constexpr double intensity_ema_alpha_ = 0.05;
   VoxelPlane()
   {
     plane_var_ = Eigen::Matrix<double, 6, 6>::Zero();
