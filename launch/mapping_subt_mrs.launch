@@ -4,7 +4,7 @@
 	<arg name="rviz" default="false" />
 
 	<rosparam command="load" file="$(find voxel_pillar)/config/SubT_MRS.yaml" />
-	<node pkg="voxel_pillar" type="fastlivo_mapping" name="laserMapping" output="screen">
+	<node pkg="voxel_pillar" type="voxelpillar_mapping" name="laserMapping" output="screen">
 		<rosparam file="$(find voxel_pillar)/config/camera_pinhole_SubT_MRS.yaml" />
 	</node>
 

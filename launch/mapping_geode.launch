@@ -8,7 +8,7 @@
 	      args="compressed in:=/left_camera/image raw out:=/left_camera/image_raw" />
 
 	<rosparam command="load" file="$(find voxel_pillar)/config/GEODE.yaml" />
-	<node pkg="voxel_pillar" type="fastlivo_mapping" name="laserMapping" output="screen">
+	<node pkg="voxel_pillar" type="voxelpillar_mapping" name="laserMapping" output="screen">
 		<rosparam file="$(find voxel_pillar)/config/camera_GEODE.yaml" />
 	</node>
 

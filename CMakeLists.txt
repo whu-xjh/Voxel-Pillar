@@ -129,13 +129,13 @@ add_library(imu_proc src/IMU_Processing.cpp)
 add_library(laser_mapping src/LIVMapper.cpp)
 
 # Add the main executable
-add_executable(fastlivo_mapping src/main.cpp)
+add_executable(voxelpillar_mapping src/main.cpp)
 
 # Add livox multi-lidar merger executable
 add_executable(merge_lidar src/merge_lidar.cpp)
 
 # Link libraries to the executable
-target_link_libraries(fastlivo_mapping
+target_link_libraries(voxelpillar_mapping
   laser_mapping
   vio
   lio
@@ -157,5 +157,5 @@ target_link_libraries(
 
 # Link mimalloc if found
 if(mimalloc_FOUND)
-  target_link_libraries(fastlivo_mapping mimalloc)
+  target_link_libraries(voxelpillar_mapping mimalloc)
 endif()

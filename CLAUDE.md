@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is **voxel_pillar** (package name), a modified FAST-LIVO2 system with pillar voxel ground detection. It's a high-speed LiDAR-Inertial Odometry system supporting multi-LiDAR fusion, visual-inertial odometry, and external IMU integration optimized for high-speed scenarios (>5 m/s). The system features 250Hz IMU propagation and efficient voxel-based mapping with LRU caching.
+This is **voxel_pillar** (package name), a Voxel-Pillar system with pillar voxel ground detection. It's a high-speed LiDAR-Inertial Odometry system supporting multi-LiDAR fusion, visual-inertial odometry, and external IMU integration optimized for high-speed scenarios (>5 m/s). The system features 250Hz IMU propagation and efficient voxel-based mapping with LRU caching.
 
 ## Build System
 
@@ -38,7 +38,7 @@ catkin_make -DCMAKE_BUILD_TYPE=Debug
 ### System Components
 
 **Executables:**
-- `fastlivo_mapping`: Main mapping node (src/main.cpp)
+- `voxelpillar_mapping`: Main mapping node (src/main.cpp)
 - `merge_lidar`: Multi-LiDAR data merger (fuses 3 Livox LiDARs)
 
 **Libraries:**

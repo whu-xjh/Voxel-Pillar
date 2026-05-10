@@ -1,5 +1,5 @@
 <launch>
-<!-- Launch file for merged Livox LiDAR (159, 160, 161) and FAST-LIVO2 mapping -->
+<!-- Launch file for merged Livox LiDAR (159, 160, 161) and Voxel-Pillar mapping -->
 
 	<arg name="rviz" default="true" />
 
@@ -14,8 +14,8 @@
 	<!-- Load merged LiDAR configuration -->
 	<rosparam command="load" file="$(find voxel_pillar)/config/merge_lidar.yaml" />
 
-	<!-- FAST-LIVO2 mapping node -->
-	<node pkg="voxel_pillar" type="fastlivo_mapping" name="laserMapping" output="screen">
+	<!-- Voxel-Pillar mapping node -->
+	<node pkg="voxel_pillar" type="voxelpillar_mapping" name="laserMapping" output="screen">
 		<rosparam file="$(find voxel_pillar)/config/camera_pinhole.yaml" />
 	</node>
 

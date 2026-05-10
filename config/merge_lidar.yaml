@@ -98,7 +98,7 @@ publish:
 
 evo:
   seq_name: "shawan_tunnel"
-  pose_output_en: true
+  pose_output_en: false
 
 lidar_save:
   save_en: false
