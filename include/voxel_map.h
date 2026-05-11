@@ -249,6 +249,7 @@ typedef struct PillarVoxelConfig
   bool pillar_voxel_en_;
   double voxel_size_;
   int min_adjacent_ground_num_;
+  int ground_keep_interval_;   // 0=skip all, n=keep every n-th ground point (1=keep all)
   int min_adjacent_isolated_num_;
   int ground_detection_method_;
   int ground_neighbor_type_;     // 0=4-neighbor, 1=8-neighbor (for ground detection)
@@ -257,6 +258,7 @@ typedef struct PillarVoxelConfig
   int skip_type_;  // 0=skip nothing extra, 1=skip below plane, 2=skip below+near plane
 
   PillarVoxelConfig() : pillar_voxel_en_(false), voxel_size_(1.0), min_adjacent_ground_num_(3),
+                       ground_keep_interval_(0),
                        min_adjacent_isolated_num_(3),
                        ground_detection_method_(0), ground_neighbor_type_(1), isolated_neighbor_type_(1),
                        plane_fitting_distance_threshold_(0.1), skip_type_(0) {}
