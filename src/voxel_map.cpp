@@ -63,7 +63,7 @@ void loadPillarVoxelConfig(ros::NodeHandle &nh, PillarVoxelConfig &config)
   nh.param<bool>("pillar_voxel/pillar_voxel_en", config.pillar_voxel_en_, false);
   nh.param<double>("pillar_voxel/voxel_size", config.voxel_size_, 1.0);
   nh.param<int>("pillar_voxel/min_adjacent_ground_num", config.min_adjacent_ground_num_, 3);
-  nh.param<int>("pillar_voxel/ground_keep_interval", config.ground_keep_interval_, 0);
+  nh.param<int>("pillar_voxel/ground_keep_num_per_voxel", config.ground_keep_num_per_voxel_, 0);
   nh.param<int>("pillar_voxel/min_adjacent_isolated_num", config.min_adjacent_isolated_num_, 3);
   nh.param<int>("pillar_voxel/ground_detection_method", config.ground_detection_method_, 0);
   nh.param<int>("pillar_voxel/neighbor_type", config.ground_neighbor_type_, 1);  // legacy alias
@@ -1704,26 +1704,67 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
     const double plane_d = pillar_map_.fitted_plane_d_;
     const double distance_threshold = pillar_map_.config_.plane_fitting_distance_threshold_;
 
-    // First, skip ground-labeled points (with sparse retention)
-    int ground_counter = 0;
+    // First, skip ground-labeled points based on voxel-based newest-point retention
+    int ground_total = 0;
     int ground_kept = 0;
-    for (size_t i = 0; i < point_num; ++i)
+
+    if (pillar_map_.config_.ground_keep_num_per_voxel_ <= 0)
     {
-      if (pillar_map_.GetPointLabel(i) == LABEL_GROUND)
+      // Skip ALL ground points
+      for (size_t i = 0; i < point_num; ++i)
       {
-        if (pillar_map_.config_.ground_keep_interval_ > 0)
+        if (pillar_map_.GetPointLabel(i) == LABEL_GROUND)
         {
-          ground_counter++;
-          if (ground_counter % pillar_map_.config_.ground_keep_interval_ == 0)
+          ground_total++;
+          if (!skip_list[i])
           {
-            ground_kept++;
-            continue;  // Keep every n-th ground point
+            skip_list[i] = true;
+            final_skip_count++;
           }
         }
-        if (!skip_list[i])
+      }
+    }
+    else
+    {
+      // Keep newest n points per ground voxel
+      const int keep_num = pillar_map_.config_.ground_keep_num_per_voxel_;
+
+      for (const auto &pillar_entry : pillar_map_.pillars_)
+      {
+        for (const auto &voxel_entry : pillar_entry.second)
         {
-          skip_list[i] = true;
-          final_skip_count++;
+          const PillarVoxel &voxel = voxel_entry.second;
+
+          if (!voxel.is_ground_voxel_)
+            continue;
+
+          const std::vector<size_t> &point_indices = voxel.point_indices_;
+          int voxel_size = point_indices.size();
+
+          if (voxel_size == 0)
+            continue;
+
+          ground_total += voxel_size;
+
+          // If voxel has <= keep_num points, keep all
+          if (voxel_size <= keep_num)
+          {
+            ground_kept += voxel_size;
+            continue;
+          }
+
+          // Skip old points, keep newest 'keep_num' points (at the end of vector)
+          int num_to_skip = voxel_size - keep_num;
+          for (int i = 0; i < num_to_skip; ++i)
+          {
+            size_t point_idx = point_indices[i];
+            if (!skip_list[point_idx])
+            {
+              skip_list[point_idx] = true;
+              final_skip_count++;
+            }
+          }
+          ground_kept += keep_num;
         }
       }
     }
@@ -1772,7 +1813,7 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
     }
 
     ROS_DEBUG("[DefineSkipPoints] Method 1 (Plane Fitting): Isolated: %d, Ground: %d (kept %d/%d), Ground_near: %d, Below_ground: %d, Skip_total: %d/%zu (%.1f%%)",
-              isolated_count, ground_count, ground_kept, ground_counter, ground_near_count, ground_below_count, final_skip_count, point_num, 100.0 * final_skip_count / point_num);
+              isolated_count, ground_count, ground_kept, ground_total, ground_near_count, ground_below_count, final_skip_count, point_num, 100.0 * final_skip_count / point_num);
 
     current_skip_count_ = final_skip_count;
     total_skip_count_ += final_skip_count;
@@ -1781,32 +1822,73 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
   }
   else if (pillar_map_.config_.ground_detection_method_ == 2)
   {
-    // Method 2: Neighborhood — skip ground + isolated points (with sparse retention)
-    int ground_counter = 0;
+    // Method 2: Neighborhood — skip ground + isolated points (with newest-point retention)
+    int ground_total = 0;
     int ground_kept = 0;
-    for (size_t i = 0; i < point_num; ++i)
+
+    if (pillar_map_.config_.ground_keep_num_per_voxel_ <= 0)
     {
-      if (pillar_map_.GetPointLabel(i) == LABEL_GROUND)
+      // Skip ALL ground points
+      for (size_t i = 0; i < point_num; ++i)
       {
-        if (pillar_map_.config_.ground_keep_interval_ > 0)
+        if (pillar_map_.GetPointLabel(i) == LABEL_GROUND)
         {
-          ground_counter++;
-          if (ground_counter % pillar_map_.config_.ground_keep_interval_ == 0)
+          ground_total++;
+          if (!skip_list[i])
           {
-            ground_kept++;
-            continue;  // Keep every n-th ground point
+            skip_list[i] = true;
+            final_skip_count++;
           }
         }
-        if (!skip_list[i])
+      }
+    }
+    else
+    {
+      // Keep newest n points per ground voxel
+      const int keep_num = pillar_map_.config_.ground_keep_num_per_voxel_;
+
+      for (const auto &pillar_entry : pillar_map_.pillars_)
+      {
+        for (const auto &voxel_entry : pillar_entry.second)
         {
-          skip_list[i] = true;
-          final_skip_count++;
+          const PillarVoxel &voxel = voxel_entry.second;
+
+          if (!voxel.is_ground_voxel_)
+            continue;
+
+          const std::vector<size_t> &point_indices = voxel.point_indices_;
+          int voxel_size = point_indices.size();
+
+          if (voxel_size == 0)
+            continue;
+
+          ground_total += voxel_size;
+
+          // If voxel has <= keep_num points, keep all
+          if (voxel_size <= keep_num)
+          {
+            ground_kept += voxel_size;
+            continue;
+          }
+
+          // Skip old points, keep newest 'keep_num' points (at the end of vector)
+          int num_to_skip = voxel_size - keep_num;
+          for (int i = 0; i < num_to_skip; ++i)
+          {
+            size_t point_idx = point_indices[i];
+            if (!skip_list[point_idx])
+            {
+              skip_list[point_idx] = true;
+              final_skip_count++;
+            }
+          }
+          ground_kept += keep_num;
         }
       }
     }
 
     ROS_DEBUG("[DefineSkipPoints] Method 2 (Neighborhood): Isolated: %d, Ground: %d (kept %d/%d), Skip_total: %d/%zu (%.1f%%)",
-              isolated_count, ground_count, ground_kept, ground_counter, final_skip_count, point_num, 100.0 * final_skip_count / point_num);
+              isolated_count, ground_count, ground_kept, ground_total, final_skip_count, point_num, 100.0 * final_skip_count / point_num);
 
     current_skip_count_ = final_skip_count;
     total_skip_count_ += final_skip_count;

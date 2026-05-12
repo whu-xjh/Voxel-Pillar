@@ -90,6 +90,7 @@ pillar_voxel:
   ground_detection_method: 2  # 0=none, 1=plane fitting, 2=neighborhood
   ground_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
   min_adjacent_ground_num: 3
+  ground_keep_num_per_voxel: 1  # 0=skip all ground points, n=keep n newest points per ground voxel
 
   isolated_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
   min_adjacent_isolated_num: 3
