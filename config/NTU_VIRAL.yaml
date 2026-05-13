@@ -94,6 +94,7 @@ publish:
 evo:
   seq_name: "nya_03"
   pose_output_en: true
+  pose_output_dir: ""
 
 pcd_save:
   save_en: false

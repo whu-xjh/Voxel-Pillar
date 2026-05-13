@@ -133,6 +133,7 @@ evo:
   # Tunneling_Tunnel: seq_name: "tunneling_tunnel1"
   seq_name: "tunneling_tunnel2"
   pose_output_en: true
+  pose_output_dir: ""
 
 lidar_save:
   save_en: false

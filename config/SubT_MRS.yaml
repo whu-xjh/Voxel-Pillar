@@ -12,7 +12,7 @@ extrin_calib:
   # Corridor: extrinsic_R: [0.999954875339377, 0.0, 0.009499857104811, 0.0, 1.0, 0.0, -0.009499857104811, 0.0, 0.999954875339377]
 
   # UGV1
-  extrinsic_T: [0.0, 0.0, 0.0]
+  extrinsic_T: [0.080, 0.029, 0.030]
   extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
 
   # Camera to IMU extrinsic (Corridor)
@@ -68,7 +68,7 @@ lio:
   layer_init_num: [5, 5, 5, 5, 5]
   sigma_num: 3
   capacity: 0  # LRU cache (0 = disable)
-  rf_enhance_en: true  # Range Field enhancement
+  rf_enhance_en: false  # Range Field enhancement
   intensity_fusion_en: true
  
 # Pillar Voxel Ground Detection
@@ -77,8 +77,8 @@ pillar_voxel:
   voxel_size: 0.5
   
   ground_detection_method: 2  # 0=none, 1=plane fitting, 2=neighborhood
-  ground_neighbor_type: 0  # 0=4-neighbor, 1=8-neighbor
-  min_adjacent_ground_num: 4
+  ground_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
+  min_adjacent_ground_num: 6
   ground_keep_num_per_voxel: 1  # 0=skip all ground points, n=keep n newest points per ground voxel
 
   isolated_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
@@ -104,6 +104,7 @@ publish:
 evo:
   seq_name: "laurel_cavern"
   pose_output_en: true
+  pose_output_dir: "/home/wsl-4080/code/traj_evo/pred/voxel-pillar/"
 
 lidar_save:
   save_en: false

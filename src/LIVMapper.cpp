@@ -85,6 +85,7 @@ void LIVMapper::readParameters(ros::NodeHandle &nh)
 
   nh.param<string>("evo/seq_name", seq_name, "01");
   nh.param<bool>("evo/pose_output_en", pose_output_en, false);
+  nh.param<string>("evo/pose_output_dir", pose_output_dir, "");
   nh.param<double>("imu/gyr_cov", gyr_cov, 1.0);
   nh.param<double>("imu/acc_cov", acc_cov, 1.0);
   nh.param<int>("imu/imu_int_frame", imu_int_frame, 3);
@@ -542,20 +543,36 @@ void LIVMapper::handleLIO()
   }
 
   // Output pose to file (if enabled)
-  if (pose_output_en) 
+  if (pose_output_en)
   {
     static bool pos_opend = false;
     static int ocount = 0;
     std::ofstream outFile, evoFile;
-    if (!pos_opend) 
+
+    // Determine output directory
+    std::string output_dir;
+    if (pose_output_dir.empty())
     {
-      evoFile.open(std::string(ROOT_DIR) + "Log/result/" + seq_name + ".txt", std::ios::out);
+      output_dir = std::string(ROOT_DIR) + "Log/result/";
+    }
+    else
+    {
+      output_dir = pose_output_dir;
+      // Ensure directory ends with '/'
+      if (output_dir.back() != '/') output_dir += '/';
+    }
+
+    std::string output_path = output_dir + seq_name + ".txt";
+
+    if (!pos_opend)
+    {
+      evoFile.open(output_path, std::ios::out);
       pos_opend = true;
       if (!evoFile.is_open()) ROS_ERROR("open fail\n");
-    } 
-    else 
+    }
+    else
     {
-      evoFile.open(std::string(ROOT_DIR) + "Log/result/" + seq_name + ".txt", std::ios::app);
+      evoFile.open(output_path, std::ios::app);
       if (!evoFile.is_open()) ROS_ERROR("open fail\n");
     }
     Eigen::Matrix4d outT;

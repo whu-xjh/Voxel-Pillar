@@ -91,6 +91,7 @@ publish:
 evo:
   seq_name: "shawan_tunnel_back_basement_cpt7"
   pose_output_en: true
+  pose_output_dir: ""
 
 lidar_save:
   save_en: false

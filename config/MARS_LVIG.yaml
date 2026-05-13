@@ -114,6 +114,7 @@ publish:
 evo:
   seq_name: "HKisland03"
   pose_output_en: false
+  pose_output_dir: ""
 
 pcd_save:
   save_en: false
