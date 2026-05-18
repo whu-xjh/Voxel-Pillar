@@ -11,9 +11,21 @@ extrin_calib:
   # Cave: extrinsic_T: [0.080, 0.029, 0.030]
   # Corridor: extrinsic_R: [0.999954875339377, 0.0, 0.009499857104811, 0.0, 1.0, 0.0, -0.009499857104811, 0.0, 0.999954875339377]
 
-  # UGV1
+  # Laurel_Cavern
+  # extrinsic_T: [0.080, 0.029, 0.030]
+  # extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+
+  # Final_Challenge, Urban_Challenge
+  # extrinsic_T: [0.0, 0.0, 0.0]
+  # extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+
+  # Long_Corridor
   extrinsic_T: [0.080, 0.029, 0.030]
-  extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+  extrinsic_R: [0.9992129, -0.000519121,  0.004, 0.000516111,  0.999218492, -0.000939132, -0.004,  0.000802565,  0.999993652]
+
+  # Multi_Floor
+  # extrinsic_T: [0.080, 0.029, 0.030]
+  # extrinsic_R: [0.999945562, 0.009074807,  0.005149763, -0.009060897, 0.999955255, -0.002718066, -0.005174199, 0.002671256,  0.999983046]
 
   # Camera to IMU extrinsic (Corridor)
   Rcl: [-0.01578308, -0.01124397,  0.99981222,
@@ -50,11 +62,15 @@ vio:
 # IMU
 imu:
   imu_en: true
-  imu_int_frame: 50
-  acc_cov: 0.2
-  gyr_cov: 0.05
-  b_acc_cov: 0.00005
-  b_gyr_cov: 0.00005
+  imu_int_frame: 30
+  acc_cov: 0.1
+  gyr_cov: 0.1
+  b_acc_cov: 0.0001
+  b_gyr_cov: 0.0001
+  # acc_cov: 0.2
+  # gyr_cov: 0.05
+  # b_acc_cov: 0.00005
+  # b_gyr_cov: 0.00005
 
 # LiDAR-Inertial Odometry
 lio:
@@ -62,27 +78,27 @@ lio:
   dept_err: 0.03
   beam_err: 0.05
   min_eigen_value: 0.0025
-  voxel_size: 0.5
+  voxel_size: 0.4
   max_layer: 2
   max_points_num: 100
   layer_init_num: [5, 5, 5, 5, 5]
   sigma_num: 3
   capacity: 0  # LRU cache (0 = disable)
-  rf_enhance_en: false  # Range Field enhancement
+  rf_enhance_en: true  # Range Field enhancement
   intensity_fusion_en: true
  
 # Pillar Voxel Ground Detection
 pillar_voxel:
   pillar_voxel_en: true
-  voxel_size: 0.5
+  voxel_size: 0.4
   
   ground_detection_method: 2  # 0=none, 1=plane fitting, 2=neighborhood
   ground_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
-  min_adjacent_ground_num: 6
-  ground_keep_num_per_voxel: 1  # 0=skip all ground points, n=keep n newest points per ground voxel
+  min_adjacent_ground_num: 5
+  ground_keep_num_per_voxel: 5  # 0=skip all ground points, n=keep n newest points per ground voxel
 
   isolated_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
-  min_adjacent_isolated_num: 8
+  min_adjacent_isolated_num: 2  
 
 local_map:
   map_sliding_en: false
@@ -102,7 +118,7 @@ publish:
   blind_rgb_points: 0.0
 
 evo:
-  seq_name: "laurel_cavern"
+  seq_name: "result"
   pose_output_en: true
   pose_output_dir: "/home/wsl-4080/code/traj_evo/pred/voxel-pillar/"
 

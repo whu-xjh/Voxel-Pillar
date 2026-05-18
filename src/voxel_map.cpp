@@ -612,7 +612,8 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
     // Check convergence
     auto rot_add = solution.block<3, 1>(0, 0);
     auto t_add = solution.block<3, 1>(3, 0);
-    if ((rot_add.norm() * 57.3 < 0.01) && (t_add.norm() * 100 < 0.015)) { flg_EKF_converged = true; }
+    // if ((rot_add.norm() * 57.3 < 0.01) && (t_add.norm() * 100 < 0.015)) { flg_EKF_converged = true; }
+    if ((rot_add.norm() * 57.3 < 0.005) && (t_add.norm() * 100 < 0.010)) { flg_EKF_converged = true; }
     V3D euler_cur = state_.rot_end.eulerAngles(2, 1, 0);
 
     /*** Rematch Judgement ***/
