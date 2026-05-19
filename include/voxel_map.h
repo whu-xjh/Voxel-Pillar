@@ -248,18 +248,18 @@ typedef struct PillarVoxelConfig
 {
   bool pillar_voxel_en_;
   double voxel_size_;
-  int min_adjacent_ground_num_;
-  int ground_keep_num_per_voxel_;   // 0=skip all, n=keep n newest points per ground voxel
-  int min_adjacent_isolated_num_;
+  int adjacent_ground_threshold_;
+  int keep_num_per_voxel_;   // 0=skip all, n=keep n newest points per ground voxel
+  int adjacent_isolated_threshold_;
   int ground_detection_method_;
   int ground_neighbor_type_;     // 0=4-neighbor, 1=8-neighbor (for ground detection)
   int isolated_neighbor_type_;   // 0=4-neighbor, 1=8-neighbor (for isolated detection)
   double plane_fitting_distance_threshold_;
   int skip_type_;  // 0=skip nothing extra, 1=skip below plane, 2=skip below+near plane
 
-  PillarVoxelConfig() : pillar_voxel_en_(false), voxel_size_(1.0), min_adjacent_ground_num_(3),
-                       ground_keep_num_per_voxel_(1),
-                       min_adjacent_isolated_num_(3),
+  PillarVoxelConfig() : pillar_voxel_en_(false), voxel_size_(1.0), adjacent_ground_threshold_(3),
+                       keep_num_per_voxel_(1),
+                       adjacent_isolated_threshold_(3),
                        ground_detection_method_(0), ground_neighbor_type_(1), isolated_neighbor_type_(1),
                        plane_fitting_distance_threshold_(0.1), skip_type_(0) {}
 } PillarVoxelConfig;
@@ -300,6 +300,7 @@ private:
   void UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_key, std::map<int64_t, PillarVoxel> &pillar_voxels, const Eigen::Vector3d& current_pos);
   bool hasAdjacentGroundVoxel(const PillarVoxel *voxel, const VOXEL_LOCATION &current_pos);
   bool hasAdjacentTopVoxel(const VOXEL_LOCATION &current_pos);
+  bool hasAdjacentVoxel(const VOXEL_LOCATION &current_pos, int threshold, const std::vector<VOXEL_LOCATION> &neighbor_offsets);
 };
 
 class VoxelMapManager

@@ -62,9 +62,9 @@ void loadPillarVoxelConfig(ros::NodeHandle &nh, PillarVoxelConfig &config)
 {
   nh.param<bool>("pillar_voxel/pillar_voxel_en", config.pillar_voxel_en_, false);
   nh.param<double>("pillar_voxel/voxel_size", config.voxel_size_, 1.0);
-  nh.param<int>("pillar_voxel/min_adjacent_ground_num", config.min_adjacent_ground_num_, 3);
-  nh.param<int>("pillar_voxel/ground_keep_num_per_voxel", config.ground_keep_num_per_voxel_, 0);
-  nh.param<int>("pillar_voxel/min_adjacent_isolated_num", config.min_adjacent_isolated_num_, 3);
+  nh.param<int>("pillar_voxel/adjacent_ground_threshold", config.adjacent_ground_threshold_, 3);
+  nh.param<int>("pillar_voxel/keep_num_per_voxel", config.keep_num_per_voxel_, 0);
+  nh.param<int>("pillar_voxel/adjacent_isolated_threshold", config.adjacent_isolated_threshold_, 3);
   nh.param<int>("pillar_voxel/ground_detection_method", config.ground_detection_method_, 0);
   nh.param<int>("pillar_voxel/neighbor_type", config.ground_neighbor_type_, 1);  // legacy alias
   nh.param<int>("pillar_voxel/ground_neighbor_type", config.ground_neighbor_type_, config.ground_neighbor_type_);
@@ -1312,30 +1312,26 @@ void PillarVoxelMap::UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_key
     }
   };
 
-  for (auto &voxel_pair : pillar_voxels)
-  {
-    voxel_pair.second.is_ground_voxel_ = false;
-    setVoxelPointLabels(&voxel_pair.second, LABEL_NORMAL);
-  }
-
   PillarVoxel* bottom_voxel = &pillar_voxels.begin()->second;
-  bottom_voxel->is_ground_voxel_ = true;
-
-  for (size_t idx : bottom_voxel->point_indices_) {
-    if (idx < point_labels_.size()) {
-      point_labels_[idx] = LABEL_GROUND;
+  if (!(std::next(pillar_voxels.begin()) != pillar_voxels.end() && (std::next(pillar_voxels.begin())->second).center_z_ - bottom_voxel->center_z_ < (voxel_size_ * 2))) {
+    bottom_voxel->is_ground_voxel_ = true;
+    for (size_t idx : bottom_voxel->point_indices_) {
+      if (idx < point_labels_.size()) {
+        point_labels_[idx] = LABEL_GROUND;
+      }
     }
   }
 
   if (pillar_voxels.size() == 1) {
-    setVoxelPointLabels(bottom_voxel, LABEL_ISOLATED);
+    PillarVoxel* voxel = &std::next(pillar_voxels.begin())->second;
+    setVoxelPointLabels(voxel, LABEL_ISOLATED);
   }
-  else if (pillar_voxels.size() == 2)
+  if (pillar_voxels.size() == 2)
   {
     PillarVoxel* top_voxel = &std::next(pillar_voxels.begin())->second;
     auto z_diff = top_voxel->center_z_ - bottom_voxel->center_z_;
 
-    if (z_diff > voxel_size_) {
+    if (z_diff >= (voxel_size_ * 2)) {
       setVoxelPointLabels(bottom_voxel, LABEL_ISOLATED);
       setVoxelPointLabels(top_voxel, LABEL_ISOLATED);
     }
@@ -1349,11 +1345,11 @@ void PillarVoxelMap::UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_key
       down_z_diff = pillar_iter->second.center_z_ - std::prev(pillar_iter)->second.center_z_;
       up_z_diff = std::next(pillar_iter)->second.center_z_ - pillar_iter->second.center_z_;
 
-      if (down_z_diff > voxel_size_ && up_z_diff > voxel_size_) {
+      if (down_z_diff >= (voxel_size_ * 2) && up_z_diff >= (voxel_size_ * 2)) {
         setVoxelPointLabels(&pillar_iter->second, LABEL_ISOLATED);
       }
     }
-    if (up_z_diff > voxel_size_) {
+    if (up_z_diff >= (voxel_size_ * 2)) {
       setVoxelPointLabels(&pillar_voxels.rbegin()->second, LABEL_ISOLATED);
     }
   }
@@ -1378,7 +1374,7 @@ bool PillarVoxelMap::hasAdjacentGroundVoxel(const PillarVoxel *voxel, const VOXE
 {
   (void)voxel;
 
-  if (config_.min_adjacent_ground_num_ <= 0) {
+  if (config_.adjacent_ground_threshold_ <= 0) {
     return false;
   }
 
@@ -1402,11 +1398,11 @@ bool PillarVoxelMap::hasAdjacentGroundVoxel(const PillarVoxel *voxel, const VOXE
       if (first_voxel && first_voxel->is_ground_voxel_) {
         int64_t height_diff = std::abs(current_elevation - pillar_iter->second.begin()->first);
 
-        if (height_diff <= 0) {
+        if (height_diff == 0) {
           adjacent_ground_count++;
         }
 
-        if (adjacent_ground_count >= config_.min_adjacent_ground_num_){
+        if (adjacent_ground_count >= config_.adjacent_ground_threshold_){
           return true;
         }
       }
@@ -1418,7 +1414,7 @@ bool PillarVoxelMap::hasAdjacentGroundVoxel(const PillarVoxel *voxel, const VOXE
 
 bool PillarVoxelMap::hasAdjacentTopVoxel(const VOXEL_LOCATION &current_pos)
 {
-  if (config_.min_adjacent_isolated_num_ <= 0) {
+  if (config_.adjacent_isolated_threshold_ <= 0) {
     return false;
   }
 
@@ -1441,11 +1437,44 @@ bool PillarVoxelMap::hasAdjacentTopVoxel(const VOXEL_LOCATION &current_pos)
       if (last_voxel) {
         int64_t height_diff = std::abs(current_elevation - pillar_iter->second.rbegin()->first);
 
-        if (height_diff  <= 1) {
+        if (height_diff  == 0) {
           adjacent_count++;
         }
 
-        if (adjacent_count >= config_.min_adjacent_isolated_num_){
+        if (adjacent_count >= config_.adjacent_isolated_threshold_){
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
+}
+
+bool PillarVoxelMap::hasAdjacentVoxel(const VOXEL_LOCATION &current_pos, int threshold, const std::vector<VOXEL_LOCATION> &neighbor_offsets)
+{
+  if (threshold <= 0) {
+    return false;
+  }
+
+  int adjacent_count = 0;
+  int64_t current_z = current_pos.z;
+
+  for (const auto& voxel_offset : neighbor_offsets) {
+    VOXEL_LOCATION adjacent_pos = {
+      current_pos.x + voxel_offset.x,
+      current_pos.y + voxel_offset.y,
+      current_pos.z
+    };
+
+    PILLAR_LOCATION adjacent_pillar = GetPillarLocation(adjacent_pos);
+
+    auto pillar_iter = pillars_.find(adjacent_pillar);
+    if (pillar_iter != pillars_.end() && !pillar_iter->second.empty()) {
+      auto voxel_iter = pillar_iter->second.find(current_z);
+      if (voxel_iter != pillar_iter->second.end()) {
+        adjacent_count++;
+        if (adjacent_count >= threshold) {
           return true;
         }
       }
@@ -1483,7 +1512,10 @@ void PillarVoxelMap::BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud)
     if (voxel_it == pillar_map.end())
     {
       double center_z = (voxel_location.z + 0.5) * voxel_size_;
-      voxel_it = pillar_map.emplace(voxel_key, PillarVoxel(center_z)).first;
+      PillarVoxel new_voxel(center_z);
+      new_voxel.is_ground_voxel_ = false;
+      new_voxel.is_isolated_voxel_ = false;
+      voxel_it = pillar_map.emplace(voxel_key, new_voxel).first;
     }
 
     PillarVoxel& voxel = voxel_it->second;
@@ -1501,12 +1533,6 @@ void PillarVoxelMap::GroundDetection(const Eigen::Vector3d& current_pos)
     auto pillar_iter = pillars_.find(pillar_key);
     if (pillar_iter == pillars_.end() || pillar_iter->second.empty())
       continue;
-
-    // Reset ground flags first
-    for (auto& voxel_pair : pillar_iter->second)
-    {
-      voxel_pair.second.is_ground_voxel_ = false;
-    }
 
     // Update ground flags in same iteration
     UpdateGroundFlagForPillar(pillar_key, pillar_iter->second, current_pos);
@@ -1528,7 +1554,7 @@ void PillarVoxelMap::GroundDetection(const Eigen::Vector3d& current_pos)
     if (!bottom_voxel->is_ground_voxel_) continue;
 
     // Adjacency check (if enabled)
-    if (config_.min_adjacent_ground_num_ > 0)
+    if (config_.adjacent_ground_threshold_ > 0)
     {
       VOXEL_LOCATION bottom_loc;
       bottom_loc.x = pillar_key.axis1;
@@ -1665,9 +1691,12 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
 
     if (label == LABEL_ISOLATED)
     {
-      skip_list[i] = true;
+      if (pillar_map_.config_.keep_num_per_voxel_ <= 0)
+      {
+        skip_list[i] = true;
+        final_skip_count++;
+      }
       isolated_count++;
-      final_skip_count++;
     }
     else if (label == LABEL_GROUND)
     {
@@ -1709,7 +1738,7 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
     int ground_total = 0;
     int ground_kept = 0;
 
-    if (pillar_map_.config_.ground_keep_num_per_voxel_ <= 0)
+    if (pillar_map_.config_.keep_num_per_voxel_ <= 0)
     {
       // Skip ALL ground points
       for (size_t i = 0; i < point_num; ++i)
@@ -1728,7 +1757,7 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
     else
     {
       // Keep newest n points per ground voxel
-      const int keep_num = pillar_map_.config_.ground_keep_num_per_voxel_;
+      const int keep_num = pillar_map_.config_.keep_num_per_voxel_;
 
       for (const auto &pillar_entry : pillar_map_.pillars_)
       {
@@ -1736,7 +1765,7 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
         {
           const PillarVoxel &voxel = voxel_entry.second;
 
-          if (!voxel.is_ground_voxel_)
+          if (!voxel.is_ground_voxel_ && !voxel.is_isolated_voxel_)
             continue;
 
           const std::vector<size_t> &point_indices = voxel.point_indices_;
@@ -1827,7 +1856,7 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
     int ground_total = 0;
     int ground_kept = 0;
 
-    if (pillar_map_.config_.ground_keep_num_per_voxel_ <= 0)
+    if (pillar_map_.config_.keep_num_per_voxel_ <= 0)
     {
       // Skip ALL ground points
       for (size_t i = 0; i < point_num; ++i)
@@ -1846,7 +1875,7 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
     else
     {
       // Keep newest n points per ground voxel
-      const int keep_num = pillar_map_.config_.ground_keep_num_per_voxel_;
+      const int keep_num = pillar_map_.config_.keep_num_per_voxel_;
 
       for (const auto &pillar_entry : pillar_map_.pillars_)
       {
@@ -1854,7 +1883,7 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
         {
           const PillarVoxel &voxel = voxel_entry.second;
 
-          if (!voxel.is_ground_voxel_)
+          if (!voxel.is_ground_voxel_ && !voxel.is_isolated_voxel_)
             continue;
 
           const std::vector<size_t> &point_indices = voxel.point_indices_;

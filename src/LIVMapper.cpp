@@ -422,7 +422,7 @@ void LIVMapper::handleLIO()
   if (feats_undistort->empty() || (feats_undistort == nullptr))
   {
     std::cout << "[ LIO ]: No point!!!" << std::endl;
-    return;
+    return; 
   }
 
   // Point cloud downsampling
@@ -457,11 +457,6 @@ void LIVMapper::handleLIO()
   if (pillar_config.pillar_voxel_en_)
   {
     t_pillar1 = omp_get_wtime();
-
-    // *origin_feats_down_body_ = *feats_down_body;
-    // *origin_feats_down_world_ = *feats_down_world;
-    // origin_feats_down_size_ = feats_down_size;
-
     voxelmap_manager->pillar_map_.BuildPillarMap(feats_down_world);
     voxelmap_manager->pillar_map_.GroundDetection(_state.pos_end);
     voxelmap_manager->DefineSkipPoints(feats_down_world);
@@ -487,51 +482,6 @@ void LIVMapper::handleLIO()
   // }
   
   double t2 = omp_get_wtime();
-
-  /*
-    1. Prediction Layer - IMU Pre-integration (outside StateEstimation)
-
-    state_propagat - State obtained via IMU pre-integration
-    - IMU provides high-frequency angular velocity and acceleration measurements
-    - Pre-integration yields pose prediction
-    - This prediction serves as initial value for ICP optimization
-
-    2. Observation Layer - Point Cloud Registration (BuildResidualListOMP)
-
-    // Build observation: point-to-plane distance
-    for (int i = 0; i < effct_feat_num_; i++)
-    {
-        meas_vec(i) = -ptpl_list_[i].dis_to_plane_;  // Observation value
-    }
-    - Align current frame point cloud with planes in map
-    - Point-to-plane distance used as observation
-    - This observation corrects IMU prediction
-
-    3. Fusion Layer - Kalman Filter (StateEstimation core)
-
-    // Kalman filter fuses prediction and observation
-    solution = K_1.block<DIM_STATE, 6>(0, 0) * HTz +
-              vec.block<DIM_STATE, 1>(0, 0) -
-              G.block<DIM_STATE, 6>(0, 0) * vec.block<6, 1>(0, 0);
-    state_ += solution;  // Update final state
-
-    Key Difference: Traditional ICP vs EKF-based ICP
-
-    Traditional ICP:
-
-    // Directly minimize point-to-plane distance
-    while (!converged) {
-        FindCorrespondences();
-        ComputeTransform();
-        ApplyTransform();
-    }
-
-    EKF-based ICP:
-
-    // Use Kalman filter framework
-    Prediction:  state_pred = f(state_prev, imu_data)  // IMU prediction
-    Correction:  state_corr = state_pred + K * (z - h(state_pred))  // Point cloud correction
-  */
 
   // If IMU propagation is enabled, update related flags and state for high-frequency IMU propagation
   if (imu_prop_enable)
@@ -591,6 +541,7 @@ void LIVMapper::handleLIO()
   double t3 = omp_get_wtime();
   PointCloudXYZI::Ptr world_lidar(new PointCloudXYZI());
   transformLidar(_state.rot_end, _state.pos_end, feats_down_body, world_lidar);
+
   // Compute covariance and uncertainty for each point
   /*
     (1) Weighted Optimization

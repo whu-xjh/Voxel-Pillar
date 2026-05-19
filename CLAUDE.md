@@ -101,8 +101,8 @@ catkin_make -DCMAKE_BUILD_TYPE=Debug
 **Configuration Parameters**:
 - `pillar_voxel_en`: Enable/disable entire system (default: true)
 - `voxel_size`: Pillar voxel resolution (default: 1.0)
-- `min_adjacent_ground_num`: Minimum adjacent ground voxels required (default: 5, set 0 to disable)
-- `min_adjacent_isolated_num`: Minimum adjacent voxels for isolation check (default: 5)
+- `adjacent_ground_threshold`: Minimum adjacent ground voxels required (default: 5, set 0 to disable)
+- `adjacent_isolated_threshold`: Minimum adjacent voxels for isolation check (default: 5)
 - `height_angle_check_en`: Enable height-angle pre-filtering (default: true)
 - `height_angle_threshold`: Height-angle threshold in degrees (default: 0)
 - `ground_detection_method`: Ground detection method (0=none, 1=neighborhood, default: 1)
@@ -215,8 +215,8 @@ Uncomment and add to `<node>` tag:
 **Pillar Voxel System** (lines 68-78):
 - `pillar_voxel/pillar_voxel_en`: Enable pillar voxel ground detection (default: true)
 - `pillar_voxel/voxel_size`: Pillar voxel resolution (default: 1.0)
-- `pillar_voxel/min_adjacent_ground_num`: Minimum adjacent ground voxels (default: 5)
-- `pillar_voxel/min_adjacent_isolated_num`: Minimum adjacent voxels for isolation (default: 5)
+- `pillar_voxel/adjacent_ground_threshold`: Minimum adjacent ground voxels (default: 5)
+- `pillar_voxel/adjacent_isolated_threshold`: Minimum adjacent voxels for isolation (default: 5)
 - `pillar_voxel/neighbor_search_type`: 0=8-neighbor, 1=24-neighbor (default: 0)
 - `pillar_voxel/height_angle_check_en`: Enable height-angle filtering (default: true)
 - `pillar_voxel/height_angle_threshold`: Height-angle threshold in degrees (default: 0)

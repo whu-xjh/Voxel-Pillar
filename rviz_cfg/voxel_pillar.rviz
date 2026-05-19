@@ -42,7 +42,7 @@ Panels:
   - Class: rviz/Time
     Name: Time
     SyncMode: 0
-    SyncSource: ""
+    SyncSource: surround
 Preferences:
   PromptSaveOnExit: true
 Toolbars:
@@ -118,7 +118,7 @@ Visualization Manager:
           Class: rviz/PointCloud2
           Color: 238; 238; 236
           Color Transformer: Intensity
-          Decay Time: 5
+          Decay Time: 10
           Enabled: true
           Invert Rainbow: false
           Max Color: 255; 255; 255

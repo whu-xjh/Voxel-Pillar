@@ -23,6 +23,9 @@ extrin_calib:
   extrinsic_T: [0.080, 0.029, 0.030]
   extrinsic_R: [0.9992129, -0.000519121,  0.004, 0.000516111,  0.999218492, -0.000939132, -0.004,  0.000802565,  0.999993652]
 
+  # extrinsic_T: [0.131918, 0.026435, 0.167568]
+  # extrinsic_R: [0.999818, 0.011700, 0.015088, -0.011806, 0.999906, 0.006973, -0.015005, -0.007150, 0.999862]
+
   # Multi_Floor
   # extrinsic_T: [0.080, 0.029, 0.030]
   # extrinsic_R: [0.999945562, 0.009074807,  0.005149763, -0.009060897, 0.999955255, -0.002718066, -0.005174199, 0.002671256,  0.999983046]
@@ -39,7 +42,7 @@ time_offset:
   exposure_time_init: 0.0
 
 preprocess:
-  point_filter_num: 1
+  point_filter_num: 5
   filter_size_surf: 0.1
   lidar_type: 2  # Velodyne
   scan_line: 16
@@ -63,10 +66,10 @@ vio:
 imu:
   imu_en: true
   imu_int_frame: 30
-  acc_cov: 0.1
+  acc_cov: 0.2
   gyr_cov: 0.1
-  b_acc_cov: 0.0001
-  b_gyr_cov: 0.0001
+  b_acc_cov: 0.00001
+  b_gyr_cov: 0.00001
   # acc_cov: 0.2
   # gyr_cov: 0.05
   # b_acc_cov: 0.00005
@@ -80,25 +83,26 @@ lio:
   min_eigen_value: 0.0025
   voxel_size: 0.4
   max_layer: 2
-  max_points_num: 100
+  max_points_num: 50 
   layer_init_num: [5, 5, 5, 5, 5]
   sigma_num: 3
   capacity: 0  # LRU cache (0 = disable)
-  rf_enhance_en: true  # Range Field enhancement
+  rf_enhance_en: false  # Range Field enhancement
   intensity_fusion_en: true
  
-# Pillar Voxel Ground Detection
+# Pillar Voxel Ground Detection 
 pillar_voxel:
   pillar_voxel_en: true
   voxel_size: 0.4
   
-  ground_detection_method: 2  # 0=none, 1=plane fitting, 2=neighborhood
+  ground_detection_method: 2  # 0=none, 1=plane fitting, 2=neighborhood 
   ground_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
-  min_adjacent_ground_num: 5
-  ground_keep_num_per_voxel: 5  # 0=skip all ground points, n=keep n newest points per ground voxel
+  adjacent_ground_threshold: 4 
 
   isolated_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
-  min_adjacent_isolated_num: 2  
+  adjacent_isolated_threshold: 3  
+
+  keep_num_per_voxel: 1  # 0=skip all ground points, n=keep n newest points per ground voxel
 
 local_map:
   map_sliding_en: false
@@ -106,7 +110,7 @@ local_map:
   sliding_thresh: 8
 
 uav:
-  imu_rate_odom: true
+  imu_rate_odom: false
   gravity_align_en: true
 
 publish:
