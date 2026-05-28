@@ -458,7 +458,7 @@ void LIVMapper::handleLIO()
   {
     t_pillar1 = omp_get_wtime();
     voxelmap_manager->pillar_map_.BuildPillarMap(feats_down_world);
-    voxelmap_manager->pillar_map_.GroundDetection(_state.pos_end);
+    voxelmap_manager->pillar_map_.pillarDetection(_state.pos_end);
     voxelmap_manager->DefineSkipPoints(feats_down_world);
     voxelmap_manager->pillar_map_.PublishPillarPoints(pubGroundCloud, pubIsolatedCloud, pubBelowPlaneCloud);
     voxelmap_manager->ClearPillarVoxels();

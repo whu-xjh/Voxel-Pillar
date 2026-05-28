@@ -287,7 +287,7 @@ public:
 
   void init(const PillarVoxelConfig &config, double voxel_size);
   void BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud);
-  void GroundDetection(const Eigen::Vector3d& current_pos);
+  void pillarDetection(const Eigen::Vector3d& current_pos);
   void PublishPillarPoints(const ros::Publisher &pubGround, const ros::Publisher &pubIsolated, const ros::Publisher &pubBelowPlane);
 
   inline int8_t GetPointLabel(size_t index) const {
@@ -295,9 +295,10 @@ public:
   }
 
 private:
+  void setVoxelPointLabels(PillarVoxel* voxel, int8_t label);
   void initHorizontalNeighborOffsets();
   PILLAR_LOCATION GetPillarLocation(const VOXEL_LOCATION &position) const;
-  void UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_key, std::map<int64_t, PillarVoxel> &pillar_voxels, const Eigen::Vector3d& current_pos);
+  void updatePillarFlag(const PILLAR_LOCATION &pillar_key, std::map<int64_t, PillarVoxel> &pillar_voxels);
   bool hasAdjacentGroundVoxel(const PillarVoxel *voxel, const VOXEL_LOCATION &current_pos);
   bool hasAdjacentTopVoxel(const VOXEL_LOCATION &current_pos);
   bool hasAdjacentVoxel(const VOXEL_LOCATION &current_pos, int threshold, const std::vector<VOXEL_LOCATION> &neighbor_offsets);
