@@ -30,11 +30,11 @@ time_offset:
 
 preprocess:
   hilti_en: true
-  point_filter_num: 1
-  filter_size_surf: 0.2
+  point_filter_num: 5
+  filter_size_surf: 0.1
   lidar_type: 5  # HesaiXT32
   scan_line: 32
-  blind: 0.3
+  blind: 0.6
 
 vio:
   max_iterations: 5
@@ -51,18 +51,30 @@ vio:
 
 imu:
   imu_en: true
-  imu_int_frame: 30
+  imu_int_frame: 50
   acc_cov: 0.5
   gyr_cov: 0.01
   b_acc_cov: 0.0001
   b_gyr_cov: 0.0001
+
+  # exp03
+  # acc_cov: 0.5wo
+  # gyr_cov: 0.5
+  # b_acc_cov: 0.0001
+  # b_gyr_cov: 0.0001
+
+  # exp10
+  # acc_cov: 0.2
+  # gyr_cov: 0.01
+  # b_acc_cov: 0.0001
+  # b_gyr_cov: 0.0001
 
 lio:
   max_iterations: 5
   dept_err: 0.02
   beam_err: 0.05
   min_eigen_value: 0.0001
-  voxel_size: 0.4
+  voxel_size: 0.5
   max_layer: 2
   max_points_num: 100
   layer_init_num: [5, 5, 5, 5, 5]
@@ -70,20 +82,23 @@ lio:
   rf_enhance_en: false  # Range Field enhancement
   intensity_fusion_en: true
 
-# Pillar Voxel Ground Detection
+# Pillar Voxel Redundant Detection
 pillar_voxel:
   pillar_voxel_en: true
-  voxel_size: 1.0
+  voxel_size: 0.25
 
-  ground_detection_method: 2  # 0=none, 1=plane fitting, 2=neighborhood
-  ground_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
-  adjacent_ground_threshold: 3
-  keep_num_per_voxel: 1  # 0=skip all ground points, n=keep n newest points per ground voxel
+  redundant_detection_method: 2  # 0=none, 1=plane fitting, 2=neighborhood
+  redundant_neighbor_type: 0  # 0=4-neighbor, 1=8-neighborzh
+  adjacent_redundant_threshold: 4
 
   isolated_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
-  adjacent_isolated_threshold: 3
+  adjacent_isolated_threshold: 1
 
-  ground_keep_interval: 0  # 0=skip all ground points, n=keep every n-th ground point (1=keep all)
+  height_consistency_ratio: 0.25  # ratio of voxel_size for height consistency check
+
+  keep_num_per_voxel: 1  # 0=skip all points, n=keep n newest points per voxel
+  keep_redundant: true
+  keep_isolated: false
 
 local_map:
   map_sliding_en: false
@@ -91,7 +106,7 @@ local_map:
   sliding_thresh: 8
 
 uav:
-  imu_rate_odom: true
+  imu_rate_odom: false
   gravity_align_en: true
 
 publish:
@@ -103,9 +118,9 @@ publish:
   blind_rgb_points: 0.0
 
 evo:
-  seq_name: "exp21_outside_building"
+  seq_name: "result"
   pose_output_en: true
-  pose_output_dir: ""
+  pose_output_dir: "/home/wsl-4080/code/traj_evo/pred/voxel-pillar/"
 
 lidar_save:
   save_en: false

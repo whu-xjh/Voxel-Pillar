@@ -251,7 +251,7 @@ void LIVMapper::initializeSubscribersAndPublishers(ros::NodeHandle &nh, image_tr
   pubSubVisualMap = nh.advertise<sensor_msgs::PointCloud2>("/cloud_visual_sub_map_before", 100);
   pubLaserCloudEffect = nh.advertise<sensor_msgs::PointCloud2>("/cloud_effected", 100);
   pubLaserCloudMap = nh.advertise<sensor_msgs::PointCloud2>("/Laser_map", 100);
-  pubGroundCloud = nh.advertise<sensor_msgs::PointCloud2>("/cloud_ground", 100);
+  pubRedundantCloud = nh.advertise<sensor_msgs::PointCloud2>("/cloud_redundant", 100);
   pubIsolatedCloud = nh.advertise<sensor_msgs::PointCloud2>("/cloud_isolated", 100);
   pubBelowPlaneCloud = nh.advertise<sensor_msgs::PointCloud2>("/cloud_below_plane", 100);
   pubOdomAftMapped = nh.advertise<nav_msgs::Odometry>("/aft_mapped_to_init", 10);
@@ -460,7 +460,7 @@ void LIVMapper::handleLIO()
     voxelmap_manager->pillar_map_.BuildPillarMap(feats_down_world);
     voxelmap_manager->pillar_map_.pillarDetection(_state.pos_end);
     voxelmap_manager->DefineSkipPoints(feats_down_world);
-    voxelmap_manager->pillar_map_.PublishPillarPoints(pubGroundCloud, pubIsolatedCloud, pubBelowPlaneCloud);
+    voxelmap_manager->pillar_map_.PublishPillarPoints(pubRedundantCloud, pubIsolatedCloud, pubBelowPlaneCloud);
     voxelmap_manager->ClearPillarVoxels();
     t_pillar2 = omp_get_wtime();
   }

@@ -107,8 +107,8 @@ Visualization Manager:
           Use Fixed Frame: true
           Use rainbow: false
           Value: false
-        - Alpha: 0.10000000149011612
-          Autocompute Intensity Bounds: false
+        - Alpha: 0.05000000074505806
+          Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
             Max Value: 15
             Min Value: -5
@@ -118,13 +118,11 @@ Visualization Manager:
           Class: rviz/PointCloud2
           Color: 238; 238; 236
           Color Transformer: Intensity
-          Decay Time: 10
+          Decay Time: 1000
           Enabled: true
-          Invert Rainbow: false
+          Invert Rainbow: true
           Max Color: 255; 255; 255
-          Max Intensity: 159
           Min Color: 0; 0; 0
-          Min Intensity: 5
           Name: surround
           Position Transformer: XYZ
           Queue Size: 1
@@ -549,7 +547,7 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz/Orbit
-      Distance: 161.31094360351562
+      Distance: 63.766334533691406
       Enable Stereo Rendering:
         Stereo Eye Separation: 0.05999999865889549
         Stereo Focal Distance: 1
@@ -567,7 +565,7 @@ Visualization Manager:
       Near Clip Distance: 0.009999999776482582
       Pitch: 1.5697963237762451
       Target Frame: aft_mapped
-      Yaw: 5.198580265045166
+      Yaw: 5.173580169677734
     Saved:
       - Class: rviz/Orbit
         Distance: 117.53474426269531

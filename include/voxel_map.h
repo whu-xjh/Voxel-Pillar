@@ -162,13 +162,13 @@ public:
   int new_points_;
   bool init_octo_;
   bool update_enable_;
-  bool is_ground_voxel_ = false;
+  bool is_redundant_voxel_ = false;
   bool is_isolated_voxel_ = false;
   bool is_surface_voxel_ = false;
 
   VoxelOctoTree(int max_layer, int layer, int points_size_threshold, int max_points_num, float planer_threshold)
       : max_layer_(max_layer), layer_(layer), points_size_threshold_(points_size_threshold), max_points_num_(max_points_num),
-        planer_threshold_(planer_threshold), is_ground_voxel_(false), is_isolated_voxel_(false), is_surface_voxel_(false)
+        planer_threshold_(planer_threshold), is_redundant_voxel_(false), is_isolated_voxel_(false), is_surface_voxel_(false)
   {
     temp_points_.clear();
     octo_state_ = 0;
@@ -208,18 +208,20 @@ void loadVoxelConfig(ros::NodeHandle &nh, VoxelMapConfig &voxel_config);
 enum PointLabel
 {
   LABEL_NORMAL = 0,
-  LABEL_GROUND = 1,
+  LABEL_REDUNDANT = 1,
   LABEL_ISOLATED = 2,
   LABEL_BELOW_PLANE = 3
 };
 
 // Lightweight voxel structure for Pillar Voxel Map (decoupled from VoxelOctoTree)
-// Designed specifically for ground/isolated point detection without octree overhead
+// Designed specifically for redundant/isolated point detection without octree overhead
 struct PillarVoxel
 {
   std::vector<size_t> point_indices_;  // Point indices in original point cloud
   double center_z_;                    // Voxel center Z coordinate (X,Y derived from PILLAR_LOCATION)
-  bool is_ground_voxel_ = false;
+  Eigen::Vector3d virtual_point_ = Eigen::Vector3d::Zero();  // Average XYZ of inserted points
+  size_t point_count_ = 0;            // Number of accumulated points for running average
+  bool is_redundant_voxel_ = false;
   bool is_isolated_voxel_ = false;
 
   PillarVoxel(double z = 0.0) : center_z_(z)
@@ -239,8 +241,10 @@ struct PillarVoxel
   void clear()
   {
     point_indices_.clear();
-    is_ground_voxel_ = false;
+    is_redundant_voxel_ = false;
     is_isolated_voxel_ = false;
+    virtual_point_.setZero();
+    point_count_ = 0;
   }
 };
 
@@ -248,20 +252,23 @@ typedef struct PillarVoxelConfig
 {
   bool pillar_voxel_en_;
   double voxel_size_;
-  int adjacent_ground_threshold_;
-  int keep_num_per_voxel_;   // 0=skip all, n=keep n newest points per ground voxel
+  int adjacent_redundant_threshold_;
+  int keep_num_per_voxel_;   // 0=skip all, n=keep n newest points per redundant voxel
+  bool keep_redundant_;      // true=apply keep_num_per_voxel to redundant voxels, false=skip all
+  bool keep_isolated_;       // true=apply keep_num_per_voxel to isolated voxels, false=skip all
   int adjacent_isolated_threshold_;
-  int ground_detection_method_;
-  int ground_neighbor_type_;     // 0=4-neighbor, 1=8-neighbor (for ground detection)
+  int redundant_detection_method_;
+  int redundant_neighbor_type_;     // 0=4-neighbor, 1=8-neighbor (for redundant detection)
   int isolated_neighbor_type_;   // 0=4-neighbor, 1=8-neighbor (for isolated detection)
+  double height_consistency_ratio_;  // ratio of voxel_size for height consistency check (default: 0.25)
   double plane_fitting_distance_threshold_;
   int skip_type_;  // 0=skip nothing extra, 1=skip below plane, 2=skip below+near plane
 
-  PillarVoxelConfig() : pillar_voxel_en_(false), voxel_size_(1.0), adjacent_ground_threshold_(3),
-                       keep_num_per_voxel_(1),
+  PillarVoxelConfig() : pillar_voxel_en_(false), voxel_size_(1.0), adjacent_redundant_threshold_(3),
+                       keep_num_per_voxel_(1), keep_redundant_(true), keep_isolated_(false),
                        adjacent_isolated_threshold_(3),
-                       ground_detection_method_(0), ground_neighbor_type_(1), isolated_neighbor_type_(1),
-                       plane_fitting_distance_threshold_(0.1), skip_type_(0) {}
+                       redundant_detection_method_(0), redundant_neighbor_type_(1), isolated_neighbor_type_(1),
+                       height_consistency_ratio_(0.25), plane_fitting_distance_threshold_(0.1), skip_type_(0) {}
 } PillarVoxelConfig;
 
 void loadPillarVoxelConfig(ros::NodeHandle &nh, PillarVoxelConfig &config);
@@ -274,7 +281,7 @@ public:
   double voxel_size_;
   std::unordered_map<PILLAR_LOCATION, std::map<int64_t, PillarVoxel>> pillars_;
   std::unordered_set<PILLAR_LOCATION> current_pillars_;
-  std::vector<VOXEL_LOCATION> ground_neighbor_offsets_;
+  std::vector<VOXEL_LOCATION> redundant_neighbor_offsets_;
   std::vector<VOXEL_LOCATION> isolated_neighbor_offsets_;
 
   std::vector<int8_t> point_labels_;
@@ -288,7 +295,7 @@ public:
   void init(const PillarVoxelConfig &config, double voxel_size);
   void BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud);
   void pillarDetection(const Eigen::Vector3d& current_pos);
-  void PublishPillarPoints(const ros::Publisher &pubGround, const ros::Publisher &pubIsolated, const ros::Publisher &pubBelowPlane);
+  void PublishPillarPoints(const ros::Publisher &pubRedundant, const ros::Publisher &pubIsolated, const ros::Publisher &pubBelowPlane);
 
   inline int8_t GetPointLabel(size_t index) const {
     return (index < point_labels_.size()) ? point_labels_[index] : LABEL_NORMAL;
@@ -299,9 +306,9 @@ private:
   void initHorizontalNeighborOffsets();
   PILLAR_LOCATION GetPillarLocation(const VOXEL_LOCATION &position) const;
   void updatePillarFlag(const PILLAR_LOCATION &pillar_key, std::map<int64_t, PillarVoxel> &pillar_voxels);
-  bool hasAdjacentGroundVoxel(const PillarVoxel *voxel, const VOXEL_LOCATION &current_pos);
+  bool hasAdjacentRedundantVoxel(const PillarVoxel *voxel, const VOXEL_LOCATION &current_pos);
   bool hasAdjacentTopVoxel(const VOXEL_LOCATION &current_pos);
-  bool hasAdjacentVoxel(const VOXEL_LOCATION &current_pos, int threshold, const std::vector<VOXEL_LOCATION> &neighbor_offsets);
+  bool hasAdjacentVoxel(const VOXEL_LOCATION &current_pos, int threshold, const std::vector<VOXEL_LOCATION> &neighbor_offsets, double current_vp_z);
 };
 
 class VoxelMapManager

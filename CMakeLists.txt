@@ -31,8 +31,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm|aarch64|ARM|AARCH64)")
   add_definitions(-DARM_ARCH)
 else()
   # x86-64 (Intel/AMD) optimizations - reduced to avoid compiler crash
-  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O2 -march=native")
-  message(STATUS "Using conservative x86 optimizations: -O2 -march=native")
+  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O2")
+  message(STATUS "Using x86 optimizations: -O2")
   add_definitions(-DX86_ARCH)
 endif()
 

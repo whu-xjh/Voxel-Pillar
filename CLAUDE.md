@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is **voxel_pillar** (package name), a Voxel-Pillar system with pillar voxel ground detection. It's a high-speed LiDAR-Inertial Odometry system supporting multi-LiDAR fusion, visual-inertial odometry, and external IMU integration optimized for high-speed scenarios (>5 m/s). The system features 250Hz IMU propagation and efficient voxel-based mapping with LRU caching.
+This is **voxel_pillar** (package name), a Voxel-Pillar system with pillar voxel redundant point detection. It's a high-speed LiDAR-Inertial Odometry system supporting multi-LiDAR fusion, visual-inertial odometry, and external IMU integration optimized for high-speed scenarios (>5 m/s). The system features 250Hz IMU propagation and efficient voxel-based mapping with LRU caching.
 
 ## Build System
 
@@ -86,41 +86,41 @@ catkin_make -DCMAKE_BUILD_TYPE=Debug
 - Neighbor search with configurable types (8-neighbor vs 24-neighbor)
 
 **Pillar Voxel System** (config/merge_lidar.yaml:68-79):
-- **Purpose**: Ground detection and isolation point identification using vertical pillar voxels
+- **Purpose**: Redundant point detection and isolation point identification using vertical pillar voxels
 - **Key Functions** (all sequential, no parallelization):
   1. `CheckHeightAngle()`: Optional height-based angle filtering (voxel_map.cpp:1321)
   2. `BuildPillarMap()`: Organize point cloud into pillar voxels (voxel_map.cpp:1432)
-  3. `GroundDetection()`: Multi-step ground classification (voxel_map.cpp:1481)
+  3. `pillarDetection()`: Multi-step redundant point classification (voxel_map.cpp:1481)
      - Method-specific processing:
-       - Method 0: No ground detection (only isolated points)
+       - Method 0: No redundant detection (only isolated points)
        - Method 1: Initial detection → Adjacency check (no plane fitting)
   4. `DefineSkipPoints()`: Apply skip filter to main point cloud
-  5. `PublishPillarPoints()`: Publish ground and isolated points (voxel_map.cpp:1767)
+  5. `PublishPillarPoints()`: Publish redundant and isolated points (voxel_map.cpp:1767)
   6. `ClearPillarVoxels()`: Memory cleanup (voxel_map.cpp:1865)
 
 **Configuration Parameters**:
 - `pillar_voxel_en`: Enable/disable entire system (default: true)
 - `voxel_size`: Pillar voxel resolution (default: 1.0)
-- `adjacent_ground_threshold`: Minimum adjacent ground voxels required (default: 5, set 0 to disable)
+- `adjacent_redundant_threshold`: Minimum adjacent redundant voxels required (default: 5, set 0 to disable)
 - `adjacent_isolated_threshold`: Minimum adjacent voxels for isolation check (default: 5)
 - `height_angle_check_en`: Enable height-angle pre-filtering (default: true)
 - `height_angle_threshold`: Height-angle threshold in degrees (default: 0)
-- `ground_detection_method`: Ground detection method (0=none, 1=neighborhood, default: 1)
+- `redundant_detection_method`: Redundant detection method (0=none, 1=neighborhood, default: 1)
 - `neighbor_type`: Neighbor search type (0=4-neighbor N,S,E,W, 1=8-neighbor with diagonals, default: 1)
 
 **Execution Flow** (LIVMapper.cpp:475-480):
 ```cpp
 PointCloudXYZI::Ptr filtered_cloud = voxelmap_manager->pillar_map_.CheckHeightAngle(feats_down_world, _state.pos_end);
 voxelmap_manager->pillar_map_.BuildPillarMap(filtered_cloud);
-voxelmap_manager->pillar_map_.GroundDetection(_state.pos_end);
+voxelmap_manager->pillar_map_.pillarDetection(_state.pos_end);
 voxelmap_manager->DefineSkipPoints(feats_down_world);
-voxelmap_manager->pillar_map_.PublishPillarPoints(pubGroundCloud, pubIsolatedCloud);
+voxelmap_manager->pillar_map_.PublishPillarPoints(pubRedundantCloud, pubIsolatedCloud);
 voxelmap_manager->ClearPillarVoxels();
 ```
 
 **Output Topics**:
-- `/cloud_ground`: Ground point cloud
-- `/cloud_isolated`: Isolated point cloud (single voxels without ground neighbors)
+- `/cloud_redundant`: Redundant point cloud
+- `/cloud_isolated`: Isolated point cloud (single voxels without redundant neighbors)
 
 ## Usage
 
@@ -157,7 +157,7 @@ Uncomment and add to `<node>` tag:
 - **External IMU**: `/novatel/oem7/odom` (external IMU odometry)
 - **Camera**: `/left_camera/image` (optional, VIO mode when `img_en: 1`)
 - **Odometry Output**: `/aft_mapped_to_init`
-- **Ground Points**: `/cloud_ground` (pillar voxel ground detection output)
+- **Redundant Points**: `/cloud_redundant` (pillar voxel redundant point detection output)
 - **Isolated Points**: `/cloud_isolated` (pillar voxel isolated point output)
 
 ## Configuration
@@ -213,9 +213,9 @@ Uncomment and add to `<node>` tag:
 - `lio/intensity_fusion_en`: Enable intensity-based fusion
 
 **Pillar Voxel System** (lines 68-78):
-- `pillar_voxel/pillar_voxel_en`: Enable pillar voxel ground detection (default: true)
+- `pillar_voxel/pillar_voxel_en`: Enable pillar voxel redundant point detection (default: true)
 - `pillar_voxel/voxel_size`: Pillar voxel resolution (default: 1.0)
-- `pillar_voxel/adjacent_ground_threshold`: Minimum adjacent ground voxels (default: 5)
+- `pillar_voxel/adjacent_redundant_threshold`: Minimum adjacent redundant voxels (default: 5)
 - `pillar_voxel/adjacent_isolated_threshold`: Minimum adjacent voxels for isolation (default: 5)
 - `pillar_voxel/neighbor_search_type`: 0=8-neighbor, 1=24-neighbor (default: 0)
 - `pillar_voxel/height_angle_check_en`: Enable height-angle filtering (default: true)
@@ -381,10 +381,10 @@ The `vk::camera_loader::loadFromRosNs()` uses `getParam<double>()` which expects
 - `VoxelPlane` (voxel_map.h:77+): Voxel-based plane representation
 - `PointToPlane` (voxel_map.h:61-75): Point-to-plane correspondence for optimization
 - `PillarVoxelConfig` (voxel_map.h:218-241): Pillar voxel system configuration
-  - Controls ground detection pipeline behavior
+  - Controls redundant point detection pipeline behavior
   - Includes adjacency filtering and threshold parameters
-- `pointWithVar` (common_lib.h): Point with variance and ground/isolated flags
-  - `is_ground`: Set by pillar voxel ground detection
+- `pointWithVar` (common_lib.h): Point with variance and redundant/isolated flags
+  - `is_redundant`: Set by pillar voxel redundant detection
   - `is_isolated`: Set for isolated points (single voxels without neighbors)
 
 **State Machine** (common_lib.h:53-59):
@@ -415,36 +415,36 @@ The `vk::camera_loader::loadFromRosNs()` uses `getParam<double>()` which expects
 - LAStools integration for point cloud processing (optional)
 - Architecture-specific compile flags for optimal performance
 
-**Pillar Voxel Ground Detection Pipeline:**
+**Pillar Voxel Redundant Point Detection Pipeline:**
 The pillar voxel system operates independently of the main voxel map:
 1. **Input**: Downsampled world point cloud (`feats_down_world`)
 2. **Height-Angle Filter** (optional): `CheckHeightAngle()` filters points by height-angle threshold
 3. **Pillar Organization**: Points grouped by (x,y) coordinates, vertical voxels by z
-4. **Ground Detection** (all steps in `GroundDetection()`):
-   - Method-specific processing (controlled by `ground_detection_method`):
-     - **Method 0 (None)**: No ground detection, only isolated points are marked
+4. **Redundant Detection** (all steps in `pillarDetection()`):
+   - Method-specific processing (controlled by `redundant_detection_method`):
+     - **Method 0 (None)**: No redundant detection, only isolated points are marked
      - **Method 1 (neighborhood)**: Initial classification → Adjacency check (no plane fitting)
 5. **Skip Point Definition**: `DefineSkipPoints()` marks points to exclude from ICP
    - Method 0: Skips isolated points only
-   - Method 1: Skips isolated points + ground points
-6. **Point Flag Update**: All points marked with `is_ground` or `is_isolated`
-7. **Output**: Separate point clouds published for ground and isolated points
+   - Method 1: Skips isolated points + redundant points
+6. **Point Flag Update**: All points marked with `is_redundant` or `is_isolated`
+7. **Output**: Separate point clouds published for redundant and isolated points
 8. **Cleanup**: All pillar voxels deleted after each frame (no persistence)
 
-**Ground Detection Methods:**
-- **Method 0 (None)**: No ground detection performed
+**Redundant Detection Methods:**
+- **Method 0 (None)**: No redundant detection performed
   - Only isolated points are identified and skipped
   - All points participate in ICP optimization (except isolated)
-  - Use when you don't want any ground filtering
+  - Use when you don't want any redundant filtering
 - **Method 1 (neighborhood)**: Works better in unstructured environments
   - Uses only local adjacency information
   - No global plane assumption
   - Better for rough terrain, stairs, and complex surfaces
-  - Always skips both isolated and ground points
+  - Always skips both isolated and redundant points
 
 **Important Implementation Notes:**
 - Pillar voxel functions are **sequential only** - no parallelization (do not add OpenMP)
-- Ground/isolated points **excluded** from ICP optimization via `DefineSkipPoints()`
-- `is_ground` and `is_isolated` flags reset to `false` in `BuildPillarMap()` each frame
-- Method 1 always skips both isolated and ground points
+- Redundant/isolated points **excluded** from ICP optimization via `DefineSkipPoints()`
+- `is_redundant` and `is_isolated` flags reset to `false` in `BuildPillarMap()` each frame
+- Method 1 always skips both isolated and redundant points
 - Method 0 only skips isolated points

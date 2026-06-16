@@ -62,13 +62,16 @@ void loadPillarVoxelConfig(ros::NodeHandle &nh, PillarVoxelConfig &config)
 {
   nh.param<bool>("pillar_voxel/pillar_voxel_en", config.pillar_voxel_en_, false);
   nh.param<double>("pillar_voxel/voxel_size", config.voxel_size_, 1.0);
-  nh.param<int>("pillar_voxel/adjacent_ground_threshold", config.adjacent_ground_threshold_, 3);
+  nh.param<int>("pillar_voxel/adjacent_redundant_threshold", config.adjacent_redundant_threshold_, 3);
   nh.param<int>("pillar_voxel/keep_num_per_voxel", config.keep_num_per_voxel_, 0);
+  nh.param<bool>("pillar_voxel/keep_redundant", config.keep_redundant_, true);
+  nh.param<bool>("pillar_voxel/keep_isolated", config.keep_isolated_, false);
   nh.param<int>("pillar_voxel/adjacent_isolated_threshold", config.adjacent_isolated_threshold_, 3);
-  nh.param<int>("pillar_voxel/ground_detection_method", config.ground_detection_method_, 0);
-  nh.param<int>("pillar_voxel/neighbor_type", config.ground_neighbor_type_, 1);  // legacy alias
-  nh.param<int>("pillar_voxel/ground_neighbor_type", config.ground_neighbor_type_, config.ground_neighbor_type_);
+  nh.param<int>("pillar_voxel/redundant_detection_method", config.redundant_detection_method_, 0);
+  nh.param<int>("pillar_voxel/neighbor_type", config.redundant_neighbor_type_, 1);  // legacy alias
+  nh.param<int>("pillar_voxel/redundant_neighbor_type", config.redundant_neighbor_type_, config.redundant_neighbor_type_);
   nh.param<int>("pillar_voxel/isolated_neighbor_type", config.isolated_neighbor_type_, 1);
+  nh.param<double>("pillar_voxel/height_consistency_ratio", config.height_consistency_ratio_, 0.25);
   nh.param<double>("pillar_voxel/plane_fitting_distance_threshold", config.plane_fitting_distance_threshold_, 0.1);
   nh.param<int>("pillar_voxel/skip_type", config.skip_type_, 0);
 }
@@ -613,7 +616,7 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
     auto rot_add = solution.block<3, 1>(0, 0);
     auto t_add = solution.block<3, 1>(3, 0);
     // if ((rot_add.norm() * 57.3 < 0.01) && (t_add.norm() * 100 < 0.015)) { flg_EKF_converged = true; }
-    if ((rot_add.norm() * 57.3 < 0.005) && (t_add.norm() * 100 < 0.010)) { flg_EKF_converged = true; }
+    if ((rot_add.norm() * 57.3 < 0.005) && (t_add.norm() * 100 < 0.01)) { flg_EKF_converged = true; }
     V3D euler_cur = state_.rot_end.eulerAngles(2, 1, 0);
 
     /*** Rematch Judgement ***/
@@ -1256,7 +1259,7 @@ void PillarVoxelMap::init(const PillarVoxelConfig &config, double voxel_size)
 
 void PillarVoxelMap::initHorizontalNeighborOffsets()
 {
-  ground_neighbor_offsets_.clear();
+  redundant_neighbor_offsets_.clear();
   isolated_neighbor_offsets_.clear();
 
   auto buildOffsets = [](int type, std::vector<VOXEL_LOCATION>& offsets) {
@@ -1291,97 +1294,72 @@ void PillarVoxelMap::initHorizontalNeighborOffsets()
     }
   };
 
-  buildOffsets(config_.ground_neighbor_type_, ground_neighbor_offsets_);
+  buildOffsets(config_.redundant_neighbor_type_, redundant_neighbor_offsets_);
   buildOffsets(config_.isolated_neighbor_type_, isolated_neighbor_offsets_);
 }
 
-void PillarVoxelMap::UpdateGroundFlagForPillar(const PILLAR_LOCATION &pillar_key,
-                                                std::map<int64_t, PillarVoxel> &pillar_voxels,
-                                                const Eigen::Vector3d& current_pos)
+void PillarVoxelMap::setVoxelPointLabels(PillarVoxel* voxel, int8_t label)
 {
-  (void)pillar_key;
-  (void)current_pos;
-
-  auto setVoxelPointLabels = [this](PillarVoxel* voxel, int8_t label)
-  {
-    voxel->is_isolated_voxel_ = (label == LABEL_ISOLATED);
-    for (size_t idx : voxel->point_indices_) {
-      if (idx < point_labels_.size()) {
-        point_labels_[idx] = label;
-      }
+  voxel->is_isolated_voxel_ = (label == LABEL_ISOLATED);
+  for (size_t idx : voxel->point_indices_) {
+    if (idx < point_labels_.size()) {
+      point_labels_[idx] = label;
     }
-  };
+  }
+}
 
+void PillarVoxelMap::updatePillarFlag(const PILLAR_LOCATION &pillar_key,
+                                       std::map<int64_t, PillarVoxel> &pillar_voxels)
+{
+  // Step 1: Bottom voxel redundant check
   PillarVoxel* bottom_voxel = &pillar_voxels.begin()->second;
-  if (!(std::next(pillar_voxels.begin()) != pillar_voxels.end() && (std::next(pillar_voxels.begin())->second).center_z_ - bottom_voxel->center_z_ < (voxel_size_ * 2))) {
-    bottom_voxel->is_ground_voxel_ = true;
-    for (size_t idx : bottom_voxel->point_indices_) {
-      if (idx < point_labels_.size()) {
-        point_labels_[idx] = LABEL_GROUND;
-      }
-    }
+  bool has_close_above = std::next(pillar_voxels.begin()) != pillar_voxels.end()
+      && (std::next(pillar_voxels.begin())->second).center_z_ - bottom_voxel->center_z_ < (voxel_size_ * 2);
+  if (!has_close_above) {
+    bottom_voxel->is_redundant_voxel_ = true;
   }
 
-  if (pillar_voxels.size() == 1) {
-    PillarVoxel* voxel = &std::next(pillar_voxels.begin())->second;
-    setVoxelPointLabels(voxel, LABEL_ISOLATED);
-  }
+  // Step 2: Isolated voxel detection
   if (pillar_voxels.size() == 2)
   {
     PillarVoxel* top_voxel = &std::next(pillar_voxels.begin())->second;
     auto z_diff = top_voxel->center_z_ - bottom_voxel->center_z_;
 
     if (z_diff >= (voxel_size_ * 2)) {
-      setVoxelPointLabels(bottom_voxel, LABEL_ISOLATED);
-      setVoxelPointLabels(top_voxel, LABEL_ISOLATED);
+      top_voxel->is_isolated_voxel_ = true;
     }
   }
-  else{
+  if (pillar_voxels.size() > 2)
+  {
     auto pillar_iter = std::next(pillar_voxels.begin());
-    double down_z_diff = 0;
     double up_z_diff = 0;
     for (; pillar_iter != std::prev(pillar_voxels.end()); ++pillar_iter)
     {
-      down_z_diff = pillar_iter->second.center_z_ - std::prev(pillar_iter)->second.center_z_;
+      double down_z_diff = pillar_iter->second.center_z_ - std::prev(pillar_iter)->second.center_z_;
       up_z_diff = std::next(pillar_iter)->second.center_z_ - pillar_iter->second.center_z_;
 
       if (down_z_diff >= (voxel_size_ * 2) && up_z_diff >= (voxel_size_ * 2)) {
-        setVoxelPointLabels(&pillar_iter->second, LABEL_ISOLATED);
+        pillar_iter->second.is_isolated_voxel_ = true;
       }
     }
     if (up_z_diff >= (voxel_size_ * 2)) {
-      setVoxelPointLabels(&pillar_voxels.rbegin()->second, LABEL_ISOLATED);
-    }
-  }
-
-  if (!pillar_voxels.empty()) {
-    PillarVoxel* top_voxel = &pillar_voxels.rbegin()->second;
-    if (top_voxel->is_isolated_voxel_) {
-      VOXEL_LOCATION voxel_loc;
-      // Derive X,Y from PILLAR_LOCATION (pillar_key.axis1, axis2 are voxel indices)
-      voxel_loc.x = pillar_key.axis1;
-      voxel_loc.y = pillar_key.axis2;
-      voxel_loc.z = pillar_voxels.rbegin()->first;
-
-      if (hasAdjacentTopVoxel(voxel_loc)) {
-        setVoxelPointLabels(top_voxel, LABEL_NORMAL);
-      }
+      pillar_voxels.rbegin()->second.is_isolated_voxel_ = true;
     }
   }
 }
 
-bool PillarVoxelMap::hasAdjacentGroundVoxel(const PillarVoxel *voxel, const VOXEL_LOCATION &current_pos)
+bool PillarVoxelMap::hasAdjacentRedundantVoxel(const PillarVoxel *voxel, const VOXEL_LOCATION &current_pos)
 {
   (void)voxel;
 
-  if (config_.adjacent_ground_threshold_ <= 0) {
+  if (config_.adjacent_redundant_threshold_ <= 0) {
     return false;
   }
 
-  int adjacent_ground_count = 0;
+  int adjacent_redundant_count = 0;
   int64_t current_elevation = current_pos.z;
 
-  for (const auto& voxel_offset : ground_neighbor_offsets_) {
+  for (const auto& voxel_offset : redundant_neighbor_offsets_) {
     VOXEL_LOCATION adjacent_pos = {
       current_pos.x + voxel_offset.x,
       current_pos.y + voxel_offset.y,
@@ -1395,14 +1373,14 @@ bool PillarVoxelMap::hasAdjacentGroundVoxel(const PillarVoxel *voxel, const VOXE
     if (pillar_iter != pillars_.end() && !pillar_iter->second.empty()) {
       const PillarVoxel *first_voxel = &pillar_iter->second.begin()->second;
 
-      if (first_voxel && first_voxel->is_ground_voxel_) {
+      if (first_voxel && first_voxel->is_redundant_voxel_) {
         int64_t height_diff = std::abs(current_elevation - pillar_iter->second.begin()->first);
 
         if (height_diff == 0) {
-          adjacent_ground_count++;
+          adjacent_redundant_count++;
         }
 
-        if (adjacent_ground_count >= config_.adjacent_ground_threshold_){
+        if (adjacent_redundant_count >= config_.adjacent_redundant_threshold_){
           return true;
         }
       }
@@ -1451,7 +1429,7 @@ bool PillarVoxelMap::hasAdjacentTopVoxel(const VOXEL_LOCATION &current_pos)
   return false;
 }
 
-bool PillarVoxelMap::hasAdjacentVoxel(const VOXEL_LOCATION &current_pos, int threshold, const std::vector<VOXEL_LOCATION> &neighbor_offsets)
+bool PillarVoxelMap::hasAdjacentVoxel(const VOXEL_LOCATION &current_pos, int threshold, const std::vector<VOXEL_LOCATION> &neighbor_offsets, double current_vp_z)
 {
   if (threshold <= 0) {
     return false;
@@ -1459,6 +1437,7 @@ bool PillarVoxelMap::hasAdjacentVoxel(const VOXEL_LOCATION &current_pos, int thr
 
   int adjacent_count = 0;
   int64_t current_z = current_pos.z;
+  double height_threshold = voxel_size_ * config_.height_consistency_ratio_;
 
   for (const auto& voxel_offset : neighbor_offsets) {
     VOXEL_LOCATION adjacent_pos = {
@@ -1473,9 +1452,11 @@ bool PillarVoxelMap::hasAdjacentVoxel(const VOXEL_LOCATION &current_pos, int thr
     if (pillar_iter != pillars_.end() && !pillar_iter->second.empty()) {
       auto voxel_iter = pillar_iter->second.find(current_z);
       if (voxel_iter != pillar_iter->second.end()) {
-        adjacent_count++;
-        if (adjacent_count >= threshold) {
-          return true;
+        if (std::abs(voxel_iter->second.virtual_point_.z() - current_vp_z) <= height_threshold) {
+          adjacent_count++;
+          if (adjacent_count >= threshold) {
+            return true;
+          }
         }
       }
     }
@@ -1512,162 +1493,172 @@ void PillarVoxelMap::BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud)
     if (voxel_it == pillar_map.end())
     {
       double center_z = (voxel_location.z + 0.5) * voxel_size_;
-      PillarVoxel new_voxel(center_z);
-      new_voxel.is_ground_voxel_ = false;
-      new_voxel.is_isolated_voxel_ = false;
-      voxel_it = pillar_map.emplace(voxel_key, new_voxel).first;
+      voxel_it = pillar_map.emplace(voxel_key, PillarVoxel(center_z)).first;
     }
 
     PillarVoxel& voxel = voxel_it->second;
     voxel.point_indices_.push_back(i);
 
+    // Update virtual point via running average
+    voxel.point_count_++;
+    double inv_count = 1.0 / voxel.point_count_;
+    voxel.virtual_point_.x() += (point.x - voxel.virtual_point_.x()) * inv_count;
+    voxel.virtual_point_.y() += (point.y - voxel.virtual_point_.y()) * inv_count;
+    voxel.virtual_point_.z() += (point.z - voxel.virtual_point_.z()) * inv_count;
+
     current_pillars_.insert(pillar_loc);
   }
 }
 
-void PillarVoxelMap::GroundDetection(const Eigen::Vector3d& current_pos)
+void PillarVoxelMap::pillarDetection(const Eigen::Vector3d& current_pos)
 {
-  // Pass 1: Initial ground/isolated labeling per pillar
+  // Step 1: Initial redundant/isolated voxel flag per pillar
   for (const auto& pillar_key : current_pillars_)
   {
     auto pillar_iter = pillars_.find(pillar_key);
     if (pillar_iter == pillars_.end() || pillar_iter->second.empty())
       continue;
 
-    // Update ground flags in same iteration
-    UpdateGroundFlagForPillar(pillar_key, pillar_iter->second, current_pos);
+    updatePillarFlag(pillar_key, pillar_iter->second);
   }
 
-  // Pass 2: Adjacency confirmation + method-specific data collection (merged loops)
-  const double z_threshold = current_pos.z();
-  std::vector<Eigen::Vector3d> seed_points;
-  int ground_voxel_count = 0;
-
+  // Step 2: Adjacency check for all redundant and isolated voxels
   for (const auto& pillar_key : current_pillars_)
   {
     auto pillar_iter = pillars_.find(pillar_key);
-    if (pillar_iter == pillars_.end() || pillar_iter->second.empty())
-      continue;
+    if (pillar_iter == pillars_.end() || pillar_iter->second.empty()) continue;
 
     auto& pillar_voxels = pillar_iter->second;
-    PillarVoxel* bottom_voxel = &pillar_voxels.begin()->second;
-    if (!bottom_voxel->is_ground_voxel_) continue;
 
-    // Adjacency check (if enabled)
-    if (config_.adjacent_ground_threshold_ > 0)
+    for (auto voxel_iter = pillar_voxels.begin(); voxel_iter != pillar_voxels.end(); ++voxel_iter)
     {
-      VOXEL_LOCATION bottom_loc;
-      bottom_loc.x = pillar_key.axis1;
-      bottom_loc.y = pillar_key.axis2;
-      bottom_loc.z = pillar_voxels.begin()->first;
-      if (!hasAdjacentGroundVoxel(bottom_voxel, bottom_loc))
-      {
-        bottom_voxel->is_ground_voxel_ = false;
-        for (size_t idx : bottom_voxel->point_indices_) {
-          if (idx < point_labels_.size()) {
-            point_labels_[idx] = LABEL_NORMAL;
-          }
-        }
-        continue; // Ground revoked, skip seed collection
-      }
-    }
+      if (!voxel_iter->second.is_redundant_voxel_ && !voxel_iter->second.is_isolated_voxel_) continue;
 
-    // Ground confirmed — collect seeds for Method 1 or count for Method 2
-    if (config_.ground_detection_method_ == 1)
-    {
-      for (size_t idx : bottom_voxel->point_indices_)
-      {
-        if (idx < point_cloud_ptr_->points.size())
-        {
-          const PointType& pt = point_cloud_ptr_->points[idx];
-          if (pt.z <= z_threshold)
-          {
-            seed_points.push_back(Eigen::Vector3d(pt.x, pt.y, pt.z));
-          }
+      VOXEL_LOCATION voxel_loc;
+      voxel_loc.x = pillar_key.axis1;
+      voxel_loc.y = pillar_key.axis2;
+      voxel_loc.z = voxel_iter->first;
+
+      if (voxel_iter->second.is_redundant_voxel_) {
+        bool has_adjacent_redundant = hasAdjacentVoxel(voxel_loc, config_.adjacent_redundant_threshold_, redundant_neighbor_offsets_, voxel_iter->second.virtual_point_.z());
+        if (!has_adjacent_redundant) {
+          voxel_iter->second.is_redundant_voxel_ = false;
         }
       }
-    }
-    else if (config_.ground_detection_method_ == 2)
-    {
-      ground_voxel_count++;
+      if (voxel_iter->second.is_isolated_voxel_) {
+        bool has_adjacent_isolated = hasAdjacentVoxel(voxel_loc, config_.adjacent_isolated_threshold_, isolated_neighbor_offsets_, voxel_iter->second.virtual_point_.z());
+        if (has_adjacent_isolated) {
+          voxel_iter->second.is_isolated_voxel_ = false;
+        }
+      }
     }
   }
 
-  // Pass 3: Method-specific refinement
-  if (config_.ground_detection_method_ == 1)
+  // Step 3: Plane fitting refinement (if enabled)
+  if (config_.redundant_detection_method_ == 1)
   {
+    const double z_threshold = current_pos.z();
     plane_fitted_ = false;
+    std::vector<Eigen::Vector3d> seed_points;
+
+    // Collect seed points from confirmed redundant voxels
+    for (const auto& pillar_key : current_pillars_)
+    {
+      auto pillar_iter = pillars_.find(pillar_key);
+      if (pillar_iter == pillars_.end() || pillar_iter->second.empty())
+        continue;
+
+      auto& pillar_voxels = pillar_iter->second;
+      for (auto& voxel_pair : pillar_voxels)
+      {
+        if (!voxel_pair.second.is_redundant_voxel_)
+          continue;
+
+        for (size_t idx : voxel_pair.second.point_indices_)
+        {
+          if (idx < point_cloud_ptr_->points.size())
+          {
+            const PointType& pt = point_cloud_ptr_->points[idx];
+            if (pt.z <= z_threshold)
+            {
+              seed_points.push_back(Eigen::Vector3d(pt.x, pt.y, pt.z));
+            }
+          }
+        }
+      }
+    }
 
     if (!seed_points.empty())
     {
-        // Plane fitting via SelfAdjointEigenSolver (faster than JacobiSVD for symmetric matrices)
-        Eigen::Vector3d center = Eigen::Vector3d::Zero();
-        for (const auto& pt : seed_points)
+      Eigen::Vector3d center = Eigen::Vector3d::Zero();
+      for (const auto& pt : seed_points)
+        center += pt;
+      center /= static_cast<double>(seed_points.size());
+
+      Eigen::Matrix3d covariance = Eigen::Matrix3d::Zero();
+      for (const auto& pt : seed_points)
+      {
+        const Eigen::Vector3d diff = pt - center;
+        covariance += diff * diff.transpose();
+      }
+      covariance /= static_cast<double>(seed_points.size());
+
+      Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> saes(covariance);
+      Eigen::Vector3d plane_normal = saes.eigenvectors().col(0);
+      if (plane_normal(2) < 0) plane_normal = -plane_normal;
+      double plane_d = -plane_normal.dot(center);
+
+      fitted_plane_normal_ = plane_normal;
+      fitted_plane_d_ = plane_d;
+      plane_fitted_ = true;
+
+      // Re-classify redundant voxels by distance to fitted plane
+      const double dist_threshold = config_.plane_fitting_distance_threshold_;
+      for (const auto& pillar_key : current_pillars_)
+      {
+        auto pillar_iter = pillars_.find(pillar_key);
+        if (pillar_iter == pillars_.end() || pillar_iter->second.empty())
+          continue;
+
+        for (auto& voxel_pair : pillar_iter->second)
         {
-          center += pt;
-        }
-        center /= static_cast<double>(seed_points.size());
-
-        Eigen::Matrix3d covariance = Eigen::Matrix3d::Zero();
-        for (const auto& pt : seed_points)
-        {
-          const Eigen::Vector3d diff = pt - center;
-          covariance += diff * diff.transpose();
-        }
-        covariance /= static_cast<double>(seed_points.size());
-
-        Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> saes(covariance);
-        Eigen::Vector3d plane_normal = saes.eigenvectors().col(0); // smallest eigenvalue
-
-        if (plane_normal(2) < 0) plane_normal = -plane_normal;
-
-        double plane_d = -plane_normal.dot(center);
-
-        fitted_plane_normal_ = plane_normal;
-        fitted_plane_d_ = plane_d;
-        plane_fitted_ = true;
-
-        // Re-classify all bottom voxels by distance to fitted plane
-        const double dist_threshold = config_.plane_fitting_distance_threshold_;
-        for (const auto& pillar_key : current_pillars_)
-        {
-          auto pillar_iter = pillars_.find(pillar_key);
-          if (pillar_iter == pillars_.end() || pillar_iter->second.empty())
+          if (!voxel_pair.second.is_redundant_voxel_)
             continue;
 
-          PillarVoxel* bottom_voxel = &pillar_iter->second.begin()->second;
           bool is_near_plane = false;
-
-          for (size_t idx : bottom_voxel->point_indices_)
+          for (size_t idx : voxel_pair.second.point_indices_)
           {
             if (idx < point_cloud_ptr_->points.size())
             {
               const PointType& pt = point_cloud_ptr_->points[idx];
               const double distance = plane_normal.dot(Eigen::Vector3d(pt.x, pt.y, pt.z)) + plane_d;
-
               if (std::abs(distance) < dist_threshold)
-              {
                 is_near_plane = true;
-                point_labels_[idx] = LABEL_GROUND;
-              }
-              else
-              {
-                point_labels_[idx] = LABEL_NORMAL;
-              }
             }
           }
-
-          bottom_voxel->is_ground_voxel_ = is_near_plane;
+          voxel_pair.second.is_redundant_voxel_ = is_near_plane;
         }
+      }
 
-        ROS_DEBUG("[GroundDetection] Method 1 (Plane Fitting): normal=[%f, %f, %f], d=%f, seeds=%zu (sensor_z=%f)",
-                  plane_normal.x(), plane_normal.y(), plane_normal.z(), plane_d, seed_points.size(), z_threshold);
+      ROS_DEBUG("[pillarDetection] Method 1 (Plane Fitting): normal=[%f, %f, %f], d=%f, seeds=%zu (sensor_z=%f)",
+                plane_normal.x(), plane_normal.y(), plane_normal.z(), plane_d, seed_points.size(), z_threshold);
     }
   }
-  else if (config_.ground_detection_method_ == 2)
+
+  // Step 4: Assign point labels for all redundant and isolated voxels
+  for (const auto& pillar_key : current_pillars_)
   {
-    // ground_voxel_count already computed in merged Pass 2
-    ROS_DEBUG("[GroundDetection] Method 2 (neighborhood): %d ground voxels detected via adjacency check", ground_voxel_count);
+    auto pillar_iter = pillars_.find(pillar_key);
+    if (pillar_iter == pillars_.end() || pillar_iter->second.empty())
+      continue;
+
+    for (auto& voxel_pair : pillar_iter->second)
+    {
+      if (voxel_pair.second.is_redundant_voxel_)
+        setVoxelPointLabels(&voxel_pair.second, LABEL_REDUNDANT);
+      else if (voxel_pair.second.is_isolated_voxel_)
+        setVoxelPointLabels(&voxel_pair.second, LABEL_ISOLATED);
+    }
   }
 }
 
@@ -1682,7 +1673,7 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
   }
 
   int isolated_count = 0;
-  int ground_count = 0;
+  int redundant_count = 0;
   int final_skip_count = 0;
 
   for (size_t i = 0; i < point_num; ++i)
@@ -1691,20 +1682,20 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
 
     if (label == LABEL_ISOLATED)
     {
-      if (pillar_map_.config_.keep_num_per_voxel_ <= 0)
+      if (pillar_map_.config_.keep_isolated_ <= 0 || pillar_map_.config_.keep_num_per_voxel_ <= 0)
       {
         skip_list[i] = true;
         final_skip_count++;
       }
       isolated_count++;
     }
-    else if (label == LABEL_GROUND)
+    else if (label == LABEL_REDUNDANT)
     {
-      ground_count++;
+      redundant_count++;
     }
   }
 
-  if (pillar_map_.config_.ground_detection_method_ == 0)
+  if (pillar_map_.config_.redundant_detection_method_ == 0)
   {
     ROS_DEBUG("[DefineSkipPoints] Method 0 (None): Isolated: %d/%zu (%.1f%%)",
               isolated_count, point_num, 100.0 * isolated_count / point_num);
@@ -1715,7 +1706,7 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
     total_point_count_ += point_num;
     return;
   }
-  else if (pillar_map_.config_.ground_detection_method_ == 1)
+  else if (pillar_map_.config_.redundant_detection_method_ == 1)
   {
     // Method 1: Plane fitting — skip points based on distance to fitted plane
     if (!pillar_map_.plane_fitted_)
@@ -1734,18 +1725,18 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
     const double plane_d = pillar_map_.fitted_plane_d_;
     const double distance_threshold = pillar_map_.config_.plane_fitting_distance_threshold_;
 
-    // First, skip ground-labeled points based on voxel-based newest-point retention
-    int ground_total = 0;
-    int ground_kept = 0;
+    // First, skip redundant-labeled points based on voxel-based newest-point retention
+    int redundant_total = 0;
+    int redundant_kept = 0;
 
-    if (pillar_map_.config_.keep_num_per_voxel_ <= 0)
+    if (pillar_map_.config_.keep_redundant_ <= 0 || pillar_map_.config_.keep_num_per_voxel_ <= 0)
     {
-      // Skip ALL ground points
+      // Skip ALL redundant points
       for (size_t i = 0; i < point_num; ++i)
       {
-        if (pillar_map_.GetPointLabel(i) == LABEL_GROUND)
+        if (pillar_map_.GetPointLabel(i) == LABEL_REDUNDANT)
         {
-          ground_total++;
+          redundant_total++;
           if (!skip_list[i])
           {
             skip_list[i] = true;
@@ -1756,7 +1747,7 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
     }
     else
     {
-      // Keep newest n points per ground voxel
+      // Keep newest n points per redundant/isolated voxel
       const int keep_num = pillar_map_.config_.keep_num_per_voxel_;
 
       for (const auto &pillar_entry : pillar_map_.pillars_)
@@ -1765,8 +1756,14 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
         {
           const PillarVoxel &voxel = voxel_entry.second;
 
-          if (!voxel.is_ground_voxel_ && !voxel.is_isolated_voxel_)
+          bool is_redundant = voxel.is_redundant_voxel_;
+          bool is_isolated = voxel.is_isolated_voxel_;
+          if (!is_redundant && !is_isolated)
             continue;
+
+          // Check keep flags
+          if (is_redundant && pillar_map_.config_.keep_redundant_ <= 0) continue;
+          if (is_isolated && pillar_map_.config_.keep_isolated_ <= 0) continue;
 
           const std::vector<size_t> &point_indices = voxel.point_indices_;
           int voxel_size = point_indices.size();
@@ -1774,12 +1771,12 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
           if (voxel_size == 0)
             continue;
 
-          ground_total += voxel_size;
+          redundant_total += voxel_size;
 
           // If voxel has <= keep_num points, keep all
           if (voxel_size <= keep_num)
           {
-            ground_kept += voxel_size;
+            redundant_kept += voxel_size;
             continue;
           }
 
@@ -1794,14 +1791,14 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
               final_skip_count++;
             }
           }
-          ground_kept += keep_num;
+          redundant_kept += keep_num;
         }
       }
     }
 
     // Then, skip additional points based on skip_type and plane distance
-    int ground_near_count = 0;
-    int ground_below_count = 0;
+    int redundant_near_count = 0;
+    int redundant_below_count = 0;
 
     for (size_t i = 0; i < point_num; ++i)
     {
@@ -1814,11 +1811,11 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
 
       if (distance < -distance_threshold)
       {
-        ground_below_count++;
+        redundant_below_count++;
       }
       else if (distance < distance_threshold)
       {
-        ground_near_count++;
+        redundant_near_count++;
       }
 
       bool skip = false;
@@ -1842,28 +1839,28 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
       }
     }
 
-    ROS_DEBUG("[DefineSkipPoints] Method 1 (Plane Fitting): Isolated: %d, Ground: %d (kept %d/%d), Ground_near: %d, Below_ground: %d, Skip_total: %d/%zu (%.1f%%)",
-              isolated_count, ground_count, ground_kept, ground_total, ground_near_count, ground_below_count, final_skip_count, point_num, 100.0 * final_skip_count / point_num);
+    ROS_DEBUG("[DefineSkipPoints] Method 1 (Plane Fitting): Isolated: %d, Redundant: %d (kept %d/%d), Redundant_near: %d, Below_redundant: %d, Skip_total: %d/%zu (%.1f%%)",
+              isolated_count, redundant_count, redundant_kept, redundant_total, redundant_near_count, redundant_below_count, final_skip_count, point_num, 100.0 * final_skip_count / point_num);
 
     current_skip_count_ = final_skip_count;
     total_skip_count_ += final_skip_count;
     total_point_count_ += point_num;
     return;
   }
-  else if (pillar_map_.config_.ground_detection_method_ == 2)
+  else if (pillar_map_.config_.redundant_detection_method_ == 2)
   {
-    // Method 2: Neighborhood — skip ground + isolated points (with newest-point retention)
-    int ground_total = 0;
-    int ground_kept = 0;
+    // Method 2: Neighborhood — skip redundant + isolated points (with newest-point retention)
+    int redundant_total = 0;
+    int redundant_kept = 0;
 
-    if (pillar_map_.config_.keep_num_per_voxel_ <= 0)
+    if (pillar_map_.config_.keep_redundant_ <= 0 || pillar_map_.config_.keep_num_per_voxel_ <= 0)
     {
-      // Skip ALL ground points
+      // Skip ALL redundant points
       for (size_t i = 0; i < point_num; ++i)
       {
-        if (pillar_map_.GetPointLabel(i) == LABEL_GROUND)
+        if (pillar_map_.GetPointLabel(i) == LABEL_REDUNDANT)
         {
-          ground_total++;
+          redundant_total++;
           if (!skip_list[i])
           {
             skip_list[i] = true;
@@ -1874,7 +1871,7 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
     }
     else
     {
-      // Keep newest n points per ground voxel
+      // Keep newest n points per redundant/isolated voxel
       const int keep_num = pillar_map_.config_.keep_num_per_voxel_;
 
       for (const auto &pillar_entry : pillar_map_.pillars_)
@@ -1883,8 +1880,14 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
         {
           const PillarVoxel &voxel = voxel_entry.second;
 
-          if (!voxel.is_ground_voxel_ && !voxel.is_isolated_voxel_)
+          bool is_redundant = voxel.is_redundant_voxel_;
+          bool is_isolated = voxel.is_isolated_voxel_;
+          if (!is_redundant && !is_isolated)
             continue;
+
+          // Check keep flags
+          if (is_redundant && pillar_map_.config_.keep_redundant_ <= 0) continue;
+          if (is_isolated && pillar_map_.config_.keep_isolated_ <= 0) continue;
 
           const std::vector<size_t> &point_indices = voxel.point_indices_;
           int voxel_size = point_indices.size();
@@ -1892,12 +1895,12 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
           if (voxel_size == 0)
             continue;
 
-          ground_total += voxel_size;
+          redundant_total += voxel_size;
 
           // If voxel has <= keep_num points, keep all
           if (voxel_size <= keep_num)
           {
-            ground_kept += voxel_size;
+            redundant_kept += voxel_size;
             continue;
           }
 
@@ -1912,13 +1915,13 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
               final_skip_count++;
             }
           }
-          ground_kept += keep_num;
+          redundant_kept += keep_num;
         }
       }
     }
 
-    ROS_DEBUG("[DefineSkipPoints] Method 2 (Neighborhood): Isolated: %d, Ground: %d (kept %d/%d), Skip_total: %d/%zu (%.1f%%)",
-              isolated_count, ground_count, ground_kept, ground_total, final_skip_count, point_num, 100.0 * final_skip_count / point_num);
+    ROS_DEBUG("[DefineSkipPoints] Method 2 (Neighborhood): Isolated: %d, Redundant: %d (kept %d/%d), Skip_total: %d/%zu (%.1f%%)",
+              isolated_count, redundant_count, redundant_kept, redundant_total, final_skip_count, point_num, 100.0 * final_skip_count / point_num);
 
     current_skip_count_ = final_skip_count;
     total_skip_count_ += final_skip_count;
@@ -1927,29 +1930,29 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
   }
 }
 
-void PillarVoxelMap::PublishPillarPoints(const ros::Publisher &pubGround, const ros::Publisher &pubIsolated, const ros::Publisher &pubBelowPlane)
+void PillarVoxelMap::PublishPillarPoints(const ros::Publisher &pubRedundant, const ros::Publisher &pubIsolated, const ros::Publisher &pubBelowPlane)
 {
   // OPTIMIZATION: Use direct point_labels_ iteration instead of two-pass pillar traversal
   // This reduces complexity from O(pillars * voxels * points) to O(points)
 
   if (!point_cloud_ptr_ || point_cloud_ptr_->points.empty()) return;
 
-  PointCloudXYZI::Ptr ground_cloud(new PointCloudXYZI());
+  PointCloudXYZI::Ptr redundant_cloud(new PointCloudXYZI());
   PointCloudXYZI::Ptr isolated_cloud(new PointCloudXYZI());
   PointCloudXYZI::Ptr below_plane_cloud(new PointCloudXYZI());
 
-  // Reserve estimated capacity (typically ground < 20%, isolated < 5%)
+  // Reserve estimated capacity (typically redundant < 20%, isolated < 5%)
   const size_t estimated_points = point_cloud_ptr_->points.size();
-  ground_cloud->points.reserve(estimated_points / 5);
+  redundant_cloud->points.reserve(estimated_points / 5);
   isolated_cloud->points.reserve(estimated_points / 20);
   below_plane_cloud->points.reserve(estimated_points / 20);
 
   // Single pass through point labels
   for (size_t i = 0; i < point_labels_.size() && i < point_cloud_ptr_->points.size(); ++i)
   {
-    if (point_labels_[i] == LABEL_GROUND)
+    if (point_labels_[i] == LABEL_REDUNDANT)
     {
-      ground_cloud->points.push_back(point_cloud_ptr_->points[i]);
+      redundant_cloud->points.push_back(point_cloud_ptr_->points[i]);
     }
     else if (point_labels_[i] == LABEL_ISOLATED)
     {
@@ -1961,18 +1964,18 @@ void PillarVoxelMap::PublishPillarPoints(const ros::Publisher &pubGround, const 
     }
   }
 
-  // Publish ground cloud
-  if (!ground_cloud->points.empty())
+  // Publish redundant cloud
+  if (!redundant_cloud->points.empty())
   {
-    ground_cloud->width = ground_cloud->points.size();
-    ground_cloud->height = 1;
-    ground_cloud->is_dense = true;
+    redundant_cloud->width = redundant_cloud->points.size();
+    redundant_cloud->height = 1;
+    redundant_cloud->is_dense = true;
 
-    sensor_msgs::PointCloud2 ground_msg;
-    pcl::toROSMsg(*ground_cloud, ground_msg);
-    ground_msg.header.stamp = ros::Time::now();
-    ground_msg.header.frame_id = "camera_init";
-    pubGround.publish(ground_msg);
+    sensor_msgs::PointCloud2 redundant_msg;
+    pcl::toROSMsg(*redundant_cloud, redundant_msg);
+    redundant_msg.header.stamp = ros::Time::now();
+    redundant_msg.header.frame_id = "camera_init";
+    pubRedundant.publish(redundant_msg);
   }
 
   // Publish isolated cloud

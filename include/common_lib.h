@@ -99,7 +99,7 @@ typedef struct pointWithVar
   Eigen::Matrix3d point_crossmat;
   Eigen::Vector3d normal;
   float intensity;             // point intensity value
-  bool is_ground;              // whether the point is ground point
+  bool is_redundant;              // whether the point is redundant point
   bool is_isolated;            // whether the point is isolated point
   pointWithVar()
   {
@@ -112,7 +112,7 @@ typedef struct pointWithVar
     point_w = Eigen::Vector3d::Zero();
     normal = Eigen::Vector3d::Zero();
     intensity = 0.0f;
-    is_ground = false;
+    is_redundant = false;
     is_isolated = false;
   };
 } pointWithVar;

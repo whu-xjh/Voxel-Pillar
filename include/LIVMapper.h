@@ -200,7 +200,7 @@ private:
   ros::Publisher pubSubVisualMap;
   ros::Publisher pubLaserCloudEffect;
   ros::Publisher pubLaserCloudMap;
-  ros::Publisher pubGroundCloud;
+  ros::Publisher pubRedundantCloud;
   ros::Publisher pubIsolatedCloud;
   ros::Publisher pubBelowPlaneCloud;
   ros::Publisher pubOdomAftMapped;

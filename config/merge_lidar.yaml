@@ -65,20 +65,24 @@ lio:
   rf_enhance_en: true  # Range Field enhancement
   intensity_fusion_en: true
 
-# Pillar Voxel Ground Detection
+# Pillar Voxel Redundant Detection
 pillar_voxel:
   pillar_voxel_en: true
   voxel_size: 1
 
-  ground_detection_method: 1  # 0=none, 1=plane fitting, 2=neighborhood
+  redundant_detection_method: 1  # 0=none, 1=plane fitting, 2=neighborhood
   plane_fitting_distance_threshold: 0.1
   skip_type: 1  # 0=skip nothing extra, 1=skip below plane, 2=skip below+near plane
-  ground_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
-  adjacent_ground_threshold: 5
-  keep_num_per_voxel: 1  # 0=skip all ground points, n=keep n newest points per ground voxel
+  redundant_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
+  adjacent_redundant_threshold: 5
+  keep_num_per_voxel: 1  # 0=skip all redundant points, n=keep n newest points per redundant voxel
+  keep_redundant: true
+  keep_isolated: false
 
   isolated_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
   adjacent_isolated_threshold: 5
+
+  height_consistency_ratio: 0.25  # ratio of voxel_size for height consistency check
 
 local_map:
   map_sliding_en: false
