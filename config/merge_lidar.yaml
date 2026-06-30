@@ -67,22 +67,21 @@ lio:
 
 # Pillar Voxel Redundant Detection
 pillar_voxel:
-  pillar_voxel_en: true
-  voxel_size: 1
+  pillar_voxel_en: false
+  voxel_size: 0.5
 
-  redundant_detection_method: 1  # 0=none, 1=plane fitting, 2=neighborhood
-  plane_fitting_distance_threshold: 0.1
-  skip_type: 1  # 0=skip nothing extra, 1=skip below plane, 2=skip below+near plane
-  redundant_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
-  adjacent_redundant_threshold: 5
-  keep_num_per_voxel: 1  # 0=skip all redundant points, n=keep n newest points per redundant voxel
-  keep_redundant: true
-  keep_isolated: false
+  redundant_detection_method: 2  # 0=none, 1=plane fitting, 2=neighborhood
+  redundant_neighbor_type: 0  # 0=4-neighbor, 1=8-neighborzh
+  adjacent_redundant_threshold: 4
 
   isolated_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
-  adjacent_isolated_threshold: 5
+  adjacent_isolated_threshold: 2
 
   height_consistency_ratio: 0.25  # ratio of voxel_size for height consistency check
+
+  keep_num_per_voxel: 1  # 0=skip all points, n=keep n newest points per voxel
+  keep_redundant: true
+  keep_isolated: false
 
 local_map:
   map_sliding_en: false
@@ -113,8 +112,8 @@ lidar_save:
   interval: 100
 
 external_imu:
-  enable: false
-  external_imu_init_frame: 30
+  enable: true
+  external_imu_init_frame: 50
   time_offset: 0
   buffer_size: 100000
   external_R: [0, 0, -1, 1, 0, 0, 0, -1, 0]

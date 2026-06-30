@@ -1300,7 +1300,8 @@ void PillarVoxelMap::initHorizontalNeighborOffsets()
 
 void PillarVoxelMap::setVoxelPointLabels(PillarVoxel* voxel, int8_t label)
 {
-  voxel->is_isolated_voxel_ = (label == LABEL_ISOLATED);
+  voxel->is_redundant_voxel_ = (label == LABEL_REDUNDANT);
+  voxel->is_isolated_voxel_  = (label == LABEL_ISOLATED);
   for (size_t idx : voxel->point_indices_) {
     if (idx < point_labels_.size()) {
       point_labels_[idx] = label;
@@ -1317,6 +1318,7 @@ void PillarVoxelMap::updatePillarFlag(const PILLAR_LOCATION &pillar_key,
       && (std::next(pillar_voxels.begin())->second).center_z_ - bottom_voxel->center_z_ < (voxel_size_ * 2);
   if (!has_close_above) {
     bottom_voxel->is_redundant_voxel_ = true;
+    voxel_label_count_++;
   }
 
   // Step 2: Isolated voxel detection
@@ -1327,6 +1329,7 @@ void PillarVoxelMap::updatePillarFlag(const PILLAR_LOCATION &pillar_key,
 
     if (z_diff >= (voxel_size_ * 2)) {
       top_voxel->is_isolated_voxel_ = true;
+      voxel_label_count_++;
     }
   }
   if (pillar_voxels.size() > 2)
@@ -1340,93 +1343,14 @@ void PillarVoxelMap::updatePillarFlag(const PILLAR_LOCATION &pillar_key,
 
       if (down_z_diff >= (voxel_size_ * 2) && up_z_diff >= (voxel_size_ * 2)) {
         pillar_iter->second.is_isolated_voxel_ = true;
+        voxel_label_count_++;
       }
     }
     if (up_z_diff >= (voxel_size_ * 2)) {
       pillar_voxels.rbegin()->second.is_isolated_voxel_ = true;
+      voxel_label_count_++;
     }
   }
-}
-
-bool PillarVoxelMap::hasAdjacentRedundantVoxel(const PillarVoxel *voxel, const VOXEL_LOCATION &current_pos)
-{
-  (void)voxel;
-
-  if (config_.adjacent_redundant_threshold_ <= 0) {
-    return false;
-  }
-
-  int adjacent_redundant_count = 0;
-  int64_t current_elevation = current_pos.z;
-
-  for (const auto& voxel_offset : redundant_neighbor_offsets_) {
-    VOXEL_LOCATION adjacent_pos = {
-      current_pos.x + voxel_offset.x,
-      current_pos.y + voxel_offset.y,
-      current_pos.z + voxel_offset.z
-    };
-
-    PILLAR_LOCATION adjacent_pillar = GetPillarLocation(adjacent_pos);
-
-    auto pillar_iter = pillars_.find(adjacent_pillar);
-
-    if (pillar_iter != pillars_.end() && !pillar_iter->second.empty()) {
-      const PillarVoxel *first_voxel = &pillar_iter->second.begin()->second;
-
-      if (first_voxel && first_voxel->is_redundant_voxel_) {
-        int64_t height_diff = std::abs(current_elevation - pillar_iter->second.begin()->first);
-
-        if (height_diff == 0) {
-          adjacent_redundant_count++;
-        }
-
-        if (adjacent_redundant_count >= config_.adjacent_redundant_threshold_){
-          return true;
-        }
-      }
-    }
-  }
-
-  return false;
-}
-
-bool PillarVoxelMap::hasAdjacentTopVoxel(const VOXEL_LOCATION &current_pos)
-{
-  if (config_.adjacent_isolated_threshold_ <= 0) {
-    return false;
-  }
-
-  int adjacent_count = 0;
-  int64_t current_elevation = current_pos.z;
-
-  for (const auto& voxel_offset : isolated_neighbor_offsets_) {
-    VOXEL_LOCATION adjacent_pos = {
-      current_pos.x + voxel_offset.x,
-      current_pos.y + voxel_offset.y,
-      current_pos.z + voxel_offset.z
-    };
-
-    PILLAR_LOCATION adjacent_pillar = GetPillarLocation(adjacent_pos);
-
-    auto pillar_iter = pillars_.find(adjacent_pillar);
-    if (pillar_iter != pillars_.end() && !pillar_iter->second.empty()) {
-      const PillarVoxel *last_voxel = &pillar_iter->second.rbegin()->second;
-
-      if (last_voxel) {
-        int64_t height_diff = std::abs(current_elevation - pillar_iter->second.rbegin()->first);
-
-        if (height_diff  == 0) {
-          adjacent_count++;
-        }
-
-        if (adjacent_count >= config_.adjacent_isolated_threshold_){
-          return true;
-        }
-      }
-    }
-  }
-
-  return false;
 }
 
 bool PillarVoxelMap::hasAdjacentVoxel(const VOXEL_LOCATION &current_pos, int threshold, const std::vector<VOXEL_LOCATION> &neighbor_offsets, double current_vp_z)
@@ -1513,6 +1437,7 @@ void PillarVoxelMap::BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud)
 void PillarVoxelMap::pillarDetection(const Eigen::Vector3d& current_pos)
 {
   // Step 1: Initial redundant/isolated voxel flag per pillar
+  voxel_label_count_ = 0;
   for (const auto& pillar_key : current_pillars_)
   {
     auto pillar_iter = pillars_.find(pillar_key);
@@ -1520,6 +1445,15 @@ void PillarVoxelMap::pillarDetection(const Eigen::Vector3d& current_pos)
       continue;
 
     updatePillarFlag(pillar_key, pillar_iter->second);
+  }
+
+  // Early-exit: no candidate voxels flagged in Step 1 — skip adjacency check,
+  // plane fitting, and label assignment. point_labels_ stays all-LABEL_NORMAL
+  // (set in BuildPillarMap), so DefineSkipPoints and PublishPillarPoints will
+  // correctly produce empty results.
+  if (voxel_label_count_ == 0) {
+    ROS_DEBUG("[pillarDetection] Early-exit: no redundant/isolated candidates after Step 1");
+    return;
   }
 
   // Step 2: Adjacency check for all redundant and isolated voxels

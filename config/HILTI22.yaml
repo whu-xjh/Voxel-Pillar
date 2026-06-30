@@ -58,7 +58,7 @@ imu:
   b_gyr_cov: 0.0001
 
   # exp03
-  # acc_cov: 0.5wo
+  # acc_cov: 0.5
   # gyr_cov: 0.5
   # b_acc_cov: 0.0001
   # b_gyr_cov: 0.0001
@@ -85,14 +85,14 @@ lio:
 # Pillar Voxel Redundant Detection
 pillar_voxel:
   pillar_voxel_en: true
-  voxel_size: 0.25
+  voxel_size: 0.5
 
   redundant_detection_method: 2  # 0=none, 1=plane fitting, 2=neighborhood
   redundant_neighbor_type: 0  # 0=4-neighbor, 1=8-neighborzh
   adjacent_redundant_threshold: 4
 
   isolated_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
-  adjacent_isolated_threshold: 1
+  adjacent_isolated_threshold: 2
 
   height_consistency_ratio: 0.25  # ratio of voxel_size for height consistency check
 

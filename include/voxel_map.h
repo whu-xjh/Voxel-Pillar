@@ -292,6 +292,10 @@ public:
   double fitted_plane_d_ = 0.0;
   bool plane_fitted_ = false;
 
+  // Count of voxels flagged as redundant/isolated candidate during Step 1 of pillarDetection.
+  // Used for early-exit: if 0 after Step 1, skip Step 2/3/4 entirely.
+  size_t voxel_label_count_ = 0;
+
   void init(const PillarVoxelConfig &config, double voxel_size);
   void BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud);
   void pillarDetection(const Eigen::Vector3d& current_pos);
@@ -306,8 +310,6 @@ private:
   void initHorizontalNeighborOffsets();
   PILLAR_LOCATION GetPillarLocation(const VOXEL_LOCATION &position) const;
   void updatePillarFlag(const PILLAR_LOCATION &pillar_key, std::map<int64_t, PillarVoxel> &pillar_voxels);
-  bool hasAdjacentRedundantVoxel(const PillarVoxel *voxel, const VOXEL_LOCATION &current_pos);
-  bool hasAdjacentTopVoxel(const VOXEL_LOCATION &current_pos);
   bool hasAdjacentVoxel(const VOXEL_LOCATION &current_pos, int threshold, const std::vector<VOXEL_LOCATION> &neighbor_offsets, double current_vp_z);
 };
 
