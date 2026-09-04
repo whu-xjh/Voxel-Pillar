@@ -4,6 +4,7 @@
 
 #include "common_lib.h"
 #include <Eigen/Dense>
+#include <algorithm>
 #include <fstream>
 #include <math.h>
 #include <map>
@@ -222,8 +223,7 @@ enum PointLabel
 {
   LABEL_NORMAL = 0,
   LABEL_REDUNDANT = 1,
-  LABEL_ISOLATED = 2,
-  LABEL_BELOW_PLANE = 3
+  LABEL_ISOLATED = 2
 };
 
 // Lightweight voxel structure for Pillar Voxel Map (decoupled from VoxelOctoTree)
@@ -270,21 +270,25 @@ typedef struct PillarVoxelConfig
   bool keep_redundant_;      // true=apply keep_num_per_voxel to redundant voxels, false=skip all
   bool keep_isolated_;       // true=apply keep_num_per_voxel to isolated voxels, false=skip all
   int adjacent_isolated_threshold_;
-  int redundant_detection_method_;
+  int redundant_detection_method_;  // 0=none (isolated only), 1=neighborhood
   int redundant_neighbor_type_;     // 0=4-neighbor, 1=8-neighbor (for redundant detection)
   int isolated_neighbor_type_;   // 0=4-neighbor, 1=8-neighbor (for isolated detection)
   double height_consistency_ratio_;  // ratio of voxel_size for height consistency check (default: 0.25)
-  double plane_fitting_distance_threshold_;
-  int skip_type_;  // 0=skip nothing extra, 1=skip below plane, 2=skip below+near plane
 
   PillarVoxelConfig() : pillar_voxel_en_(false), voxel_size_(1.0), adjacent_redundant_threshold_(3),
-                       keep_num_per_voxel_(1), keep_redundant_(true), keep_isolated_(false),
+                       keep_num_per_voxel_(0), keep_redundant_(true), keep_isolated_(false),
                        adjacent_isolated_threshold_(3),
                        redundant_detection_method_(0), redundant_neighbor_type_(1), isolated_neighbor_type_(1),
-                       height_consistency_ratio_(0.25), plane_fitting_distance_threshold_(0.1), skip_type_(0) {}
+                       height_consistency_ratio_(0.25) {}
 } PillarVoxelConfig;
 
 void loadPillarVoxelConfig(ros::NodeHandle &nh, PillarVoxelConfig &config);
+
+// Per-pillar voxel array sorted by z key (built once per frame in BuildPillarMap).
+// Flat vector instead of std::map: most pillars hold only a few z voxels and the
+// whole structure is rebuilt every frame, so cache locality and allocation count
+// beat tree lookups.
+typedef std::vector<std::pair<int64_t, PillarVoxel>> PillarVoxelArray;
 
 class PillarVoxelMap
 {
@@ -292,27 +296,21 @@ public:
   PillarVoxelMap() = default;
   PillarVoxelConfig config_;
   double voxel_size_;
-  std::unordered_map<PILLAR_LOCATION, std::map<int64_t, PillarVoxel>> pillars_;
-  std::unordered_set<PILLAR_LOCATION> current_pillars_;
+  std::unordered_map<PILLAR_LOCATION, PillarVoxelArray> pillars_;
   std::vector<VOXEL_LOCATION> redundant_neighbor_offsets_;
   std::vector<VOXEL_LOCATION> isolated_neighbor_offsets_;
 
   std::vector<int8_t> point_labels_;
   PointCloudXYZI::Ptr point_cloud_ptr_;
 
-  // Fitted plane parameters (Method 1: plane fitting)
-  Eigen::Vector3d fitted_plane_normal_ = Eigen::Vector3d::Zero();
-  double fitted_plane_d_ = 0.0;
-  bool plane_fitted_ = false;
-
   // Count of voxels flagged as redundant/isolated candidate during Step 1 of pillarDetection.
-  // Used for early-exit: if 0 after Step 1, skip Step 2/3/4 entirely.
+  // Used for early-exit: if 0 after Step 1, skip the remaining steps entirely.
   size_t voxel_label_count_ = 0;
 
   void init(const PillarVoxelConfig &config, double voxel_size);
   void BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud);
-  void pillarDetection(const Eigen::Vector3d& current_pos);
-  void PublishPillarPoints(const ros::Publisher &pubRedundant, const ros::Publisher &pubIsolated, const ros::Publisher &pubBelowPlane);
+  void pillarDetection();
+  void PublishPillarPoints(const ros::Publisher &pubRedundant, const ros::Publisher &pubIsolated);
 
   inline int8_t GetPointLabel(size_t index) const {
     return (index < point_labels_.size()) ? point_labels_[index] : LABEL_NORMAL;
@@ -322,7 +320,7 @@ private:
   void setVoxelPointLabels(PillarVoxel* voxel, int8_t label);
   void initHorizontalNeighborOffsets();
   PILLAR_LOCATION GetPillarLocation(const VOXEL_LOCATION &position) const;
-  void updatePillarFlag(const PILLAR_LOCATION &pillar_key, std::map<int64_t, PillarVoxel> &pillar_voxels);
+  void updatePillarFlag(PillarVoxelArray &pillar_voxels);
   bool hasAdjacentVoxel(const VOXEL_LOCATION &current_pos, int threshold, const std::vector<VOXEL_LOCATION> &neighbor_offsets, double current_vp_z);
 };
 
@@ -402,6 +400,10 @@ public:
   void ClearPillarVoxels();
 
 private:
+  // Shared retention pass for DefineSkipPoints: keep the newest keep_num points
+  // per flagged voxel (point_indices_ tail), mark the rest in skip_list
+  void applyVoxelRetention(int keep_num, int &redundant_total, int &redundant_kept, int &final_skip_count);
+
   void GetUpdatePlane(const VoxelOctoTree *current_octo, const int pub_max_voxel_layer, std::vector<VoxelPlane> &plane_list);
 
   void pubSinglePlane(visualization_msgs::MarkerArray &plane_pub, const std::string plane_ns, const VoxelPlane &single_plane, const float alpha,

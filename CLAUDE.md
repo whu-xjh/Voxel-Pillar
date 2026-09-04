@@ -101,34 +101,30 @@ taskset -c 16-31 bash -c 'source /opt/ros/noetic/setup.bash && catkin_make -C /h
 - Point-to-plane optimization with eigenvalue-based plane fitting
 - Neighbor search with configurable types (8-neighbor vs 24-neighbor)
 
-**Pillar Voxel System** (config/merge_lidar.yaml:68-79):
-- **Purpose**: Redundant point detection and isolation point identification using vertical pillar voxels
+**Pillar Voxel System** (config/merge_lidar.yaml `pillar_voxel` block):
+- **Purpose**: Redundant point detection and isolated point identification using vertical pillar voxels
 - **Key Functions** (all sequential, no parallelization):
-  1. `CheckHeightAngle()`: Optional height-based angle filtering (voxel_map.cpp:1321)
-  2. `BuildPillarMap()`: Organize point cloud into pillar voxels (voxel_map.cpp:1432)
-  3. `pillarDetection()`: Multi-step redundant point classification (voxel_map.cpp:1481)
-     - Method-specific processing:
-       - Method 0: No redundant detection (only isolated points)
-       - Method 1: Initial detection → Adjacency check (no plane fitting)
-  4. `DefineSkipPoints()`: Apply skip filter to main point cloud
-  5. `PublishPillarPoints()`: Publish redundant and isolated points (voxel_map.cpp:1767)
-  6. `ClearPillarVoxels()`: Memory cleanup (voxel_map.cpp:1865)
+  1. `BuildPillarMap()`: Organize point cloud into pillar voxels — flat `unordered_map<PILLAR_LOCATION, vector<pair<z, PillarVoxel>>>`, each pillar's array sorted by z (voxel_map.cpp)
+  2. `pillarDetection()`: Three sequential steps — initial per-pillar flags → horizontal adjacency check (with height consistency) → point label assignment; early-exits when Step 1 flags nothing
+  3. `DefineSkipPoints()`: Apply skip filter to the main point cloud (newest-n-per-voxel retention via `applyVoxelRetention()`)
+  4. `PublishPillarPoints()`: Publish redundant/isolated clouds (skips assembly and serialization when a topic has no subscribers)
+  5. `ClearPillarVoxels()`: Whole structure cleared after each frame (no persistence)
 
-**Configuration Parameters**:
-- `pillar_voxel_en`: Enable/disable entire system (default: true)
+**Configuration Parameters** (loaded by `loadPillarVoxelConfig`, voxel_map.cpp):
+- `pillar_voxel_en`: Enable/disable entire system (default: false)
 - `voxel_size`: Pillar voxel resolution (default: 1.0)
-- `adjacent_redundant_threshold`: Minimum adjacent redundant voxels required (default: 5, set 0 to disable)
-- `adjacent_isolated_threshold`: Minimum adjacent voxels for isolation check (default: 5)
-- `height_angle_check_en`: Enable height-angle pre-filtering (default: true)
-- `height_angle_threshold`: Height-angle threshold in degrees (default: 0)
-- `redundant_detection_method`: Redundant detection method (0=none, 1=neighborhood, default: 1)
-- `neighbor_type`: Neighbor search type (0=4-neighbor N,S,E,W, 1=8-neighbor with diagonals, default: 1)
+- `redundant_detection_method`: 0=none (isolated points only), 1=neighborhood redundant detection
+- `adjacent_redundant_threshold`: Minimum adjacent occupied voxels (same z-layer, height-consistent) to confirm a redundant voxel (0 = disable redundant detection)
+- `adjacent_isolated_threshold`: Minimum adjacent voxels to CANCEL isolation (caution: 0 skips the check entirely — opposite semantics to the redundant threshold)
+- `redundant_neighbor_type` / `isolated_neighbor_type`: 0=4-neighbor, 1=8-neighbor (`neighbor_type` is a legacy alias of the former)
+- `keep_num_per_voxel`: 0=skip all flagged points, n=keep the n newest points per flagged voxel (default: 0)
+- `keep_redundant` / `keep_isolated`: apply retention (true) or skip all (false), per category
+- `height_consistency_ratio`: adjacent voxels count as neighbors only if virtual-point heights differ by ≤ ratio × voxel_size (default: 0.25)
 
-**Execution Flow** (LIVMapper.cpp:475-480):
+**Execution Flow** (LIVMapper.cpp, guarded by `if (pillar_config.pillar_voxel_en_)`):
 ```cpp
-PointCloudXYZI::Ptr filtered_cloud = voxelmap_manager->pillar_map_.CheckHeightAngle(feats_down_world, _state.pos_end);
-voxelmap_manager->pillar_map_.BuildPillarMap(filtered_cloud);
-voxelmap_manager->pillar_map_.pillarDetection(_state.pos_end);
+voxelmap_manager->pillar_map_.BuildPillarMap(feats_down_world);
+voxelmap_manager->pillar_map_.pillarDetection();
 voxelmap_manager->DefineSkipPoints(feats_down_world);
 voxelmap_manager->pillar_map_.PublishPillarPoints(pubRedundantCloud, pubIsolatedCloud);
 voxelmap_manager->ClearPillarVoxels();
@@ -232,14 +228,16 @@ Uncomment and add to `<node>` tag:
 - `lio/intensity_noise_est_en`: Online estimation of intensity measurement noise during the init window (default: true)
 - `lio/intensity_ema_alpha`: EMA adaptation rate of plane intensity stats, in (0,1] (default: 0.5)
 
-**Pillar Voxel System** (lines 68-78):
-- `pillar_voxel/pillar_voxel_en`: Enable pillar voxel redundant point detection (default: true)
+**Pillar Voxel System** (`pillar_voxel` block):
+- `pillar_voxel/pillar_voxel_en`: Enable pillar voxel redundant point detection
 - `pillar_voxel/voxel_size`: Pillar voxel resolution (default: 1.0)
-- `pillar_voxel/adjacent_redundant_threshold`: Minimum adjacent redundant voxels (default: 5)
-- `pillar_voxel/adjacent_isolated_threshold`: Minimum adjacent voxels for isolation (default: 5)
-- `pillar_voxel/neighbor_search_type`: 0=8-neighbor, 1=24-neighbor (default: 0)
-- `pillar_voxel/height_angle_check_en`: Enable height-angle filtering (default: true)
-- `pillar_voxel/height_angle_threshold`: Height-angle threshold in degrees (default: 0)
+- `pillar_voxel/redundant_detection_method`: 0=none (isolated only), 1=neighborhood
+- `pillar_voxel/adjacent_redundant_threshold`: Minimum adjacent redundant voxels
+- `pillar_voxel/adjacent_isolated_threshold`: Minimum adjacent voxels for isolation
+- `pillar_voxel/redundant_neighbor_type` / `pillar_voxel/isolated_neighbor_type`: 0=4-neighbor, 1=8-neighbor
+- `pillar_voxel/keep_num_per_voxel`: 0=skip all flagged points, n=keep n newest per voxel
+- `pillar_voxel/keep_redundant` / `pillar_voxel/keep_isolated`: retention toggles per category
+- `pillar_voxel/height_consistency_ratio`: Height tolerance as ratio of voxel_size (default: 0.25)
 
 **Multi-LiDAR Merger** (launch file lines 9-11):
 - Input topics: `/livox/lidar_192_168_1_159`, `_160`, `_161`
@@ -400,12 +398,12 @@ The `vk::camera_loader::loadFromRosNs()` uses `getParam<double>()` which expects
 - `ExternalIMUData` (common_lib.h:132-142): External IMU message with position, velocity, orientation, covariance
 - `VoxelPlane` (voxel_map.h:77+): Voxel-based plane representation
 - `PointToPlane` (voxel_map.h:61-75): Point-to-plane correspondence for optimization
-- `PillarVoxelConfig` (voxel_map.h:218-241): Pillar voxel system configuration
+- `PillarVoxelConfig` (voxel_map.h): Pillar voxel system configuration
   - Controls redundant point detection pipeline behavior
-  - Includes adjacency filtering and threshold parameters
-- `pointWithVar` (common_lib.h): Point with variance and redundant/isolated flags
-  - `is_redundant`: Set by pillar voxel redundant detection
-  - `is_isolated`: Set for isolated points (single voxels without neighbors)
+  - Includes adjacency filtering, retention and threshold parameters
+- `pointWithVar` (common_lib.h): Point with variance. Its `is_redundant`/`is_isolated`
+  bool fields are legacy — the pillar system now tracks per-point state in
+  `PillarVoxelMap::point_labels_` instead
 
 **State Machine** (common_lib.h:53-59):
 - `WAIT`: Initial state waiting for data
@@ -438,33 +436,19 @@ The `vk::camera_loader::loadFromRosNs()` uses `getParam<double>()` which expects
 **Pillar Voxel Redundant Point Detection Pipeline:**
 The pillar voxel system operates independently of the main voxel map:
 1. **Input**: Downsampled world point cloud (`feats_down_world`)
-2. **Height-Angle Filter** (optional): `CheckHeightAngle()` filters points by height-angle threshold
-3. **Pillar Organization**: Points grouped by (x,y) coordinates, vertical voxels by z
-4. **Redundant Detection** (all steps in `pillarDetection()`):
-   - Method-specific processing (controlled by `redundant_detection_method`):
-     - **Method 0 (None)**: No redundant detection, only isolated points are marked
-     - **Method 1 (neighborhood)**: Initial classification → Adjacency check (no plane fitting)
-5. **Skip Point Definition**: `DefineSkipPoints()` marks points to exclude from ICP
-   - Method 0: Skips isolated points only
-   - Method 1: Skips isolated points + redundant points
-6. **Point Flag Update**: All points marked with `is_redundant` or `is_isolated`
-7. **Output**: Separate point clouds published for redundant and isolated points
-8. **Cleanup**: All pillar voxels deleted after each frame (no persistence)
-
-**Redundant Detection Methods:**
-- **Method 0 (None)**: No redundant detection performed
-  - Only isolated points are identified and skipped
-  - All points participate in ICP optimization (except isolated)
-  - Use when you don't want any redundant filtering
-- **Method 1 (neighborhood)**: Works better in unstructured environments
-  - Uses only local adjacency information
-  - No global plane assumption
-  - Better for rough terrain, stairs, and complex surfaces
-  - Always skips both isolated and redundant points
+2. **Pillar Organization**: Points grouped by (x,y) pillar, vertical voxels by z; per-pillar voxel arrays sorted by z; each voxel keeps point indices and a running-average virtual point
+3. **Detection** (`pillarDetection()`, three steps):
+   - Step 1: per-pillar flags — the bottom voxel without a close voxel above (< 2·voxel_size) is a redundant candidate; a voxel with ≥ 2·voxel_size gaps to both vertical neighbors is an isolated candidate; early-exit when nothing is flagged
+   - Step 2: horizontal adjacency check — redundant candidates need ≥ `adjacent_redundant_threshold` occupied neighbor voxels in the same z-layer with consistent height (≤ `height_consistency_ratio`·voxel_size); isolated candidates with ≥ `adjacent_isolated_threshold` such neighbors are cancelled
+   - Step 3: assign per-point labels (LABEL_REDUNDANT / LABEL_ISOLATED)
+4. **Skip Point Definition** (`DefineSkipPoints()`):
+   - Method 0: skips isolated points only (subject to `keep_isolated`/`keep_num_per_voxel` retention)
+   - Method 1: also skips redundant points (subject to `keep_redundant`/`keep_num_per_voxel` retention; newest-n-per-voxel retention via `applyVoxelRetention()`)
+5. **Output**: `/cloud_redundant` and `/cloud_isolated` (only assembled and published when subscribers exist)
+6. **Cleanup**: All pillar voxels cleared after each frame (no persistence)
 
 **Important Implementation Notes:**
 - Pillar voxel functions are **sequential only** - no parallelization (do not add OpenMP)
-- Redundant/isolated points **excluded** from ICP optimization via `DefineSkipPoints()`
-- `is_redundant` and `is_isolated` flags reset to `false` in `BuildPillarMap()` each frame
-- Method 1 always skips both isolated and redundant points
-- Method 0 only skips isolated points
+- Skipped points are excluded from ICP residuals via `skip_list` but **still enter the voxel map** (`UpdateVoxelMap` receives the unfiltered `pv_list_`)
+- Per-point state lives in `PillarVoxelMap::point_labels_` (LABEL_NORMAL/REDUNDANT/ISOLATED), reset each frame in `BuildPillarMap()`
+- Publishing skips cloud assembly and serialization when a topic has no subscribers

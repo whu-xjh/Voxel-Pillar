@@ -90,7 +90,7 @@ pillar_voxel:
   pillar_voxel_en: true
   voxel_size: 0.5
 
-  redundant_detection_method: 2  # 0=none, 1=plane fitting, 2=neighborhood
+  redundant_detection_method: 1  # 0=none (isolated points only), 1=neighborhood redundant detection
   redundant_neighbor_type: 0  # 0=4-neighbor, 1=8-neighborzh
   adjacent_redundant_threshold: 4
 

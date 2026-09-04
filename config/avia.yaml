@@ -63,7 +63,7 @@ pillar_voxel:
   pillar_voxel_en: false
   voxel_size: 0.25
 
-  redundant_detection_method: 2  # 0=none, 1=plane fitting, 2=neighborhood
+  redundant_detection_method: 1  # 0=none (isolated points only), 1=neighborhood redundant detection
   redundant_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
   adjacent_redundant_threshold: 5
   keep_num_per_voxel: 1  # 0=skip all redundant points, n=keep n newest points per redundant voxel
