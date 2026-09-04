@@ -12,14 +12,14 @@ extrin_calib:
   # Corridor: extrinsic_R: [0.999954875339377, 0.0, 0.009499857104811, 0.0, 1.0, 0.0, -0.009499857104811, 0.0, 0.999954875339377]
 
   # Laurel_Cavern, cave
-  extrinsic_T: [0.080, 0.029, 0.030]
-  extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
-
-  # Final_Challenge, Urban_Challenge
-  # extrinsic_T: [0.0, 0.0, 0.0]
+  # extrinsic_T: [0.080, 0.029, 0.030]
   # extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
 
-  # Long_Corridor01
+  # Final_Challenge, Urban_Challenge
+  extrinsic_T: [0.0, 0.0, 0.0]
+  extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+
+  # Corridor01
   # extrinsic_T: [0.080, 0.029, 0.030]
   # extrinsic_R: [0.9992129, -0.000519121,  0.004, 0.000516111,  0.999218492, -0.000939132, -0.004,  0.000802565,  0.999993652]
 
@@ -27,7 +27,7 @@ extrin_calib:
   # extrinsic_T: [0.0, 0.0, 0.0]
   # extrinsic_R: [0.999954875339377, 0.0000000, 0.009499857104811, 0.0000000, 1.0000000, 0.0000000, -0.009499857104811, 0.0000000, 0.999954875339377]
 
-  # Multi_Floor
+  # Floor
   # extrinsic_T: [0.080, 0.029, 0.030]
   # extrinsic_R: [0.999945562, 0.009074807,  0.005149763, -0.009060897, 0.999955255, -0.002718066, -0.005174199, 0.002671256,  0.999983046]
 
@@ -39,11 +39,11 @@ extrin_calib:
 
 time_offset:
   imu_time_offset: 0.1
-  img_time_offset: 0.1
+  img_time_offset: 0.0
   exposure_time_init: 0.0
 
 preprocess:
-  point_filter_num: 2
+  point_filter_num: 3
   filter_size_surf: 0.1
   lidar_type: 2  # Velodyne
   scan_line: 16
@@ -66,7 +66,7 @@ vio:
 # IMU
 imu:
   imu_en: true
-  imu_int_frame: 50
+  imu_int_frame: 30
 
   # standard setting
   acc_cov: 0.5
@@ -89,8 +89,8 @@ imu:
   # Final_Challenge, Urban_Challenge
   # acc_cov: 0.2
   # gyr_cov: 0.05
-  # b_acc_cov: 0.00001
-  # b_gyr_cov: 0.00001
+  # b_acc_cov: 0.00005
+  # b_gyr_cov: 0.00005
 
   # cave04
   # acc_cov: 1.0
@@ -110,8 +110,9 @@ lio:
   layer_init_num: [5, 5, 5, 5, 5]
   sigma_num: 3
   capacity: 0  # LRU cache (0 = disable)
-  rf_enhance_en: false  # Range Field enhancement
   intensity_fusion_en: true
+  intensity_gate_en: false  # Intensity-based association gate (reject material-inconsistent matches)
+  intensity_gate_k: 2.0     # Gate threshold in units of intensity sigma
  
 # Pillar Voxel Redundant Detection
 pillar_voxel:
@@ -122,10 +123,10 @@ pillar_voxel:
   redundant_neighbor_type: 0  # 0=4-neighbor, 1=8-neighborzh
   adjacent_redundant_threshold: 4
 
-  isolated_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
-  adjacent_isolated_threshold: 3
+  isolated_neighbor_type: 0  # 0=4-neighbor, 1=8-neighbor
+  adjacent_isolated_threshold: 2
 
-  height_consistency_ratio: 0.5  # ratio of voxel_size for height consistency check
+  height_consistency_ratio: 0.25  # ratio of voxel_size for height consistency check
 
   keep_num_per_voxel: 1  # 0=skip all points, n=keep n newest points per voxel
   keep_redundant: true

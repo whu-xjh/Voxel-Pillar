@@ -43,8 +43,9 @@ typedef struct VoxelMapConfig
   int half_map_size;
 
   int capacity;
-  bool rf_enhance_en_;
   bool intensity_fusion_en_;
+  bool intensity_gate_en_;
+  double intensity_gate_k_;
 
 } VoxelMapConfig;
 
@@ -84,8 +85,19 @@ typedef struct VoxelPlane
   bool is_update_ = false;
   double mean_intensity_ = 0.0f;
   double intensity_std_ = 1.0f;
+  // Whether batch intensity statistics have been initialized at least once
+  // (after that, stats evolve only via EMA so re-inits never wipe history)
+  bool intensity_init_ = false;
+  // Total number of observations folded into the intensity statistics
+  // (maturity condition for the intensity gate)
+  int intensity_obs_count_ = 0;
+  // Squared per-point intensity measurement noise (sigma_meas^2), estimated online
+  // during the init window (frame-to-frame differencing on static data).
+  // Added at use sites so the effective variance never collapses to zero
+  // (replaces the former hard std floor of 1e-3). Conservative default until ready.
+  static double intensity_meas_var_;
   // EMA alpha for intensity statistics update (higher = faster adaptation)
-  static constexpr double intensity_ema_alpha_ = 0.05;
+  static constexpr double intensity_ema_alpha_ = 0.5;
   VoxelPlane()
   {
     plane_var_ = Eigen::Matrix<double, 6, 6>::Zero();

@@ -62,8 +62,9 @@ lio:
   layer_init_num: [5, 5, 5, 5, 5]
   sigma_num: 3
   capacity: 0  # LRU cache (0 = disable)
-  rf_enhance_en: true  # Range Field enhancement
   intensity_fusion_en: true
+  intensity_gate_en: false  # Intensity-based association gate (reject material-inconsistent matches)
+  intensity_gate_k: 3.0     # Gate threshold in units of intensity sigma
 
 # Pillar Voxel Redundant Detection
 pillar_voxel:

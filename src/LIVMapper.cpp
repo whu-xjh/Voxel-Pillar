@@ -6,8 +6,11 @@
 #include <fstream>
 #include <type_traits>
 #include <pcl/point_types.h>
+#include <pcl/kdtree/kdtree_flann.h>
 #include <unordered_map>
 #include <unordered_set>
+#include <algorithm>
+#include <cmath>
 
 LIVMapper::LIVMapper(ros::NodeHandle &nh)
     : extT(0, 0, 0),
@@ -88,6 +91,8 @@ void LIVMapper::readParameters(ros::NodeHandle &nh)
   nh.param<string>("evo/pose_output_dir", pose_output_dir, "");
   nh.param<double>("imu/gyr_cov", gyr_cov, 1.0);
   nh.param<double>("imu/acc_cov", acc_cov, 1.0);
+  nh.param<double>("imu/b_gyr_cov", b_gyr_cov, 0.0001);
+  nh.param<double>("imu/b_acc_cov", b_acc_cov, 0.0001);
   nh.param<int>("imu/imu_int_frame", imu_int_frame, 3);
   nh.param<bool>("imu/imu_en", imu_en, false);
   nh.param<bool>("imu/gravity_est_en", gravity_est_en, true);
@@ -169,8 +174,8 @@ void LIVMapper::initializeComponents()
   p_imu->set_gyr_cov_scale(V3D(gyr_cov, gyr_cov, gyr_cov));
   p_imu->set_acc_cov_scale(V3D(acc_cov, acc_cov, acc_cov));
   p_imu->set_inv_expo_cov(inv_expo_cov);
-  p_imu->set_gyr_bias_cov(V3D(0.0001, 0.0001, 0.0001));
-  p_imu->set_acc_bias_cov(V3D(0.0001, 0.0001, 0.0001));
+  p_imu->set_gyr_bias_cov(V3D(b_gyr_cov, b_gyr_cov, b_gyr_cov));
+  p_imu->set_acc_bias_cov(V3D(b_acc_cov, b_acc_cov, b_acc_cov));
   p_imu->set_imu_init_frame_num(imu_int_frame);
   p_imu->set_external_imu_init_frame_num(external_imu_int_frame);
 
@@ -408,6 +413,126 @@ void LIVMapper::handleVIO()
             << _state.bias_a.transpose() << " " << V3D(_state.inv_expo_time, 0, 0).transpose() << " " << feats_undistort->points.size() << std::endl;
 }
 
+// Median of a float vector (reorders the input in place)
+static double medianOf(std::vector<float> &v)
+{
+  if (v.empty()) { return 0.0; }
+  size_t mid = v.size() / 2;
+  std::nth_element(v.begin(), v.begin() + mid, v.end());
+  double m = v[mid];
+  if (v.size() % 2 == 0)
+  {
+    std::nth_element(v.begin(), v.begin() + mid - 1, v.end());
+    m = 0.5 * (m + v[mid - 1]);
+  }
+  return m;
+}
+
+// Estimate the per-point intensity measurement noise during the init window,
+// where the platform is expected to be stationary: consecutive scans observe
+// the same surfaces, so frame-to-frame nearest-neighbor intensity differences
+// reflect pure repeat-measurement noise. For two independent measurements of
+// the same true value var(diff) = 2*sigma^2, hence the sqrt(2) divisor, and
+// the robust MAD-to-sigma factor 1.4826. The result replaces the conservative
+// default of VoxelPlane::intensity_meas_var_ and takes effect immediately in
+// the intensity fusion scoring and association gate.
+void LIVMapper::estimateIntensityNoise()
+{
+  if (intensity_noise_done_ || feats_down_world->empty()) { return; }
+
+  const int window = std::max(imu_int_frame, 15); // estimation window: reuse IMU init frames
+  const int hard_stop = 3 * window;               // give up after this many frames
+  const size_t min_pairs = 2000;                  // minimum samples for a robust estimate
+  const size_t max_pairs = 200000;                // memory bound
+  const double max_trans = 0.01;                  // stationarity gates: strict, so pairs are
+  const double max_rot_deg = 0.01;                // guaranteed near-identical viewpoints
+  const float pair_sq_dist_th = 0.01f * 0.01f;    // 1cm NN pairing radius
+
+  // Track observed intensity dynamic range for the sanity clamp
+  if (!intensity_noise_has_prev_)
+  {
+    intensity_noise_min_ = intensity_noise_max_ = feats_down_world->points[0].intensity;
+  }
+  for (auto &p : feats_down_world->points)
+  {
+    if (p.intensity < intensity_noise_min_) { intensity_noise_min_ = p.intensity; }
+    if (p.intensity > intensity_noise_max_) { intensity_noise_max_ = p.intensity; }
+  }
+
+  if (intensity_noise_has_prev_)
+  {
+    Eigen::Matrix3d R_rel = intensity_noise_prev_rot_.transpose() * _state.rot_end;
+    double rot_deg = std::acos(std::max(-1.0, std::min(1.0, 0.5 * (R_rel.trace() - 1.0)))) * 180.0 / M_PI;
+    bool stationary = (_state.pos_end - intensity_noise_prev_pos_).norm() < max_trans && rot_deg < max_rot_deg;
+
+    if (stationary)
+    {
+      pcl::KdTreeFLANN<PointType> tree;
+      tree.setInputCloud(intensity_noise_prev_cloud_);
+      std::vector<int> idx(1);
+      std::vector<float> sq_dist(1);
+      for (auto &p : feats_down_world->points)
+      {
+        if (tree.nearestKSearch(p, 1, idx, sq_dist) > 0 && sq_dist[0] < pair_sq_dist_th)
+        {
+          intensity_noise_diffs_.push_back(p.intensity - intensity_noise_prev_cloud_->points[idx[0]].intensity);
+        }
+        if (intensity_noise_diffs_.size() >= max_pairs) { break; }
+      }
+    }
+  }
+
+  // Deep copy: feats_down_world is overwritten every frame
+  intensity_noise_prev_cloud_.reset(new PointCloudXYZI(*feats_down_world));
+  intensity_noise_prev_pos_ = _state.pos_end;
+  intensity_noise_prev_rot_ = _state.rot_end;
+  intensity_noise_has_prev_ = true;
+  intensity_noise_frames_++;
+
+  bool window_over = intensity_noise_frames_ >= window;
+  bool enough = intensity_noise_diffs_.size() >= min_pairs;
+  if (!(window_over && enough) && intensity_noise_frames_ < hard_stop && intensity_noise_diffs_.size() < max_pairs)
+  {
+    return;
+  }
+
+  intensity_noise_done_ = true;
+  if (!enough)
+  {
+    // Estimation failed: do NOT model the intensity measurement noise for this
+    // run (sigma_meas = 0). Intensity fusion/gate stay enabled and rely only on
+    // the per-plane intensity statistics.
+    std::cout << "[ IntensityNoise ]: FAILED (insufficient pairs: " << intensity_noise_diffs_.size()
+              << " < " << min_pairs << ") - intensity measurement noise NOT considered (set to 0)" << std::endl;
+    VoxelPlane::intensity_meas_var_ = 0.0;
+    return;
+  }
+
+  double med = medianOf(intensity_noise_diffs_);
+  std::vector<float> abs_dev(intensity_noise_diffs_.size());
+  for (size_t i = 0; i < intensity_noise_diffs_.size(); i++)
+  {
+    abs_dev[i] = std::fabs(intensity_noise_diffs_[i] - med);
+  }
+  double mad = medianOf(abs_dev);
+
+  double sigma = 1.4826 * mad / std::sqrt(2.0);
+  // Sanity clamps: numeric floor, and at most 10% of the observed dynamic range
+  double range = static_cast<double>(intensity_noise_max_ - intensity_noise_min_);
+  if (range > 1e-6) { sigma = std::min(sigma, 0.1 * range); }
+  sigma = std::max(sigma, 1e-3);
+
+  VoxelPlane::intensity_meas_var_ = sigma * sigma;
+  std::cout << "[ IntensityNoise ]: estimated sigma_meas = " << sigma << " (variance " << sigma * sigma
+            << ") from " << intensity_noise_diffs_.size() << " pairs over " << intensity_noise_frames_
+            << " frames" << std::endl;
+  if (sigma < 0.5) // close to uint8 quantization noise (1/sqrt(12) ~ 0.29)
+  {
+    std::cout << "[ IntensityNoise ]: WARNING: near-zero noise, the intensity channel may be "
+              << "constant/invalid - consider disabling intensity fusion/gate" << std::endl;
+  }
+}
+
 // Execute LiDAR-Inertial Odometry (LIO) processing
 void LIVMapper::handleLIO()
 {
@@ -442,6 +567,9 @@ void LIVMapper::handleLIO()
   transformLidar(_state.rot_end, _state.pos_end, feats_down_body, feats_down_world); // Transform to world coordinate system
   voxelmap_manager->feats_down_world_ = feats_down_world;
   voxelmap_manager->feats_down_size_ = feats_down_size;
+
+  // Auto-estimate intensity measurement noise during the init window (static platform)
+  if (!intensity_noise_done_) { estimateIntensityNoise(); }
 
   // double t_tran2 = omp_get_wtime();
   // printf("transformLidar time: %f\n", t_tran2 - t_tran1);

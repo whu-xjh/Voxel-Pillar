@@ -30,7 +30,7 @@ time_offset:
 
 preprocess:
   hilti_en: true
-  point_filter_num: 5
+  point_filter_num: 10
   filter_size_surf: 0.1
   lidar_type: 5  # HesaiXT32
   scan_line: 32
@@ -52,10 +52,10 @@ vio:
 imu:
   imu_en: true
   imu_int_frame: 50
-  acc_cov: 0.5
-  gyr_cov: 0.01
-  b_acc_cov: 0.0001
-  b_gyr_cov: 0.0001
+  # acc_cov: 0.5
+  # gyr_cov: 0.01
+  # b_acc_cov: 0.0001
+  # b_gyr_cov: 0.0001
 
   # exp03
   # acc_cov: 0.5
@@ -64,10 +64,10 @@ imu:
   # b_gyr_cov: 0.0001
 
   # exp10
-  # acc_cov: 0.2
-  # gyr_cov: 0.01
-  # b_acc_cov: 0.0001
-  # b_gyr_cov: 0.0001
+  acc_cov: 0.5
+  gyr_cov: 0.01
+  b_acc_cov: 0.0001
+  b_gyr_cov: 0.0001
 
 lio:
   max_iterations: 5
@@ -79,8 +79,9 @@ lio:
   max_points_num: 100
   layer_init_num: [5, 5, 5, 5, 5]
   capacity: 0  # LRU cache (0 = disable)
-  rf_enhance_en: false  # Range Field enhancement
   intensity_fusion_en: true
+  intensity_gate_en: false  # Intensity-based association gate (reject material-inconsistent matches)
+  intensity_gate_k: 3.0     # Gate threshold in units of intensity sigma
 
 # Pillar Voxel Redundant Detection
 pillar_voxel:
@@ -92,11 +93,11 @@ pillar_voxel:
   adjacent_redundant_threshold: 4
 
   isolated_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
-  adjacent_isolated_threshold: 2
+  adjacent_isolated_threshold: 3
 
   height_consistency_ratio: 0.25  # ratio of voxel_size for height consistency check
 
-  keep_num_per_voxel: 1  # 0=skip all points, n=keep n newest points per voxel
+  keep_num_per_voxel: 5  # 0=skip all points, n=keep n newest points per voxel
   keep_redundant: true
   keep_isolated: false
 
@@ -106,7 +107,7 @@ local_map:
   sliding_thresh: 8
 
 uav:
-  imu_rate_odom: false
+  imu_rate_odom: true
   gravity_align_en: true
 
 publish:

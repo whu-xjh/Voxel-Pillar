@@ -4,6 +4,10 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <pcl_conversions/pcl_conversions.h>
 
+// Squared intensity measurement noise; overwritten by the online estimator
+// (LIVMapper::estimateIntensityNoise) during the init window
+double VoxelPlane::intensity_meas_var_ = 1.0;
+
 // Calculate point covariance from sensor measurement errors (range and angle)
 // Input: point coordinate pb in sensor frame, range error range_inc, angle error degree_inc
 // Output: covariance matrix cov in sensor frame
@@ -50,8 +54,9 @@ void loadVoxelConfig(ros::NodeHandle &nh, VoxelMapConfig &voxel_config)
   nh.param<int>("lio/max_points_num", voxel_config.max_points_num_, 50);
   nh.param<int>("lio/max_iterations", voxel_config.max_iterations_, 5);
   nh.param<int>("lio/capacity", voxel_config.capacity, 100000);
-  nh.param<bool>("lio/rf_enhance_en", voxel_config.rf_enhance_en_, false);
   nh.param<bool>("lio/intensity_fusion_en", voxel_config.intensity_fusion_en_, false);
+  nh.param<bool>("lio/intensity_gate_en", voxel_config.intensity_gate_en_, false);
+  nh.param<double>("lio/intensity_gate_k", voxel_config.intensity_gate_k_, 3.0);
 
   nh.param<bool>("local_map/map_sliding_en", voxel_config.map_sliding_en, false);
   nh.param<int>("local_map/half_map_size", voxel_config.half_map_size, 100);
@@ -85,30 +90,40 @@ void VoxelOctoTree::init_plane(const std::vector<pointWithVar> &points, VoxelPla
   plane->normal_ = Eigen::Vector3d::Zero();
   plane->points_size_ = points.size();
   plane->radius_ = 0;
-  plane->mean_intensity_ = 0.0f;
 
   // 2. Compute covariance matrix and centroid
-  double intensity_sum = 0.0;
-
   for (auto pv : points)
   {
     plane->covariance_ += pv.point_w * pv.point_w.transpose();
     plane->center_ += pv.point_w;
-    intensity_sum += static_cast<double>(pv.intensity);
   }
   plane->center_ = plane->center_ / plane->points_size_;
   plane->covariance_ = plane->covariance_ / plane->points_size_ - plane->center_ * plane->center_.transpose();
-  plane->mean_intensity_ = static_cast<float>(intensity_sum / static_cast<double>(plane->points_size_));
 
-  // 3. Compute intensity variance
-  double intensity_variance = 0.0;
-  for (auto pv : points)
+  // 3. Batch-initialize intensity statistics only on the first init. On periodic
+  // re-inits every point has already been folded into the EMA state by
+  // UpdateOctoTree, so overwriting from the recent temp_points_ window would
+  // discard the accumulated history. No hard std floor here: the measurement
+  // noise term (intensity_meas_var_) is added at the use sites instead.
+  if (!points.empty() && !plane->intensity_init_)
   {
-    double diff = static_cast<double>(pv.intensity) - plane->mean_intensity_;
-    intensity_variance += diff * diff;
+    double intensity_sum = 0.0;
+    for (auto pv : points)
+    {
+      intensity_sum += static_cast<double>(pv.intensity);
+    }
+    double intensity_mean = intensity_sum / static_cast<double>(plane->points_size_);
+    double intensity_variance = 0.0;
+    for (auto pv : points)
+    {
+      double diff = static_cast<double>(pv.intensity) - intensity_mean;
+      intensity_variance += diff * diff;
+    }
+    plane->mean_intensity_ = intensity_mean;
+    plane->intensity_std_ = sqrt(intensity_variance / static_cast<double>(plane->points_size_));
+    plane->intensity_obs_count_ = static_cast<int>(points.size());
+    plane->intensity_init_ = true;
   }
-  // Clamp initial std to prevent probability explosion
-  plane->intensity_std_ = std::max(sqrt(intensity_variance / static_cast<double>(plane->points_size_)), 1e-3);
 
   // 4. Eigenvalue decomposition to extract plane normal and other parameters
   // Eigenvalues represent variance in three principal directions:
@@ -325,14 +340,17 @@ void VoxelOctoTree::UpdateOctoTree(const pointWithVar &pv)
   {
     if (plane_ptr_->is_plane_) // Current voxel is already a plane, incremental update, periodically update plane parameters
     {
-      // EMA update for intensity statistics (always runs, even when update_enable_=false)
+      // EMA update for intensity statistics (always runs, even when update_enable_=false).
+      // No hard std floor: the measurement noise term added at the use sites
+      // (intensity_meas_var_) keeps the effective variance from collapsing.
       {
         const double alpha = VoxelPlane::intensity_ema_alpha_;
         double val = static_cast<double>(pv.intensity);
         double delta = val - plane_ptr_->mean_intensity_;
         plane_ptr_->mean_intensity_ += alpha * delta;
         double variance = (1.0 - alpha) * plane_ptr_->intensity_std_ * plane_ptr_->intensity_std_ + alpha * delta * delta;
-        plane_ptr_->intensity_std_ = std::max(sqrt(variance), 1e-3);
+        plane_ptr_->intensity_std_ = sqrt(variance);
+        plane_ptr_->intensity_obs_count_++;
       }
 
       if (update_enable_)
@@ -375,14 +393,17 @@ void VoxelOctoTree::UpdateOctoTree(const pointWithVar &pv)
       }
       else // Reached max layer, treat as leaf node
       {
-        // EMA update for intensity statistics (always runs)
+        // EMA update for intensity statistics (always runs).
+        // No hard std floor: the measurement noise term added at the use sites
+        // (intensity_meas_var_) keeps the effective variance from collapsing.
         {
           const double alpha = VoxelPlane::intensity_ema_alpha_;
           double val = static_cast<double>(pv.intensity);
           double delta = val - plane_ptr_->mean_intensity_;
           plane_ptr_->mean_intensity_ += alpha * delta;
           double variance = (1.0 - alpha) * plane_ptr_->intensity_std_ * plane_ptr_->intensity_std_ + alpha * delta * delta;
-          plane_ptr_->intensity_std_ = std::max(sqrt(variance), 1e-3);
+          plane_ptr_->intensity_std_ = sqrt(variance);
+          plane_ptr_->intensity_obs_count_++;
         }
 
         if (update_enable_)
@@ -906,19 +927,13 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
         // If no valid plane found in current voxel, check adjacent voxels
         VOXEL_LOCATION near_position = position;
 
-        // Receptive field enhancement: determine search range based on configuration
-        // Helper function: compute single-axis offset
+        // Helper: single-axis offset, +1/-1 when the point sits in the outer
+        // half of its voxel along that axis
         auto calc_offset = [&](double coord, double center, double quater_len) -> int {
           if (coord > center + quater_len) {
-            if (config_setting_.rf_enhance_en_ && coord > center + 2 * quater_len)
-              return 2;
-            else
-              return 1;
+            return 1;
           } else if (coord < center - quater_len) {
-            if (config_setting_.rf_enhance_en_ && coord < center - 2 * quater_len)
-              return -2;
-            else
-              return -1;
+            return -1;
           }
           return 0;
         };
@@ -985,23 +1000,43 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
       sigma_l += plane.normal_.transpose() * pv.var * plane.normal_;
       if (dis_to_plane < sigma_num * sqrt(sigma_l))
       {
+        // Effective intensity variance: plane spread + squared measurement noise
+        // (auto-estimated during the init window; 0 if estimation failed, i.e.
+        // intensity noise is not considered). A plane with sigma_int_sq == 0
+        // carries no usable intensity statistics and falls back to
+        // geometry-only association below.
+        double intensity_diff = static_cast<double>(pv.intensity) - plane.mean_intensity_;
+        double sigma_int_sq = plane.intensity_std_ * plane.intensity_std_ + VoxelPlane::intensity_meas_var_;
+
+        // Intensity gate: reject associations whose intensity profile is inconsistent
+        // with the plane (e.g. dynamic objects in front of static surfaces). Requires
+        // mature statistics to be meaningful. On rejection is_sucess/is_surface stay
+        // false, so the caller falls back to searching neighbor voxels.
+        if (config_setting_.intensity_gate_en_ && plane.intensity_obs_count_ >= 20 && sigma_int_sq > 1e-6)
+        {
+          double m_int = intensity_diff / sqrt(sigma_int_sq);
+          if (std::fabs(m_int) > config_setting_.intensity_gate_k_) { return; }
+        }
+
         is_surface = true; // If point-to-plane distance is small, consider point as plane point
         is_sucess = true;
 
-        double this_prob = 1.0 / (sqrt(sigma_l)) * exp(-0.5 * dis_to_plane * dis_to_plane / sigma_l);
-
-        // Enable 3D intensity probability fusion based on configuration
-        if (config_setting_.intensity_fusion_en_)
+        double this_prob;
+        if (config_setting_.intensity_fusion_en_ && sigma_int_sq > 0.0)
         {
-          // Prevent probability explosion: intensity standard deviation floor at 1e-3
-          double intensity_std_safe = std::max(plane.intensity_std_, 1e-3);
-          double intensity_std_sq = intensity_std_safe * intensity_std_safe;
-
-          // Intensity probability: same form as geometric probability (no normalization factor)
-          double intensity_diff = static_cast<double>(pv.intensity) - plane.mean_intensity_;
-          double intensity_prob = 1.0 / sqrt(intensity_std_sq) *
-                                  exp(-0.5 * intensity_diff * intensity_diff / intensity_std_sq);
-          this_prob = this_prob * intensity_prob;
+          // Joint geometric+intensity score: squared Mahalanobis distance of the
+          // combined observation. Normalization factors are dropped so plane
+          // selection is driven by fit quality only, not by variance magnitude.
+          double m2 = dis_to_plane * dis_to_plane / sigma_l +
+                      intensity_diff * intensity_diff / sigma_int_sq;
+          this_prob = exp(-0.5 * m2);
+        }
+        else
+        {
+          // Geometry-only scoring. Also used when sigma_int_sq == 0: this plane
+          // carries no usable intensity statistics, so intensity fusion is
+          // skipped for it and association relies on geometry alone.
+          this_prob = 1.0 / (sqrt(sigma_l)) * exp(-0.5 * dis_to_plane * dis_to_plane / sigma_l);
         }
 
         if (this_prob > prob) // When point may match multiple planes, select the one with highest probability

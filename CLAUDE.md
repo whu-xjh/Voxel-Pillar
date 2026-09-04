@@ -8,30 +8,31 @@ This is **voxel_pillar** (package name), a Voxel-Pillar system with pillar voxel
 
 ## Build System
 
-This is a ROS Catkin workspace. The project path is `/home/xjh/Doc/Voxel-Pillar/catkin_ws/src/Voxel-Pillar-main`.
+This is a ROS Catkin workspace. The project path is `/home/wsl-4080/code/Voxel-Pillar/catkin_ws/src/Voxel-Pillar` (WSL2, Ubuntu 20.04, ROS Noetic).
 
-Build from the catkin workspace root:
+**IMPORTANT — CPU instability, always build on E-cores**: this machine's i9-14900KF has degraded/unstable P-cores (threads 0-15). Building on them causes random failures: g++ `internal compiler error: Segmentation fault` at varying system headers, linker `ld terminated with signal 11`, and even cmake parse errors that move between runs. Objects that compile "successfully" on P-cores may be silently corrupted. E-cores (threads 16-31) are stable. All builds — including the cmake configure step — must be wrapped in `taskset -c 16-31`:
 
 ```bash
-cd /home/xjh/Doc/Voxel-Pillar/catkin_ws
-catkin_make
-source devel/setup.bash
+taskset -c 16-31 bash -c 'source /opt/ros/noetic/setup.bash && catkin_make -C /home/wsl-4080/code/Voxel-Pillar/catkin_ws -j16'
+source /home/wsl-4080/code/Voxel-Pillar/catkin_ws/devel/setup.bash
 ```
-
-**Note**: The workspace path is `Voxel-Pillar/catkin_ws`, not `highspeed-lio/catkin_ws`. If your workspace is located elsewhere, adjust paths accordingly.
 
 For development with debugging:
 ```bash
-catkin_make -DCMAKE_BUILD_TYPE=Debug
+taskset -c 16-31 bash -c 'source /opt/ros/noetic/setup.bash && catkin_make -C /home/wsl-4080/code/Voxel-Pillar/catkin_ws -DCMAKE_BUILD_TYPE=Debug -j16'
 ```
 
 **Architecture-specific optimizations** (CMakeLists.txt:21-37):
 - ARM (32/64-bit): `-O3 -mcpu=native -mtune=native` with NEON support for 32-bit
-- x86-64: `-O2 -march=native` (conservative to avoid compiler crashes)
+- x86-64: `-O2` only (no `-march=native`; conservative to avoid compiler crashes)
 - Multi-threading: Auto-configured based on CPU core count (`MP_EN`, `MP_PROC_NUM`)
 - Debug builds: `-O0 -g`
 
-**Dependencies**: PCL (≥1.8), Eigen3 (≥3.3.4), OpenCV, Sophus, Boost, vikit_common/vikit_ros. Optional: mimalloc, OpenMP, LAStools.
+**Dependencies**: PCL (≥1.8), Eigen3 (≥3.3.4), OpenCV, Sophus, Boost, vikit_common/vikit_ros (in `src/rpg_vikit/`). Optional: mimalloc, OpenMP, LAStools.
+
+**Sophus note**: Sophus is not installed system-wide; it is found via the cmake user registry from its build tree at `/home/wsl-4080/code/Sophus/build` (`SophusConfig.cmake` there exports `Sophus_LIBRARIES=/home/wsl-4080/code/Sophus/build/libSophus.so`). Do not delete that directory, or `catkin_make` fails at `find_package(Sophus)`.
+
+**Python tooling**: evaluation scripts (`python/evaluate_txt_trajectory.py` etc.) need the conda env `xjh` (Python 3.10, has `evo`): `source /root/miniconda3/etc/profile.d/conda.sh && conda activate xjh` before running them.
 
 ## Core Architecture
 
@@ -81,7 +82,15 @@ catkin_make -DCMAKE_BUILD_TYPE=Debug
 **Voxel Structure** (include/voxel_map.h):
 - Octree-based with configurable layering (`max_layer`, `layer_init_num`)
 - LRU caching for memory management (`capacity`: 0=disabled, default 100000)
-- Intensity fusion support (`intensity_fusion_en`)
+- Intensity fusion support (`intensity_fusion_en`): joint geometric+intensity
+  Mahalanobis score for plane selection; per-plane intensity stats are
+  batch-initialized once then evolve via EMA (re-inits keep the history).
+  The per-point measurement noise `sigma_meas` is auto-estimated during the
+  init window (frame-to-frame NN differencing on static data, LIVMapper.cpp)
+  and stored in `VoxelPlane::intensity_meas_var_`; it replaces the former
+  hard std floor of 1e-3
+- Intensity association gate (`intensity_gate_en`, `intensity_gate_k`):
+  rejects associations whose intensity mismatch exceeds k sigma_int
 - Point-to-plane optimization with eigenvalue-based plane fitting
 - Neighbor search with configurable types (8-neighbor vs 24-neighbor)
 
@@ -211,6 +220,8 @@ Uncomment and add to `<node>` tag:
 - `lio/voxel_size`: Voxel resolution (default: 1.0 meter)
 - `lio/capacity`: LRU cache capacity (default: 0 = disabled)
 - `lio/intensity_fusion_en`: Enable intensity-based fusion
+- `lio/intensity_gate_en`: Enable intensity-based association rejection (default: false)
+- `lio/intensity_gate_k`: Gate threshold in units of intensity sigma (default: 3.0)
 
 **Pillar Voxel System** (lines 68-78):
 - `pillar_voxel/pillar_voxel_en`: Enable pillar voxel redundant point detection (default: true)

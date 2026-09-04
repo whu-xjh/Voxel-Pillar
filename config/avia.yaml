@@ -57,7 +57,6 @@ lio:
   max_layer: 2
   max_points_num: 100
   layer_init_num: [5, 5, 5, 5, 5]
-  rf_enhance_en: false  # Range Field enhancement
 
 # Pillar Voxel Redundant Detection
 pillar_voxel:
