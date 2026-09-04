@@ -138,6 +138,7 @@ private:
   // Frame-to-frame NN intensity differencing estimates sigma_meas, which is
   // stored in VoxelPlane::intensity_meas_var_ and used by the intensity
   // fusion scoring and association gate in the voxel map.
+  bool intensity_noise_est_en_ = true;  // lio/intensity_noise_est_en: enable online estimation
   bool intensity_noise_done_ = false;
   bool intensity_noise_has_prev_ = false;
   int intensity_noise_frames_ = 0;

@@ -61,6 +61,8 @@ lio:
   intensity_fusion_en: true
   intensity_gate_en: false  # Intensity-based association gate (reject material-inconsistent matches)
   intensity_gate_k: 3.0     # Gate threshold in units of intensity sigma
+  intensity_noise_est_en: true  # Online estimation of intensity measurement noise (init window)
+  intensity_ema_alpha: 0.5      # EMA adaptation rate of plane intensity stats, in (0,1]; higher = faster
 
 # Pillar Voxel Redundant Detection
 pillar_voxel:

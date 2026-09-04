@@ -96,8 +96,9 @@ typedef struct VoxelPlane
   // Added at use sites so the effective variance never collapses to zero
   // (replaces the former hard std floor of 1e-3). Conservative default until ready.
   static double intensity_meas_var_;
-  // EMA alpha for intensity statistics update (higher = faster adaptation)
-  static constexpr double intensity_ema_alpha_ = 0.5;
+  // EMA alpha for intensity statistics update (higher = faster adaptation).
+  // Configurable via lio/intensity_ema_alpha, clamped to (0, 1]
+  static double intensity_ema_alpha_;
   VoxelPlane()
   {
     plane_var_ = Eigen::Matrix<double, 6, 6>::Zero();

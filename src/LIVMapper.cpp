@@ -93,6 +93,7 @@ void LIVMapper::readParameters(ros::NodeHandle &nh)
   nh.param<double>("imu/acc_cov", acc_cov, 1.0);
   nh.param<double>("imu/b_gyr_cov", b_gyr_cov, 0.0001);
   nh.param<double>("imu/b_acc_cov", b_acc_cov, 0.0001);
+  nh.param<bool>("lio/intensity_noise_est_en", intensity_noise_est_en_, true);
   nh.param<int>("imu/imu_int_frame", imu_int_frame, 3);
   nh.param<bool>("imu/imu_en", imu_en, false);
   nh.param<bool>("imu/gravity_est_en", gravity_est_en, true);
@@ -438,7 +439,7 @@ static double medianOf(std::vector<float> &v)
 // the intensity fusion scoring and association gate.
 void LIVMapper::estimateIntensityNoise()
 {
-  if (intensity_noise_done_ || feats_down_world->empty()) { return; }
+  if (!intensity_noise_est_en_ || intensity_noise_done_ || feats_down_world->empty()) { return; }
 
   const int window = std::max(imu_int_frame, 15); // estimation window: reuse IMU init frames
   const int hard_stop = 3 * window;               // give up after this many frames

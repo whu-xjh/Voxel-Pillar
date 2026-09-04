@@ -8,6 +8,9 @@
 // (LIVMapper::estimateIntensityNoise) during the init window
 double VoxelPlane::intensity_meas_var_ = 1.0;
 
+// EMA alpha for intensity statistics; overwritten from lio/intensity_ema_alpha
+double VoxelPlane::intensity_ema_alpha_ = 0.5;
+
 // Calculate point covariance from sensor measurement errors (range and angle)
 // Input: point coordinate pb in sensor frame, range error range_inc, angle error degree_inc
 // Output: covariance matrix cov in sensor frame
@@ -57,6 +60,10 @@ void loadVoxelConfig(ros::NodeHandle &nh, VoxelMapConfig &voxel_config)
   nh.param<bool>("lio/intensity_fusion_en", voxel_config.intensity_fusion_en_, false);
   nh.param<bool>("lio/intensity_gate_en", voxel_config.intensity_gate_en_, false);
   nh.param<double>("lio/intensity_gate_k", voxel_config.intensity_gate_k_, 3.0);
+  double intensity_ema_alpha = 0.5;
+  nh.param<double>("lio/intensity_ema_alpha", intensity_ema_alpha, 0.5);
+  // Keep alpha in (0, 1]: 0 would freeze the statistics, >1 diverges
+  VoxelPlane::intensity_ema_alpha_ = std::min(std::max(intensity_ema_alpha, 1e-3), 1.0);
 
   nh.param<bool>("local_map/map_sliding_en", voxel_config.map_sliding_en, false);
   nh.param<int>("local_map/half_map_size", voxel_config.half_map_size, 100);
@@ -1002,17 +1009,18 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
       {
         // Effective intensity variance: plane spread + squared measurement noise
         // (auto-estimated during the init window; 0 if estimation failed, i.e.
-        // intensity noise is not considered). A plane with sigma_int_sq == 0
-        // carries no usable intensity statistics and falls back to
-        // geometry-only association below.
+        // intensity noise is not considered). Floored at 1e-3 so it is always
+        // strictly positive: every candidate plane is scored with the same 2D
+        // likelihood form and none falls back to geometry-only scoring while
+        // fusion/gate are enabled.
         double intensity_diff = static_cast<double>(pv.intensity) - plane.mean_intensity_;
-        double sigma_int_sq = plane.intensity_std_ * plane.intensity_std_ + VoxelPlane::intensity_meas_var_;
+        double sigma_int_sq = std::max(plane.intensity_std_ * plane.intensity_std_ + VoxelPlane::intensity_meas_var_, 1e-3);
 
         // Intensity gate: reject associations whose intensity profile is inconsistent
         // with the plane (e.g. dynamic objects in front of static surfaces). Requires
         // mature statistics to be meaningful. On rejection is_sucess/is_surface stay
         // false, so the caller falls back to searching neighbor voxels.
-        if (config_setting_.intensity_gate_en_ && plane.intensity_obs_count_ >= 20 && sigma_int_sq > 1e-6)
+        if (config_setting_.intensity_gate_en_ && plane.intensity_obs_count_ >= 20)
         {
           double m_int = intensity_diff / sqrt(sigma_int_sq);
           if (std::fabs(m_int) > config_setting_.intensity_gate_k_) { return; }
@@ -1022,20 +1030,17 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
         is_sucess = true;
 
         double this_prob;
-        if (config_setting_.intensity_fusion_en_ && sigma_int_sq > 0.0)
+        if (config_setting_.intensity_fusion_en_)
         {
-          // Joint geometric+intensity score: squared Mahalanobis distance of the
-          // combined observation. Normalization factors are dropped so plane
-          // selection is driven by fit quality only, not by variance magnitude.
-          double m2 = dis_to_plane * dis_to_plane / sigma_l +
-                      intensity_diff * intensity_diff / sigma_int_sq;
-          this_prob = exp(-0.5 * m2);
+          // Joint score as the product of two independent Gaussian likelihoods
+          double prob_geo = 1.0 / sqrt(sigma_l) * exp(-0.5 * dis_to_plane * dis_to_plane / sigma_l);
+          double prob_int = 1.0 / sqrt(sigma_int_sq) * exp(-0.5 * intensity_diff * intensity_diff / sigma_int_sq);
+          cout<<sigma_int_sq<<endl;
+          this_prob = prob_geo * prob_int;
         }
         else
         {
-          // Geometry-only scoring. Also used when sigma_int_sq == 0: this plane
-          // carries no usable intensity statistics, so intensity fusion is
-          // skipped for it and association relies on geometry alone.
+          // Geometry-only scoring (intensity fusion disabled)
           this_prob = 1.0 / (sqrt(sigma_l)) * exp(-0.5 * dis_to_plane * dis_to_plane / sigma_l);
         }
 

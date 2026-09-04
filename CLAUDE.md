@@ -83,12 +83,19 @@ taskset -c 16-31 bash -c 'source /opt/ros/noetic/setup.bash && catkin_make -C /h
 - Octree-based with configurable layering (`max_layer`, `layer_init_num`)
 - LRU caching for memory management (`capacity`: 0=disabled, default 100000)
 - Intensity fusion support (`intensity_fusion_en`): joint geometric+intensity
-  Mahalanobis score for plane selection; per-plane intensity stats are
+  score for plane selection, computed as the product of two normalized
+  Gaussian likelihoods (geometry prob × intensity prob, both in the
+  1/sqrt(sigma) * exp(-0.5 m^2) form); per-plane intensity stats are
   batch-initialized once then evolve via EMA (re-inits keep the history).
   The per-point measurement noise `sigma_meas` is auto-estimated during the
   init window (frame-to-frame NN differencing on static data, LIVMapper.cpp)
   and stored in `VoxelPlane::intensity_meas_var_`; it replaces the former
-  hard std floor of 1e-3
+  hard std floor of 1e-3. The effective intensity variance
+  `sigma_int_sq = std^2 + meas_var` is floored at 1e-3 so it is always
+  strictly positive: every candidate plane is scored with the same 2D
+  likelihood form (no geometry-only fallback while fusion is enabled).
+  The EMA rate is configurable via `lio/intensity_ema_alpha` (default 0.5,
+  clamped to (0,1])
 - Intensity association gate (`intensity_gate_en`, `intensity_gate_k`):
   rejects associations whose intensity mismatch exceeds k sigma_int
 - Point-to-plane optimization with eigenvalue-based plane fitting
@@ -222,6 +229,8 @@ Uncomment and add to `<node>` tag:
 - `lio/intensity_fusion_en`: Enable intensity-based fusion
 - `lio/intensity_gate_en`: Enable intensity-based association rejection (default: false)
 - `lio/intensity_gate_k`: Gate threshold in units of intensity sigma (default: 3.0)
+- `lio/intensity_noise_est_en`: Online estimation of intensity measurement noise during the init window (default: true)
+- `lio/intensity_ema_alpha`: EMA adaptation rate of plane intensity stats, in (0,1] (default: 0.5)
 
 **Pillar Voxel System** (lines 68-78):
 - `pillar_voxel/pillar_voxel_en`: Enable pillar voxel redundant point detection (default: true)
