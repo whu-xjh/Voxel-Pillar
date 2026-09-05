@@ -8,8 +8,6 @@
 
 using namespace std;
 
-#define IS_VALID(a) ((abs(a) > 1e8) ? true : false)
-
 enum LiDARFeature
 {
   Nor,
@@ -146,28 +144,25 @@ public:
 
   void process(const livox_ros_driver::CustomMsg::ConstPtr &msg, PointCloudXYZI::Ptr &pcl_out);
   void process(const sensor_msgs::PointCloud2::ConstPtr &msg, PointCloudXYZI::Ptr &pcl_out);
-  void set(bool feat_en, int lid_type, double bld, int pfilt_num);
 
   // sensor_msgs::PointCloud2::ConstPtr pointcloud;
   PointCloudXYZI pl_full, pl_corn, pl_surf;
   PointCloudXYZI pl_buff[128]; // maximum 128 line lidar
   vector<orgtype> typess[128]; // maximum 128 line lidar
   int lidar_type, point_filter_num, N_SCANS;
-  
+
   double blind, blind_sqr;
   bool feature_enabled, given_offset_time;
-  ros::Publisher pub_full, pub_surf, pub_corn;
 
 private:
   void avia_handler(const livox_ros_driver::CustomMsg::ConstPtr &msg);
   void oust64_handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
   void velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
   void xt32_handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
-  void Pandar128_handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
+  void pandar128_handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
   void robosense_handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
   void l515_handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
   void give_feature(PointCloudXYZI &pl, vector<orgtype> &types);
-  void pub_func(PointCloudXYZI &pl, const ros::Time &ct);
   int plane_judge(const PointCloudXYZI &pl, vector<orgtype> &types, uint i, uint &i_nex, Eigen::Vector3d &curr_direct);
   bool small_plane(const PointCloudXYZI &pl, vector<orgtype> &types, uint i_cur, uint &i_nex, Eigen::Vector3d &curr_direct);
   bool edge_jump_judge(const PointCloudXYZI &pl, vector<orgtype> &types, uint i, Surround nor_dir);

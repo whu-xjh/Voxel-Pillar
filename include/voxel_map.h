@@ -8,7 +8,6 @@
 #include <fstream>
 #include <math.h>
 #include <map>
-#include <mutex>
 #include <omp.h>
 #include <pcl/common/io.h>
 #include <ros/ros.h>
@@ -24,8 +23,6 @@
 #define VOXELMAP_HASH_P 116101
 #define VOXELMAP_MAX_N 10000000000
 
-static int voxel_plane_id = 0;
-
 typedef struct VoxelMapConfig
 {
   double max_voxel_size_;
@@ -39,11 +36,11 @@ typedef struct VoxelMapConfig
   double sigma_num_;
   bool is_pub_plane_map_;
 
-  double sliding_thresh;
-  bool map_sliding_en;
-  int half_map_size;
+  double sliding_thresh_;
+  bool map_sliding_en_;
+  int half_map_size_;
 
-  int capacity;
+  int capacity_;
   bool intensity_fusion_en_;
   bool intensity_gate_en_;
   double intensity_gate_k_;
@@ -109,31 +106,34 @@ typedef struct VoxelPlane
   }
 } VoxelPlane;
 
-class VOXEL_LOCATION
+class VoxelLocation
 {
 public:
   int64_t x, y, z;
 
-  VOXEL_LOCATION(int64_t vx = 0, int64_t vy = 0, int64_t vz = 0) : x(vx), y(vy), z(vz) {}
+  VoxelLocation(int64_t vx = 0, int64_t vy = 0, int64_t vz = 0) : x(vx), y(vy), z(vz) {}
 
-  bool operator==(const VOXEL_LOCATION &other) const { return (x == other.x && y == other.y && z == other.z); }
+  bool operator==(const VoxelLocation &other) const { return (x == other.x && y == other.y && z == other.z); }
 };
 
-class PILLAR_LOCATION
+class PillarLocation
 {
 public:
   int64_t axis1, axis2;
 
-  PILLAR_LOCATION(int64_t v1 = 0, int64_t v2 = 0) : axis1(v1), axis2(v2) {}
+  PillarLocation(int64_t v1 = 0, int64_t v2 = 0) : axis1(v1), axis2(v2) {}
 
-  bool operator==(const PILLAR_LOCATION &other) const { return (axis1 == other.axis1 && axis2 == other.axis2); }
+  bool operator==(const PillarLocation &other) const { return (axis1 == other.axis1 && axis2 == other.axis2); }
 };
 
 namespace std
 {
-template <> struct hash<VOXEL_LOCATION>
+// Note: y/z are folded with a fixed modulus while x is added unmoded, so the
+// intermediate products stay within int64 only for voxel indices up to ~1e13.
+// That is far beyond any physical map extent (voxel_size 0.5 m -> 5e12 m).
+template <> struct hash<VoxelLocation>
 {
-  int64_t operator()(const VOXEL_LOCATION &s) const
+  int64_t operator()(const VoxelLocation &s) const
   {
     using std::hash;
     using std::size_t;
@@ -141,9 +141,9 @@ template <> struct hash<VOXEL_LOCATION>
   }
 };
 
-template <> struct hash<PILLAR_LOCATION>
+template <> struct hash<PillarLocation>
 {
-  int64_t operator()(const PILLAR_LOCATION &s) const
+  int64_t operator()(const PillarLocation &s) const
   {
     using std::hash;
     using std::size_t;
@@ -158,7 +158,6 @@ class VoxelOctoTree
 {
 
 public:
-  VoxelOctoTree() = default;
   std::vector<pointWithVar> temp_points_;
   std::vector<size_t> point_indices_;
   VoxelPlane *plane_ptr_;
@@ -168,7 +167,7 @@ public:
   double voxel_center_[3];
   std::vector<int> layer_init_num_;
   float quater_length_;
-  float planer_threshold_;
+  float planner_threshold_;
   int points_size_threshold_;
   int update_size_threshold_;
   int max_points_num_;
@@ -178,11 +177,10 @@ public:
   bool update_enable_;
   bool is_redundant_voxel_ = false;
   bool is_isolated_voxel_ = false;
-  bool is_surface_voxel_ = false;
 
-  VoxelOctoTree(int max_layer, int layer, int points_size_threshold, int max_points_num, float planer_threshold)
+  VoxelOctoTree(int max_layer, int layer, int points_size_threshold, int max_points_num, float planner_threshold)
       : max_layer_(max_layer), layer_(layer), points_size_threshold_(points_size_threshold), max_points_num_(max_points_num),
-        planer_threshold_(planer_threshold), is_redundant_voxel_(false), is_isolated_voxel_(false), is_surface_voxel_(false)
+        planner_threshold_(planner_threshold), is_redundant_voxel_(false), is_isolated_voxel_(false)
   {
     temp_points_.clear();
     octo_state_ = 0;
@@ -231,7 +229,7 @@ enum PointLabel
 struct PillarVoxel
 {
   std::vector<size_t> point_indices_;  // Point indices in original point cloud
-  double center_z_;                    // Voxel center Z coordinate (X,Y derived from PILLAR_LOCATION)
+  double center_z_;                    // Voxel center Z coordinate (X,Y derived from PillarLocation)
   Eigen::Vector3d virtual_point_ = Eigen::Vector3d::Zero();  // Average XYZ of inserted points
   size_t point_count_ = 0;            // Number of accumulated points for running average
   bool is_redundant_voxel_ = false;
@@ -296,9 +294,9 @@ public:
   PillarVoxelMap() = default;
   PillarVoxelConfig config_;
   double voxel_size_;
-  std::unordered_map<PILLAR_LOCATION, PillarVoxelArray> pillars_;
-  std::vector<VOXEL_LOCATION> redundant_neighbor_offsets_;
-  std::vector<VOXEL_LOCATION> isolated_neighbor_offsets_;
+  std::unordered_map<PillarLocation, PillarVoxelArray> pillars_;
+  std::vector<VoxelLocation> redundant_neighbor_offsets_;
+  std::vector<VoxelLocation> isolated_neighbor_offsets_;
 
   std::vector<int8_t> point_labels_;
   PointCloudXYZI::Ptr point_cloud_ptr_;
@@ -319,22 +317,24 @@ public:
 private:
   void setVoxelPointLabels(PillarVoxel* voxel, int8_t label);
   void initHorizontalNeighborOffsets();
-  PILLAR_LOCATION GetPillarLocation(const VOXEL_LOCATION &position) const;
+  PillarLocation GetPillarLocation(const VoxelLocation &position) const;
   void updatePillarFlag(PillarVoxelArray &pillar_voxels);
-  bool hasAdjacentVoxel(const VOXEL_LOCATION &current_pos, int threshold, const std::vector<VOXEL_LOCATION> &neighbor_offsets, double current_vp_z);
+  bool hasAdjacentVoxel(const VoxelLocation &current_pos, int threshold, const std::vector<VoxelLocation> &neighbor_offsets, double current_vp_z);
 };
 
 class VoxelMapManager
 {
 public:
-  VoxelMapManager() = default;
   VoxelMapConfig config_setting_;
   int current_frame_id_ = 0;
   ros::Publisher voxel_map_pub_;
 
-  std::mutex voxel_cache_mutex_;
-  std::list<std::pair<VOXEL_LOCATION, VoxelOctoTree*>> voxel_map_cache_;
-  std::unordered_map<VOXEL_LOCATION, std::list<std::pair<VOXEL_LOCATION, VoxelOctoTree*>>::iterator> voxel_map_;
+  // LRU voxel cache: voxel_map_cache_ front = most recently updated voxel.
+  // voxel_map_ maps location -> list iterator for O(1) hit/splice/evict.
+  // No lock is needed: all writes happen on the sequential per-frame pipeline
+  // and the OpenMP section (BuildResidualListOMP) only reads the containers.
+  std::list<std::pair<VoxelLocation, VoxelOctoTree*>> voxel_map_cache_;
+  std::unordered_map<VoxelLocation, std::list<std::pair<VoxelLocation, VoxelOctoTree*>>::iterator> voxel_map_;
 
   PointCloudXYZI::Ptr feats_undistort_;
   PointCloudXYZI::Ptr feats_down_body_;
@@ -342,24 +342,18 @@ public:
 
   M3D extR_;
   V3D extT_;
-  float build_residual_time, ekf_time;
-  float ave_build_residual_time = 0.0;
-  float ave_ekf_time = 0.0;
-  int scan_count = 0;
   StatesGroup state_;
   V3D position_last_;
 
-  V3D last_slide_position = {0,0,0};
-
-  geometry_msgs::Quaternion geoQuat_;
+  V3D last_slide_position_ = {0,0,0};
 
   int feats_down_size_;
-  int effct_feat_num_;
+  int effect_feat_num_;
   std::vector<M3D> cross_mat_list_;
   std::vector<M3D> body_cov_list_;
   std::vector<pointWithVar> pv_list_;
   std::vector<PointToPlane> ptpl_list_;
-  std::vector<bool> skip_list;
+  std::vector<bool> skip_list_;
 
   // Skip point statistics
   int current_skip_count_ = 0;
@@ -368,21 +362,24 @@ public:
 
   PillarVoxelMap pillar_map_;
 
-  VoxelMapManager(VoxelMapConfig &config_setting, std::unordered_map<VOXEL_LOCATION, std::list<std::pair<VOXEL_LOCATION, VoxelOctoTree*>>::iterator> &voxel_map)
-    : config_setting_(config_setting), voxel_map_(voxel_map)
+  // Total voxels evicted by the LRU since start (statistics for capacity tuning)
+  size_t evicted_voxel_count_ = 0;
+
+  explicit VoxelMapManager(const VoxelMapConfig &config_setting) : config_setting_(config_setting)
   {
     current_frame_id_ = 0;
     feats_undistort_.reset(new PointCloudXYZI());
     feats_down_body_.reset(new PointCloudXYZI());
     feats_down_world_.reset(new PointCloudXYZI());
+    // Pre-bucket for the expected steady-state size to avoid rehash churn
+    if (config_setting_.capacity_ > 1) { voxel_map_.reserve(config_setting_.capacity_); }
   };
 
   void StateEstimation(StatesGroup &state_propagat);
   void TransformLidar(const Eigen::Matrix3d rot, const Eigen::Vector3d t, const PointCloudXYZI::Ptr &input_cloud,
-                      pcl::PointCloud<pcl::PointXYZI>::Ptr &trans_cloud);
+                      PointCloudXYZI::Ptr &trans_cloud);
 
   void BuildVoxelMap();
-  V3F RGBFromVoxel(const V3D &input_point);
 
   void UpdateVoxelMap(const std::vector<pointWithVar> &input_points);
 
@@ -390,7 +387,7 @@ public:
 
   void DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_world);
 
-  void build_single_residual(pointWithVar &pv, const VoxelOctoTree *current_octo, const int current_layer, bool &is_sucess, bool &is_surface, double &prob,
+  void build_single_residual(pointWithVar &pv, const VoxelOctoTree *current_octo, const int current_layer, bool &is_success, double &prob,
                              PointToPlane &single_ptpl);
 
   void pubVoxelMap();
@@ -400,8 +397,14 @@ public:
   void ClearPillarVoxels();
 
 private:
+  // Evict least-recently-updated voxels from the LRU tail until the cache is
+  // within capacity. No-op when capacity is disabled (<= 1: 0 means off, and 1
+  // would degenerate into evicting the entry right after inserting it).
+  // Returns the number of voxels evicted by this call.
+  size_t enforceCapacity();
+
   // Shared retention pass for DefineSkipPoints: keep the newest keep_num points
-  // per flagged voxel (point_indices_ tail), mark the rest in skip_list
+  // per flagged voxel (point_indices_ tail), mark the rest in skip_list_
   void applyVoxelRetention(int keep_num, int &redundant_total, int &redundant_kept, int &final_skip_count);
 
   void GetUpdatePlane(const VoxelOctoTree *current_octo, const int pub_max_voxel_layer, std::vector<VoxelPlane> &plane_list);

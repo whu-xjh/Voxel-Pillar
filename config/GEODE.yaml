@@ -18,10 +18,8 @@
 # ===================================================================
 
 common:
-  img_topic: "/left_camera/image_raw"
   lid_topic: "/livox/lidar"
   imu_topic: "/imu/data"
-  img_en: 0
   lidar_en: 1
   ros_driver_bug_fix: false
 
@@ -38,16 +36,8 @@ extrin_calib:
   # Translation: [0.049258, -0.012500, 0.026946]
   extrinsic_T: [0.049258, -0.012500, 0.026946]
 
-  # Left camera to IMU extrinsic (from T_IMU_CamL)
-  Rcl: [ 0.00775254, -0.00773646,  0.99994002,
-        -0.99996315,  0.0036284 ,  0.00778079,
-        -0.00368837, -0.99996349, -0.00770804]
-  Pcl: [0.02005992, 0.04730513, -0.02083495]
-
 time_offset:
   imu_time_offset: 0.0
-  img_time_offset: 0.0
-  exposure_time_init: 0.0
 
 preprocess:
   point_filter_num: 1
@@ -58,20 +48,6 @@ preprocess:
   # === 不同数据集的参数建议 ===
   # Shield_Tunnel:    blind=0.3 (盾构隧道)
   # Tunneling_Tunnel: blind=0.8 (掘进隧道，环境更复杂)
-
-# Visual Odometry
-vio:
-  max_iterations: 5
-  outlier_threshold: 1000
-  img_point_cov: 100
-  patch_size: 8
-  patch_pyrimid_level: 4
-  normal_en: true
-  raycast_en: false
-  inverse_composition_en: false
-  exposure_estimate_en: true
-  inv_expo_cov: 0.1
-  capacity: 0  # LRU cache (0 = disable)
 
 # IMU
 imu:
@@ -131,8 +107,6 @@ publish:
   pub_effect_en: true
   pub_plane_en: false
   pub_body_en: false
-  pub_scan_num: 1
-  blind_rgb_points: 0.0
 
 evo:
   # === 选择对应的数据集序列名称 ===
@@ -144,7 +118,6 @@ evo:
 
 lidar_save:
   save_en: false
-  colmap_output_en: false
   filter_size_pcd: 0.15
   interval: -1  # -1 = save all in one file (memory risk)
 

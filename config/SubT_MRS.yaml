@@ -1,8 +1,6 @@
 common:
-  img_topic: "/camera_1/image_raw"
   lid_topic: "/velodyne_points"
   imu_topic: "/imu/data"
-  img_en: 0
   lidar_en: 1
   ros_driver_bug_fix: false
 
@@ -31,16 +29,8 @@ extrin_calib:
   # extrinsic_T: [0.080, 0.029, 0.030]
   # extrinsic_R: [0.999945562, 0.009074807,  0.005149763, -0.009060897, 0.999955255, -0.002718066, -0.005174199, 0.002671256,  0.999983046]
 
-  # Camera to IMU extrinsic (Corridor)
-  Rcl: [-0.01578308, -0.01124397,  0.99981222,
-        -0.99975463, -0.01536642, -0.01595499,
-         0.01554293, -0.99981871, -0.01099868]
-  Pcl: [0.17313616, 0.0476788, -0.01933398]
-
 time_offset:
   imu_time_offset: 0.1
-  img_time_offset: 0.0
-  exposure_time_init: 0.0
 
 preprocess:
   point_filter_num: 3
@@ -48,20 +38,6 @@ preprocess:
   lidar_type: 2  # Velodyne
   scan_line: 16
   blind: 0.4
-
-# Visual Odometry
-vio:
-  max_iterations: 5
-  outlier_threshold: 1000
-  img_point_cov: 100
-  patch_size: 8
-  patch_pyrimid_level: 4
-  normal_en: true
-  raycast_en: false
-  inverse_composition_en: false
-  exposure_estimate_en: true
-  inv_expo_cov: 0.1
-  capacity: 0  # LRU cache (0 = disable)
 
 # IMU
 imu:
@@ -114,7 +90,7 @@ lio:
   intensity_gate_en: true  # Intensity-based association gate (reject material-inconsistent matches)
   intensity_gate_k: 3.0     # Gate threshold in units of intensity sigma
   intensity_noise_est_en: false  # Online estimation of intensity measurement noise (init window)
-  intensity_ema_alpha: 0.05      # EMA adaptation rate of plane intensity stats, in (0,1]; higher = faster
+  intensity_ema_alpha: 0.1      # EMA adaptation rate of plane intensity stats, in (0,1]; higher = faster
  
 # Pillar Voxel Redundant Detection
 pillar_voxel:
@@ -122,11 +98,11 @@ pillar_voxel:
   voxel_size: 0.5
 
   redundant_detection_method: 1  # 0=none (isolated points only), 1=neighborhood redundant detection
-  redundant_neighbor_type: 0  # 0=4-neighbor, 1=8-neighborzh
+  redundant_neighbor_type: 0  # 0=4-neighbor, 1=8-neighbor
   adjacent_redundant_threshold: 4
 
   isolated_neighbor_type: 0  # 0=4-neighbor, 1=8-neighbor
-  adjacent_isolated_threshold: 2
+  adjacent_isolated_threshold: 3
 
   height_consistency_ratio: 0.25  # ratio of voxel_size for height consistency check
 
@@ -148,8 +124,6 @@ publish:
   pub_effect_en: true
   pub_plane_en: false
   pub_body_en: false
-  pub_scan_num: 1
-  blind_rgb_points: 0.0
 
 evo:
   seq_name: "result"
@@ -158,7 +132,6 @@ evo:
 
 lidar_save:
   save_en: false
-  colmap_output_en: false
   filter_size_pcd: 0.15
   interval: -1  # -1 = save all in one file (memory risk)
 

@@ -22,7 +22,6 @@ Panels:
         - /MarkerArray3
         - /MarkerArray4
         - /MarkerArray5
-        - /Image1
       Splitter Ratio: 0.34272301197052
     Tree Height: 552
   - Class: rviz/Selection
@@ -258,22 +257,6 @@ Visualization Manager:
       Use Fixed Frame: true
       Use rainbow: true
       Value: false
-    - Class: rviz/Marker
-      Enabled: true
-      Marker Topic: /planner_normal
-      Name: Marker
-      Namespaces:
-        {}
-      Queue Size: 100
-      Value: true
-    - Class: rviz/MarkerArray
-      Enabled: false
-      Marker Topic: /voxels
-      Name: MarkerArray
-      Namespaces:
-        {}
-      Queue Size: 100
-      Value: false
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
@@ -302,14 +285,6 @@ Visualization Manager:
       Use Fixed Frame: true
       Use rainbow: true
       Value: false
-    - Class: rviz/MarkerArray
-      Enabled: false
-      Marker Topic: /visualization_marker
-      Name: MarkerArray
-      Namespaces:
-        {}
-      Queue Size: 100
-      Value: false
     - Alpha: 1
       Autocompute Intensity Bounds: true
       Autocompute Value Bounds:
@@ -335,34 +310,6 @@ Visualization Manager:
       Style: Points
       Topic: /cloud_visual_map
       Unreliable: false
-      Use Fixed Frame: true
-      Use rainbow: true
-      Value: false
-    - Alpha: 1
-      Autocompute Intensity Bounds: true
-      Autocompute Value Bounds:
-        Max Value: 10
-        Min Value: -10
-        Value: true
-      Axis: Z
-      Channel Name: intensity
-      Class: rviz/PointCloud2
-      Color: 115; 210; 22
-      Color Transformer: FlatColor
-      Decay Time: 0
-      Enabled: false
-      Invert Rainbow: false
-      Max Color: 255; 255; 255
-      Min Color: 0; 0; 0
-      Name: surround
-      Position Transformer: XYZ
-      Queue Size: 1
-      Selectable: false
-      Size (Pixels): 12
-      Size (m): 0.05000000074505806
-      Style: Points
-      Topic: /cloud_visual_sub_map
-      Unreliable: true
       Use Fixed Frame: true
       Use rainbow: true
       Value: false
@@ -509,23 +456,11 @@ Visualization Manager:
         {}
       Queue Size: 100
       Value: false
-    - Class: rviz/Image
-      Enabled: true
-      Image Topic: /rgb_img
-      Max Value: 1
-      Median window: 5
-      Min Value: 0
-      Name: Image
-      Normalize Range: true
-      Queue Size: 2
-      Transport Hint: raw
-      Unreliable: false
-      Value: true
   Enabled: true
   Global Options:
     Background Color: 0; 0; 0
     Default Light: true
-    Fixed Frame: camera_init
+    Fixed Frame: world
     Frame Rate: 30
   Name: root
   Tools:

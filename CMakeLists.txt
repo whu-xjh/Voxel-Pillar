@@ -91,24 +91,16 @@ find_package(catkin REQUIRED COMPONENTS
   tf
   message_generation
   eigen_conversions
-  vikit_common
-  vikit_ros
-  cv_bridge
-  image_transport
 )
 
 find_package(Eigen3 REQUIRED)
 find_package(PCL REQUIRED)
-find_package(OpenCV REQUIRED)
-find_package(Sophus REQUIRED)
 find_package(Boost REQUIRED COMPONENTS thread)
-
-set(Sophus_LIBRARIES libSophus.so)
 
 # Define the catkin package
 catkin_package(
-  CATKIN_DEPENDS geometry_msgs nav_msgs roscpp rospy std_msgs message_runtime cv_bridge vikit_common vikit_ros image_transport
-  DEPENDS EIGEN3 PCL OpenCV Sophus
+  CATKIN_DEPENDS geometry_msgs nav_msgs roscpp rospy std_msgs message_runtime
+  DEPENDS EIGEN3 PCL
 )
 
 # Include directories for dependencies
@@ -116,13 +108,10 @@ include_directories(
   ${catkin_INCLUDE_DIRS}
   ${EIGEN3_INCLUDE_DIR}
   ${PCL_INCLUDE_DIRS}
-  ${OpenCV_INCLUDE_DIRS}
-  ${Sophus_INCLUDE_DIRS}
   include
 )
 
 # Add libraries
-add_library(vio src/vio.cpp src/frame.cpp src/visual_point.cpp)
 add_library(lio src/voxel_map.cpp)
 add_library(pre src/preprocess.cpp)
 add_library(imu_proc src/IMU_Processing.cpp)
@@ -137,14 +126,11 @@ add_executable(merge_lidar src/merge_lidar.cpp)
 # Link libraries to the executable
 target_link_libraries(voxelpillar_mapping
   laser_mapping
-  vio
   lio
   pre
   imu_proc
   ${catkin_LIBRARIES}
   ${PCL_LIBRARIES}
-  ${OpenCV_LIBRARIES}
-  ${Sophus_LIBRARIES}
   ${Boost_LIBRARIES}
 )
 

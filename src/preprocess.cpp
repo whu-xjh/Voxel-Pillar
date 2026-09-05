@@ -32,14 +32,6 @@ Preprocess::Preprocess() : feature_enabled(0), lidar_type(AVIA), blind(0.01), po
 
 Preprocess::~Preprocess() {}
 
-void Preprocess::set(bool feat_en, int lid_type, double bld, int pfilt_num)
-{
-  feature_enabled = feat_en;
-  lidar_type = lid_type;
-  blind = bld;
-  point_filter_num = pfilt_num;
-}
-
 void Preprocess::process(const livox_ros_driver::CustomMsg::ConstPtr &msg, PointCloudXYZI::Ptr &pcl_out)
 {
   avia_handler(msg);
@@ -67,7 +59,7 @@ void Preprocess::process(const sensor_msgs::PointCloud2::ConstPtr &msg, PointClo
     break;
 
   case PANDAR128:
-    Pandar128_handler(msg);
+    pandar128_handler(msg);
     break;
 
   case ROBOSENSE:
@@ -225,8 +217,6 @@ void Preprocess::l515_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
   }
 
   cout << "pl size:: " << pl_orig.points.size() << endl;
-  // pub_func(pl_surf, pub_full, msg->header.stamp);
-  // pub_func(pl_surf, pub_corn, msg->header.stamp);
 }
 
 void Preprocess::oust64_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
@@ -326,8 +316,6 @@ void Preprocess::oust64_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
       return a.curvature < b.curvature;
     });
   }
-  // pub_func(pl_surf, pub_full, msg->header.stamp);
-  // pub_func(pl_surf, pub_corn, msg->header.stamp);
 }
 
 #define MAX_LINE_NUM 64
@@ -495,12 +483,9 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
       }
     }
   }
-  // pub_func(pl_surf, pub_full, msg->header.stamp);
-  // pub_func(pl_surf, pub_surf, msg->header.stamp);
-  // pub_func(pl_surf, pub_corn, msg->header.stamp);
 }
 
-void Preprocess::Pandar128_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
+void Preprocess::pandar128_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
 {
   pl_surf.clear();
 
@@ -691,9 +676,6 @@ void Preprocess::xt32_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
       }
     }
   }
-  // pub_func(pl_surf, pub_full, msg->header.stamp);
-  // pub_func(pl_surf, pub_surf, msg->header.stamp);
-  // pub_func(pl_surf, pub_corn, msg->header.stamp);
 }
 
 void Preprocess::robosense_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
@@ -966,16 +948,6 @@ void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &t
       last_surface = -1;
     }
   }
-}
-
-void Preprocess::pub_func(PointCloudXYZI &pl, const ros::Time &ct)
-{
-  pl.height = 1;
-  pl.width = pl.size();
-  sensor_msgs::PointCloud2 output;
-  pcl::toROSMsg(pl, output);
-  output.header.frame_id = "livox";
-  output.header.stamp = ct;
 }
 
 int Preprocess::plane_judge(const PointCloudXYZI &pl, vector<orgtype> &types, uint i_cur, uint &i_nex, Eigen::Vector3d &curr_direct)

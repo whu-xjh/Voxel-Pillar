@@ -4,6 +4,9 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <pcl_conversions/pcl_conversions.h>
 
+// Sequential id generator for voxel planes (file-local, was a header static)
+static int voxel_plane_id = 0;
+
 // Squared intensity measurement noise; overwritten by the online estimator
 // (LIVMapper::estimateIntensityNoise) during the init window
 double VoxelPlane::intensity_meas_var_ = 1.0;
@@ -56,7 +59,7 @@ void loadVoxelConfig(ros::NodeHandle &nh, VoxelMapConfig &voxel_config)
   nh.param<vector<int>>("lio/layer_init_num", voxel_config.layer_init_num_, vector<int>{5,5,5,5,5});
   nh.param<int>("lio/max_points_num", voxel_config.max_points_num_, 50);
   nh.param<int>("lio/max_iterations", voxel_config.max_iterations_, 5);
-  nh.param<int>("lio/capacity", voxel_config.capacity, 100000);
+  nh.param<int>("lio/capacity", voxel_config.capacity_, 100000);
   nh.param<bool>("lio/intensity_fusion_en", voxel_config.intensity_fusion_en_, false);
   nh.param<bool>("lio/intensity_gate_en", voxel_config.intensity_gate_en_, false);
   nh.param<double>("lio/intensity_gate_k", voxel_config.intensity_gate_k_, 3.0);
@@ -65,9 +68,9 @@ void loadVoxelConfig(ros::NodeHandle &nh, VoxelMapConfig &voxel_config)
   // Keep alpha in (0, 1]: 0 would freeze the statistics, >1 diverges
   VoxelPlane::intensity_ema_alpha_ = std::min(std::max(intensity_ema_alpha, 1e-3), 1.0);
 
-  nh.param<bool>("local_map/map_sliding_en", voxel_config.map_sliding_en, false);
-  nh.param<int>("local_map/half_map_size", voxel_config.half_map_size, 100);
-  nh.param<double>("local_map/sliding_thresh", voxel_config.sliding_thresh, 8);
+  nh.param<bool>("local_map/map_sliding_en", voxel_config.map_sliding_en_, false);
+  nh.param<int>("local_map/half_map_size", voxel_config.half_map_size_, 100);
+  nh.param<double>("local_map/sliding_thresh", voxel_config.sliding_thresh_, 8);
   }
 
 void loadPillarVoxelConfig(ros::NodeHandle &nh, PillarVoxelConfig &config)
@@ -174,7 +177,7 @@ void VoxelOctoTree::init_plane(const std::vector<pointWithVar> &points, VoxelPla
   J_Q << 1.0 / plane->points_size_, 0, 0, 0, 1.0 / plane->points_size_, 0, 0, 0, 1.0 / plane->points_size_;
 
   // 5. Check if points form a plane based on min eigenvalue
-  if (evalsReal(evalsMin) < planer_threshold_)
+  if (evalsReal(evalsMin) < planner_threshold_)
   {
     // Points form a plane when variance in third direction is significantly smaller
     for (int i = 0; i < points.size(); i++)
@@ -290,7 +293,7 @@ void VoxelOctoTree::cut_octo_tree()
     // Create child octree node if not exists
     if (leaves_[leafnum] == nullptr)
     {
-      leaves_[leafnum] = new VoxelOctoTree(max_layer_, layer_ + 1, layer_init_num_[layer_ + 1], max_points_num_, planer_threshold_);
+      leaves_[leafnum] = new VoxelOctoTree(max_layer_, layer_ + 1, layer_init_num_[layer_ + 1], max_points_num_, planner_threshold_);
       leaves_[leafnum]->layer_init_num_ = layer_init_num_;
       // Compute child voxel center
       leaves_[leafnum]->voxel_center_[0] = voxel_center_[0] + (2 * xyz[0] - 1) * quater_length_;
@@ -387,7 +390,7 @@ void VoxelOctoTree::UpdateOctoTree(const pointWithVar &pv)
         if (leaves_[leafnum] != nullptr) { leaves_[leafnum]->UpdateOctoTree(pv); }
         else
         {
-          leaves_[leafnum] = new VoxelOctoTree(max_layer_, layer_ + 1, layer_init_num_[layer_ + 1], max_points_num_, planer_threshold_);
+          leaves_[leafnum] = new VoxelOctoTree(max_layer_, layer_ + 1, layer_init_num_[layer_ + 1], max_points_num_, planner_threshold_);
           leaves_[leafnum]->layer_init_num_ = layer_init_num_;
           leaves_[leafnum]->voxel_center_[0] = voxel_center_[0] + (2 * xyz[0] - 1) * quater_length_;
           leaves_[leafnum]->voxel_center_[1] = voxel_center_[1] + (2 * xyz[1] - 1) * quater_length_;
@@ -466,7 +469,7 @@ VoxelOctoTree *VoxelOctoTree::Insert(const pointWithVar &pv)
     if (leaves_[leafnum] != nullptr) { return leaves_[leafnum]->Insert(pv); }
     else
     {
-      leaves_[leafnum] = new VoxelOctoTree(max_layer_, layer_ + 1, layer_init_num_[layer_ + 1], max_points_num_, planer_threshold_);
+      leaves_[leafnum] = new VoxelOctoTree(max_layer_, layer_ + 1, layer_init_num_[layer_ + 1], max_points_num_, planner_threshold_);
       leaves_[leafnum]->layer_init_num_ = layer_init_num_;
       leaves_[leafnum]->voxel_center_[0] = voxel_center_[0] + (2 * xyz[0] - 1) * quater_length_;
       leaves_[leafnum]->voxel_center_[1] = voxel_center_[1] + (2 * xyz[1] - 1) * quater_length_;
@@ -485,10 +488,6 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
   body_cov_list_.clear();
   body_cov_list_.reserve(feats_down_size_);
 
-  // build_residual_time = 0.0;
-  // ekf_time = 0.0;
-  // double t0 = omp_get_wtime();
-
   for (size_t i = 0; i < feats_down_body_->size(); i++)
   {
     V3D point_this(feats_down_body_->points[i].x, feats_down_body_->points[i].y, feats_down_body_->points[i].z);
@@ -501,7 +500,7 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
     point_this = extR_ * point_this + extT_;
     // Compute skew-symmetric matrix
     M3D point_crossmat;
-    point_crossmat << SKEW_SYM_MATRX(point_this);
+    point_crossmat << SKEW_SYM_MATRIX(point_this);
     cross_mat_list_.push_back(point_crossmat);
   }
 
@@ -522,7 +521,7 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
     double total_residual = 0.0;
 
     // Transform point cloud from sensor coordinate system to world coordinate system
-    pcl::PointCloud<pcl::PointXYZI>::Ptr world_lidar(new pcl::PointCloud<pcl::PointXYZI>);
+    PointCloudXYZI::Ptr world_lidar(new PointCloudXYZI());
     TransformLidar(state_.rot_end, state_.pos_end, feats_down_body_, world_lidar);
     M3D rot_var = state_.cov.block<3, 3>(0, 0);
     M3D t_var = state_.cov.block<3, 3>(3, 3);
@@ -548,38 +547,37 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
     double t1 = omp_get_wtime();
     BuildResidualListOMP(pv_list_, ptpl_list_); // Find corresponding planes for points and compute residuals
     double t2 = omp_get_wtime();
-    // build_residual_time += t2 - t1;
 
     // Compute total residual
     for (int i = 0; i < ptpl_list_.size(); i++)
     {
       total_residual += fabs(ptpl_list_[i].dis_to_plane_);
     }
-    effct_feat_num_ = ptpl_list_.size();
-    double current_average_residual = total_residual / effct_feat_num_;
+    effect_feat_num_ = ptpl_list_.size();
+    double current_average_residual = total_residual / effect_feat_num_;
 
     cout << "[ LIO ] Raw feature num: " << feats_undistort_->size() << ", downsampled feature num:" << feats_down_size_
-         << ", effective feature num: " << effct_feat_num_ << ", average residual: " << current_average_residual
+         << ", effective feature num: " << effect_feat_num_ << ", average residual: " << current_average_residual
          << ", time: " << t2 - t1 << "s"<< endl;
 
     /*** Computation of Measuremnt Jacobian matrix H and measurents covarience
      * ***/
     // Build observation model, initialize observation matrix
-    MatrixXd Hsub(effct_feat_num_, 6); // Observation Jacobian matrix
-    MatrixXd Hsub_T_R_inv(6, effct_feat_num_); // Weighted observation Jacobian matrix
-    VectorXd R_inv(effct_feat_num_); // Inverse covariance matrix of observation noise
-    VectorXd meas_vec(effct_feat_num_); // Observation residual vector
+    MatrixXd Hsub(effect_feat_num_, 6); // Observation Jacobian matrix
+    MatrixXd Hsub_T_R_inv(6, effect_feat_num_); // Weighted observation Jacobian matrix
+    VectorXd R_inv(effect_feat_num_); // Inverse covariance matrix of observation noise
+    VectorXd meas_vec(effect_feat_num_); // Observation residual vector
     meas_vec.setZero();
 
     // Compute observation Jacobian matrix and observation noise covariance for each effective feature point
-    for (int i = 0; i < effct_feat_num_; i++)
+    for (int i = 0; i < effect_feat_num_; i++)
     {
       auto &ptpl = ptpl_list_[i];
       V3D point_this(ptpl.point_b_);
       point_this = extR_ * point_this + extT_;
       V3D point_body(ptpl.point_b_);
       M3D point_crossmat;
-      point_crossmat << SKEW_SYM_MATRX(point_this);
+      point_crossmat << SKEW_SYM_MATRIX(point_this);
 
       /*** get the normal vector of closest surface/corner ***/
       // Compute Jacobian matrix of plane parameters J_nq
@@ -622,7 +620,7 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
     EKF_stop_flg = false;
     flg_EKF_converged = false;
     /*** Iterative Kalman Filter Update ***/
-    MatrixXd K(DIM_STATE, effct_feat_num_);
+    MatrixXd K(DIM_STATE, effect_feat_num_);
     // auto &&Hsub_T = Hsub.transpose();
     auto &&HTz = Hsub_T_R_inv * meas_vec;
     // fout_dbg<<"HTz: "<<HTz<<endl;
@@ -643,7 +641,6 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
     auto t_add = solution.block<3, 1>(3, 0);
     // if ((rot_add.norm() * 57.3 < 0.01) && (t_add.norm() * 100 < 0.015)) { flg_EKF_converged = true; }
     if ((rot_add.norm() * 57.3 < 0.005) && (t_add.norm() * 100 < 0.01)) { flg_EKF_converged = true; }
-    V3D euler_cur = state_.rot_end.eulerAngles(2, 1, 0);
 
     /*** Rematch Judgement ***/
     if (flg_EKF_converged || ((rematch_num == 0) && (iterCount == (config_setting_.max_iterations_ - 2)))) { rematch_num++; }
@@ -652,42 +649,27 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
     if (!EKF_stop_flg && (rematch_num >= 2 || (iterCount == config_setting_.max_iterations_ - 1)))
     {
       /*** Covariance Update ***/
-      // _state.cov = (I_STATE - G) * _state.cov;
       state_.cov.block<DIM_STATE, DIM_STATE>(0, 0) =
           (I_STATE.block<DIM_STATE, DIM_STATE>(0, 0) - G.block<DIM_STATE, DIM_STATE>(0, 0)) * state_.cov.block<DIM_STATE, DIM_STATE>(0, 0);
-      // total_distance += (_state.pos_end - position_last).norm();
       position_last_ = state_.pos_end;
-      geoQuat_ = tf::createQuaternionMsgFromRollPitchYaw(euler_cur(0), euler_cur(1), euler_cur(2));
 
-      // VD(DIM_STATE) K_sum  = K.rowwise().sum();
-      // VD(DIM_STATE) P_diag = _state.cov.diagonal();
       EKF_stop_flg = true;
     }
     if (EKF_stop_flg) break;
   }
-
-  // double t3 = omp_get_wtime();
-  // scan_count++;
-  // ekf_time = t3 - t0 - build_residual_time;
-
-  // ave_build_residual_time = ave_build_residual_time * (scan_count - 1) / scan_count + build_residual_time / scan_count;
-  // ave_ekf_time = ave_ekf_time * (scan_count - 1) / scan_count + ekf_time / scan_count;
-
-  // cout << "[ Mapping ] ekf_time: " << ekf_time << "s, build_residual_time: " << build_residual_time << "s" << endl;
-  // cout << "[ Mapping ] ave_ekf_time: " << ave_ekf_time << "s, ave_build_residual_time: " << ave_build_residual_time << "s" << endl;
 }
 
 void VoxelMapManager::TransformLidar(const Eigen::Matrix3d rot, const Eigen::Vector3d t, const PointCloudXYZI::Ptr &input_cloud,
-                                     pcl::PointCloud<pcl::PointXYZI>::Ptr &trans_cloud)
+                                     PointCloudXYZI::Ptr &trans_cloud)
 {
-  pcl::PointCloud<pcl::PointXYZI>().swap(*trans_cloud);
+  PointCloudXYZI().swap(*trans_cloud);
   trans_cloud->reserve(input_cloud->size());
   for (size_t i = 0; i < input_cloud->size(); i++)
   {
     pcl::PointXYZINormal p_c = input_cloud->points[i];
     Eigen::Vector3d p(p_c.x, p_c.y, p_c.z);
     p = (rot * (extR_ * p + extT_) + t);
-    pcl::PointXYZI pi;
+    PointType pi;
     pi.x = p(0);
     pi.y = p(1);
     pi.z = p(2);
@@ -722,7 +704,7 @@ void VoxelMapManager::BuildVoxelMap()
     // Compute point covariance matrix in sensor coordinate system
     calcBodyCov(point_this, config_setting_.dept_err_, config_setting_.beam_err_, var);
     M3D point_crossmat;
-    point_crossmat << SKEW_SYM_MATRX(point_this);
+    point_crossmat << SKEW_SYM_MATRIX(point_this);
     // Error propagation to get point covariance matrix in world coordinate system
     var = (state_.rot_end * extR_) * var * (state_.rot_end * extR_).transpose() +
           (-point_crossmat) * state_.cov.block<3, 3>(0, 0) * (-point_crossmat).transpose() + state_.cov.block<3, 3>(3, 3);
@@ -742,13 +724,11 @@ void VoxelMapManager::BuildVoxelMap()
     {
       loc_xyz[j] = static_cast<int64_t>(std::floor(p_v.point_w[j] / voxel_size));
     }
-    VOXEL_LOCATION position(loc_xyz[0], loc_xyz[1], loc_xyz[2]);
+    VoxelLocation position(loc_xyz[0], loc_xyz[1], loc_xyz[2]);
     auto iter = voxel_map_.find(position);
     if (iter != voxel_map_.end())
     {
       // If voxel already exists, add point directly to that voxel
-      // voxel_map_[position]->temp_points_.push_back(p_v);
-      // voxel_map_[position]->new_points_++;
       iter->second->second->temp_points_.push_back(p_v);
       iter->second->second->new_points_++;
     }
@@ -756,52 +736,27 @@ void VoxelMapManager::BuildVoxelMap()
     {
       // If voxel does not exist, create new voxel and add point
       VoxelOctoTree *octo_tree = new VoxelOctoTree(max_layer, 0, layer_init_num[0], max_points_num, planer_threshold);
-      // voxel_map_[position] = octo_tree;
-      // voxel_map_[position]->quater_length_ = voxel_size / 4;
-      // voxel_map_[position]->voxel_center_[0] = (0.5 + position.x) * voxel_size;
-      // voxel_map_[position]->voxel_center_[1] = (0.5 + position.y) * voxel_size;
-      // voxel_map_[position]->voxel_center_[2] = (0.5 + position.z) * voxel_size;
-      // voxel_map_[position]->temp_points_.push_back(p_v);
-      // voxel_map_[position]->new_points_++;
-      // voxel_map_[position]->layer_init_num_ = layer_init_num;
-      // if (config_setting_.pillar_voxel_en_) {
-      //   RegisterVoxelToPillar(position, voxel_map_[position]);
-      // }
+      octo_tree->quater_length_ = voxel_size / 4;
+      octo_tree->voxel_center_[0] = (0.5 + position.x) * voxel_size;
+      octo_tree->voxel_center_[1] = (0.5 + position.y) * voxel_size;
+      octo_tree->voxel_center_[2] = (0.5 + position.z) * voxel_size;
+      octo_tree->temp_points_.push_back(p_v);
+      octo_tree->new_points_++;
+      octo_tree->layer_init_num_ = layer_init_num;
 
+      // Insert new node at head (most recently used)
       voxel_map_cache_.emplace_front(position, octo_tree);
       voxel_map_.insert({position, voxel_map_cache_.begin()});
-      voxel_map_cache_.begin()->second->quater_length_ = voxel_size / 4;
-      voxel_map_cache_.begin()->second->voxel_center_[0] = (0.5 + position.x) * voxel_size;
-      voxel_map_cache_.begin()->second->voxel_center_[1] = (0.5 + position.y) * voxel_size;
-      voxel_map_cache_.begin()->second->voxel_center_[2] = (0.5 + position.z) * voxel_size;
-      voxel_map_cache_.begin()->second->temp_points_.push_back(p_v);
-      voxel_map_cache_.begin()->second->new_points_++;
-      voxel_map_cache_.begin()->second->layer_init_num_ = layer_init_num;
     }
   }
 
   // 4. Octree initialization phase, traverse all voxels and initialize octree for each voxel
   for (auto iter = voxel_map_.begin(); iter != voxel_map_.end(); ++iter)
   {
-    // iter->second->init_octo_tree();
     iter->second->second->init_octo_tree();
   }
-}
 
-V3F VoxelMapManager::RGBFromVoxel(const V3D &input_point)
-{
-  int64_t loc_xyz[3];
-  for (int j = 0; j < 3; j++)
-  {
-    loc_xyz[j] = floor(input_point[j] / config_setting_.max_voxel_size_);
-  }
-
-  VOXEL_LOCATION position((int64_t)loc_xyz[0], (int64_t)loc_xyz[1], (int64_t)loc_xyz[2]);
-  int64_t ind = loc_xyz[0] + loc_xyz[1] + loc_xyz[2];
-  uint k((ind + 100000) % 3);
-  V3F RGB((k == 0) * 255.0, (k == 1) * 255.0, (k == 2) * 255.0);
-  // cout<<"RGB: "<<RGB.transpose()<<endl;
-  return RGB;
+  enforceCapacity();
 }
 
 void VoxelMapManager::UpdateVoxelMap(const std::vector<pointWithVar> &input_points)
@@ -822,28 +777,16 @@ void VoxelMapManager::UpdateVoxelMap(const std::vector<pointWithVar> &input_poin
     {
       loc_xyz[j] = static_cast<int64_t>(std::floor(p_v.point_w[j] / voxel_size));
     }
-    VOXEL_LOCATION position(loc_xyz[0], loc_xyz[1], loc_xyz[2]);
+    VoxelLocation position(loc_xyz[0], loc_xyz[1], loc_xyz[2]);
     auto iter = voxel_map_.find(position);
     if (iter != voxel_map_.end())
     {
-      // voxel_map_[position]->UpdateOctoTree(p_v);
       iter->second->second->UpdateOctoTree(p_v);
       voxel_map_cache_.splice(voxel_map_cache_.begin(), voxel_map_cache_, iter->second); // Update value and move to head
     }
     else
     {
       VoxelOctoTree *octo_tree = new VoxelOctoTree(max_layer, 0, layer_init_num[0], max_points_num, planer_threshold);
-      // voxel_map_[position] = octo_tree;
-      // voxel_map_[position]->layer_init_num_ = layer_init_num;
-      // voxel_map_[position]->quater_length_ = voxel_size / 4;
-      // voxel_map_[position]->voxel_center_[0] = (0.5 + position.x) * voxel_size;
-      // voxel_map_[position]->voxel_center_[1] = (0.5 + position.y) * voxel_size;
-      // voxel_map_[position]->voxel_center_[2] = (0.5 + position.z) * voxel_size;
-      // voxel_map_[position]->UpdateOctoTree(p_v);
-      // if (config_setting_.pillar_voxel_en_) {
-      //   RegisterVoxelToPillar(position, voxel_map_[position]);
-      // }
-
       octo_tree->quater_length_ = voxel_size / 4;
       octo_tree->voxel_center_[0] = (0.5 + position.x) * voxel_size;
       octo_tree->voxel_center_[1] = (0.5 + position.y) * voxel_size;
@@ -852,23 +795,38 @@ void VoxelMapManager::UpdateVoxelMap(const std::vector<pointWithVar> &input_poin
       octo_tree->new_points_++;
       octo_tree->layer_init_num_ = layer_init_num;
 
-      // Insert new node at head
+      // Insert new node at head (most recently used)
       voxel_map_cache_.emplace_front(position, octo_tree);
       voxel_map_.insert({position, voxel_map_cache_.begin()});
     }
   }
 
-  // Capacity check, remove tail nodes (only perform LRU cache management when capacity > 0)
-  if (config_setting_.capacity > 0)
+  enforceCapacity();
+}
+
+// Evict least-recently-updated voxels from the LRU tail until the cache is
+// within capacity. No-op when capacity is disabled (<= 1: 0 means off, and 1
+// would degenerate into evicting the entry right after inserting it).
+size_t VoxelMapManager::enforceCapacity()
+{
+  if (config_setting_.capacity_ <= 1) return 0; // LRU cache disabled
+
+  size_t evicted = 0;
+  while (voxel_map_cache_.size() > config_setting_.capacity_)
   {
-    while (voxel_map_cache_.size() >= config_setting_.capacity)
-    {
-      delete voxel_map_cache_.back().second;
-      auto last_key = voxel_map_cache_.back().first;
-      voxel_map_.erase(last_key);
-      voxel_map_cache_.pop_back();
-    }
+    delete voxel_map_cache_.back().second;
+    auto last_key = voxel_map_cache_.back().first;
+    voxel_map_.erase(last_key);
+    voxel_map_cache_.pop_back();
+    ++evicted;
   }
+  if (evicted > 0)
+  {
+    evicted_voxel_count_ += evicted;
+    std::cout << YELLOW << "[ LRU ]: evicted " << evicted << " voxels, cache size " << voxel_map_cache_.size()
+              << ", total evicted " << evicted_voxel_count_ << RESET << std::endl;
+  }
+  return evicted;
 }
 
 // Find corresponding plane for each point and compute point-to-plane distance for ICP registration
@@ -900,7 +858,7 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
   {
     pointWithVar &pv = pv_list[i]; // Get current point
 
-    if (!skip_list.empty() && skip_list[i]) {
+    if (!skip_list_.empty() && skip_list_[i]) {
       // Skip points that don't need processing
       continue;
     }
@@ -911,7 +869,7 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
     {
       loc_xyz[j] = static_cast<int64_t>(std::floor(pv.point_w[j] / voxel_size));
     }
-    VOXEL_LOCATION position(loc_xyz[0], loc_xyz[1], loc_xyz[2]); // Create voxel for current point
+    VoxelLocation position(loc_xyz[0], loc_xyz[1], loc_xyz[2]); // Create voxel for current point
 
     // Find corresponding voxel in voxel map
     auto iter = voxel_map_.find(position);
@@ -921,16 +879,15 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
       VoxelOctoTree *current_octo = iter->second->second; // Get octree node corresponding to voxel
 
       PointToPlane single_ptpl{}; // Store plane information for current point
-      bool is_sucess = false; // Mark whether plane was successfully found
-      bool is_surface = false; // Mark whether point is surface point
+      bool is_success = false; // Mark whether plane was successfully found
       double prob = 0; // Store probability value of point to plane
 
       // Find corresponding plane in octree of current voxel, build point-to-plane residual if found
-      build_single_residual(pv, current_octo, 0, is_sucess, is_surface, prob, single_ptpl);
-      if (!is_sucess)
+      build_single_residual(pv, current_octo, 0, is_success, prob, single_ptpl);
+      if (!is_success)
       {
         // If no valid plane found in current voxel, check adjacent voxels
-        VOXEL_LOCATION near_position = position;
+        VoxelLocation near_position = position;
 
         // Helper: single-axis offset, +1/-1 when the point sits in the outer
         // half of its voxel along that axis
@@ -949,26 +906,17 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
 
         // Find plane in adjacent voxels, build residual if found
         auto iter_near = voxel_map_.find(near_position);
-        if (iter_near != voxel_map_.end()) { build_single_residual(pv, (*(iter_near->second)).second, 0, is_sucess, is_surface, prob, single_ptpl); }
+        if (iter_near != voxel_map_.end()) { build_single_residual(pv, (*(iter_near->second)).second, 0, is_success, prob, single_ptpl); }
       }
 
-      if (is_surface)
+      if (is_success)
       {
-        current_octo->is_surface_voxel_ = true;
-      }
-
-      if (is_sucess)
-      {
-        // mylock.lock();
         useful_ptpl[i] = true;
         all_ptpl_list[i] = single_ptpl;
-        // mylock.unlock();
       }
       else
       {
-        // mylock.lock();
         useful_ptpl[i] = false;
-        // mylock.unlock();
       }
     }
   }
@@ -978,7 +926,7 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
   }
 }
 
-void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTree *current_octo, const int current_layer, bool &is_sucess, bool &is_surface,
+void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTree *current_octo, const int current_layer, bool &is_success,
                                             double &prob, PointToPlane &single_ptpl)
 {
   int max_layer = config_setting_.max_layer_;
@@ -990,7 +938,6 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
   {
     VoxelPlane &plane = *current_octo->plane_ptr_;
 
-    Eigen::Vector3d p_world_to_center = p_w - plane.center_;
     float dis_to_plane = fabs(plane.normal_(0) * p_w(0) + plane.normal_(1) * p_w(1) + plane.normal_(2) * p_w(2) + plane.d_); // Point-to-plane distance
     float dis_to_center = (plane.center_(0) - p_w(0)) * (plane.center_(0) - p_w(0)) + (plane.center_(1) - p_w(1)) * (plane.center_(1) - p_w(1)) +
                           (plane.center_(2) - p_w(2)) * (plane.center_(2) - p_w(2)); // Squared distance from point to plane center
@@ -1016,16 +963,15 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
 
         // Intensity gate: reject associations whose intensity profile is inconsistent
         // with the plane (e.g. dynamic objects in front of static surfaces). Requires
-        // mature statistics to be meaningful. On rejection is_sucess/is_surface stay
-        // false, so the caller falls back to searching neighbor voxels.
+        // mature statistics to be meaningful. On rejection is_success stays false,
+        // so the caller falls back to searching neighbor voxels.
         if (config_setting_.intensity_gate_en_ && plane.intensity_obs_count_ >= 20)
         {
           double m_int = intensity_diff / sqrt(sigma_int_sq);
           if (std::fabs(m_int) > config_setting_.intensity_gate_k_) { return; }
         }
 
-        is_surface = true; // If point-to-plane distance is small, consider point as plane point
-        is_sucess = true;
+        is_success = true;
 
         double this_prob;
         if (config_setting_.intensity_fusion_en_)
@@ -1060,13 +1006,11 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
       }
       else
       {
-        // is_sucess = false;
         return;
       }
     }
     else
     {
-      // is_sucess = false;
       return;
     }
   }
@@ -1079,7 +1023,7 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
         if (current_octo->leaves_[leafnum] != nullptr)
         {
           VoxelOctoTree *leaf_octo = current_octo->leaves_[leafnum];
-          build_single_residual(pv, leaf_octo, current_layer + 1, is_sucess, is_surface, prob, single_ptpl);
+          build_single_residual(pv, leaf_octo, current_layer + 1, is_success, prob, single_ptpl);
         }
       }
       return;
@@ -1142,7 +1086,7 @@ void VoxelMapManager::pubSinglePlane(visualization_msgs::MarkerArray &plane_pub,
                                      const float alpha, const Eigen::Vector3d rgb)
 {
   visualization_msgs::Marker plane;
-  plane.header.frame_id = "camera_init";
+  plane.header.frame_id = "world";
   plane.header.stamp = ros::Time();
   plane.ns = plane_ns;
   plane.id = single_plane.id_;
@@ -1227,14 +1171,14 @@ void VoxelMapManager::mapJet(double v, double vmin, double vmax, uint8_t &r, uin
 
 void VoxelMapManager::mapSliding()
 {
-  if((position_last_ - last_slide_position).norm() < config_setting_.sliding_thresh)
+  if((position_last_ - last_slide_position_).norm() < config_setting_.sliding_thresh_)
   {
-    std::cout<<YELLOW<<"[DEBUG]: Last sliding length "<<(position_last_ - last_slide_position).norm()<<RESET<<"\n";
+    std::cout<<YELLOW<<"[DEBUG]: Last sliding length "<<(position_last_ - last_slide_position_).norm()<<RESET<<"\n";
     return;
   }
 
   //get global id now
-  last_slide_position = position_last_;
+  last_slide_position_ = position_last_;
   double t_sliding_start = omp_get_wtime();
   float loc_xyz[3];
   for (int j = 0; j < 3; j++)
@@ -1242,10 +1186,10 @@ void VoxelMapManager::mapSliding()
     loc_xyz[j] = position_last_[j] / config_setting_.max_voxel_size_;
     if (loc_xyz[j] < 0) { loc_xyz[j] -= 1.0; }
   }
-  // VOXEL_LOCATION position((int64_t)loc_xyz[0], (int64_t)loc_xyz[1], (int64_t)loc_xyz[2]);//discrete global
-  clearMemOutOfMap((int64_t)loc_xyz[0] + config_setting_.half_map_size, (int64_t)loc_xyz[0] - config_setting_.half_map_size,
-                    (int64_t)loc_xyz[1] + config_setting_.half_map_size, (int64_t)loc_xyz[1] - config_setting_.half_map_size,
-                    (int64_t)loc_xyz[2] + config_setting_.half_map_size, (int64_t)loc_xyz[2] - config_setting_.half_map_size);
+  // VoxelLocation position((int64_t)loc_xyz[0], (int64_t)loc_xyz[1], (int64_t)loc_xyz[2]);//discrete global
+  clearMemOutOfMap((int64_t)loc_xyz[0] + config_setting_.half_map_size_, (int64_t)loc_xyz[0] - config_setting_.half_map_size_,
+                    (int64_t)loc_xyz[1] + config_setting_.half_map_size_, (int64_t)loc_xyz[1] - config_setting_.half_map_size_,
+                    (int64_t)loc_xyz[2] + config_setting_.half_map_size_, (int64_t)loc_xyz[2] - config_setting_.half_map_size_);
   double t_sliding_end = omp_get_wtime();
   std::cout<<YELLOW<<"[DEBUG]: Map sliding using "<<t_sliding_end - t_sliding_start<<" secs"<<RESET<<"\n";
   return;
@@ -1253,38 +1197,30 @@ void VoxelMapManager::mapSliding()
 
 void VoxelMapManager::clearMemOutOfMap(const int& x_max,const int& x_min,const int& y_max,const int& y_min,const int& z_max,const int& z_min )
 {
-  int delete_voxel_cout = 0;
-  // double delete_time = 0;
-  // double last_delete_time = 0;
+  int delete_voxel_count = 0;
   for (auto it = voxel_map_.begin(); it != voxel_map_.end(); )
   {
-    const VOXEL_LOCATION& loc = it->first;
+    const VoxelLocation& loc = it->first;
     bool should_remove = loc.x > x_max || loc.x < x_min || loc.y > y_max || loc.y < y_min || loc.z > z_max || loc.z < z_min;
     if (should_remove){
-      // last_delete_time = omp_get_wtime();
-      // delete it->second;
-      VOXEL_LOCATION remove_loc = loc;
-      VoxelOctoTree *voxel_ptr = it->second->second;
-      delete voxel_ptr;
+      delete it->second->second;
 
       // Remove from LRU cache (direct deletion via iterator, O(1) time complexity)
       voxel_map_cache_.erase(it->second);
 
       it = voxel_map_.erase(it);
-      // delete_time += omp_get_wtime() - last_delete_time;
-      delete_voxel_cout++;
+      delete_voxel_count++;
     } else {
       ++it;
     }
   }
-  std::cout<<YELLOW<<"[DEBUG]: Delete "<<delete_voxel_cout<<" root voxels"<<RESET<<"\n";
-  // std::cout<<RED<<"[DEBUG]: Delete "<<delete_voxel_cout<<" voxels using "<<delete_time<<" s"<<RESET<<"\n";
+  std::cout<<YELLOW<<"[DEBUG]: Delete "<<delete_voxel_count<<" root voxels"<<RESET<<"\n";
 }
 
 // Compute pillar location (fixed elevation direction as z-axis, pillar composed of x,y)
-PILLAR_LOCATION PillarVoxelMap::GetPillarLocation(const VOXEL_LOCATION &position) const
+PillarLocation PillarVoxelMap::GetPillarLocation(const VoxelLocation &position) const
 {
-  return PILLAR_LOCATION(position.x, position.y);
+  return PillarLocation(position.x, position.y);
 }
 
 void PillarVoxelMap::init(const PillarVoxelConfig &config, double voxel_size)
@@ -1299,7 +1235,7 @@ void PillarVoxelMap::initHorizontalNeighborOffsets()
   redundant_neighbor_offsets_.clear();
   isolated_neighbor_offsets_.clear();
 
-  auto buildOffsets = [](int type, std::vector<VOXEL_LOCATION>& offsets) {
+  auto buildOffsets = [](int type, std::vector<VoxelLocation>& offsets) {
     if (type == 0) {
       // 4-neighbor: North, South, East, West
       const std::vector<std::pair<int, int>> four_offsets = {
@@ -1307,7 +1243,7 @@ void PillarVoxelMap::initHorizontalNeighborOffsets()
       };
       offsets.reserve(4);
       for (const auto& offset : four_offsets) {
-        VOXEL_LOCATION voxel_offset;
+        VoxelLocation voxel_offset;
         voxel_offset.x = offset.first;
         voxel_offset.y = offset.second;
         voxel_offset.z = 0;
@@ -1322,7 +1258,7 @@ void PillarVoxelMap::initHorizontalNeighborOffsets()
       };
       offsets.reserve(8);
       for (const auto& offset : eight_offsets) {
-        VOXEL_LOCATION voxel_offset;
+        VoxelLocation voxel_offset;
         voxel_offset.x = offset.first;
         voxel_offset.y = offset.second;
         voxel_offset.z = 0;
@@ -1391,7 +1327,7 @@ void PillarVoxelMap::updatePillarFlag(PillarVoxelArray &pillar_voxels)
   }
 }
 
-bool PillarVoxelMap::hasAdjacentVoxel(const VOXEL_LOCATION &current_pos, int threshold, const std::vector<VOXEL_LOCATION> &neighbor_offsets, double current_vp_z)
+bool PillarVoxelMap::hasAdjacentVoxel(const VoxelLocation &current_pos, int threshold, const std::vector<VoxelLocation> &neighbor_offsets, double current_vp_z)
 {
   if (threshold <= 0) {
     return false;
@@ -1402,13 +1338,13 @@ bool PillarVoxelMap::hasAdjacentVoxel(const VOXEL_LOCATION &current_pos, int thr
   double height_threshold = voxel_size_ * config_.height_consistency_ratio_;
 
   for (const auto& voxel_offset : neighbor_offsets) {
-    VOXEL_LOCATION adjacent_pos = {
+    VoxelLocation adjacent_pos = {
       current_pos.x + voxel_offset.x,
       current_pos.y + voxel_offset.y,
       current_pos.z
     };
 
-    PILLAR_LOCATION adjacent_pillar = GetPillarLocation(adjacent_pos);
+    PillarLocation adjacent_pillar = GetPillarLocation(adjacent_pos);
 
     auto pillar_iter = pillars_.find(adjacent_pillar);
     if (pillar_iter != pillars_.end() && !pillar_iter->second.empty()) {
@@ -1444,12 +1380,12 @@ void PillarVoxelMap::BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud)
   {
     const PointType& point = input_cloud->points[i];
 
-    VOXEL_LOCATION voxel_location;
+    VoxelLocation voxel_location;
     voxel_location.x = static_cast<int64_t>(std::floor(point.x * inv_voxel_size));
     voxel_location.y = static_cast<int64_t>(std::floor(point.y * inv_voxel_size));
     voxel_location.z = static_cast<int64_t>(std::floor(point.z * inv_voxel_size));
 
-    PILLAR_LOCATION pillar_loc = GetPillarLocation(voxel_location);
+    PillarLocation pillar_loc = GetPillarLocation(voxel_location);
     int64_t voxel_key = voxel_location.z;
 
     PillarVoxelArray& pillar_voxels = pillars_[pillar_loc];
@@ -1505,14 +1441,14 @@ void PillarVoxelMap::pillarDetection()
   // Step 2: Adjacency check for all redundant and isolated voxels
   for (auto& pillar_entry : pillars_)
   {
-    const PILLAR_LOCATION& pillar_key = pillar_entry.first;
+    const PillarLocation& pillar_key = pillar_entry.first;
     auto& pillar_voxels = pillar_entry.second;
 
     for (auto voxel_iter = pillar_voxels.begin(); voxel_iter != pillar_voxels.end(); ++voxel_iter)
     {
       if (!voxel_iter->second.is_redundant_voxel_ && !voxel_iter->second.is_isolated_voxel_) continue;
 
-      VOXEL_LOCATION voxel_loc;
+      VoxelLocation voxel_loc;
       voxel_loc.x = pillar_key.axis1;
       voxel_loc.y = pillar_key.axis2;
       voxel_loc.z = voxel_iter->first;
@@ -1546,7 +1482,7 @@ void PillarVoxelMap::pillarDetection()
 }
 
 // Shared retention pass: keep the newest keep_num points per flagged voxel
-// (the tail of point_indices_, which follows scan order), mark the rest in skip_list
+// (the tail of point_indices_, which follows scan order), mark the rest in skip_list_
 void VoxelMapManager::applyVoxelRetention(int keep_num, int &redundant_total, int &redundant_kept, int &final_skip_count)
 {
   for (const auto &pillar_entry : pillar_map_.pillars_)
@@ -1584,9 +1520,9 @@ void VoxelMapManager::applyVoxelRetention(int keep_num, int &redundant_total, in
       for (int i = 0; i < num_to_skip; ++i)
       {
         size_t point_idx = point_indices[i];
-        if (!skip_list[point_idx])
+        if (!skip_list_[point_idx])
         {
-          skip_list[point_idx] = true;
+          skip_list_[point_idx] = true;
           final_skip_count++;
         }
       }
@@ -1598,7 +1534,7 @@ void VoxelMapManager::applyVoxelRetention(int keep_num, int &redundant_total, in
 void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_world)
 {
   const size_t point_num = feats_down_world->points.size();
-  skip_list.assign(point_num, false);
+  skip_list_.assign(point_num, false);
 
   if (point_num == 0) {
     ROS_DEBUG("[DefineSkipPoints] Empty cloud, skip nothing.");
@@ -1617,7 +1553,7 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
     {
       if (pillar_map_.config_.keep_isolated_ <= 0 || pillar_map_.config_.keep_num_per_voxel_ <= 0)
       {
-        skip_list[i] = true;
+        skip_list_[i] = true;
         final_skip_count++;
       }
       isolated_count++;
@@ -1653,9 +1589,9 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
         if (pillar_map_.GetPointLabel(i) == LABEL_REDUNDANT)
         {
           redundant_total++;
-          if (!skip_list[i])
+          if (!skip_list_[i])
           {
-            skip_list[i] = true;
+            skip_list_[i] = true;
             final_skip_count++;
           }
         }
@@ -1716,7 +1652,7 @@ void PillarVoxelMap::PublishPillarPoints(const ros::Publisher &pubRedundant, con
     sensor_msgs::PointCloud2 redundant_msg;
     pcl::toROSMsg(*redundant_cloud, redundant_msg);
     redundant_msg.header.stamp = ros::Time::now();
-    redundant_msg.header.frame_id = "camera_init";
+    redundant_msg.header.frame_id = "world";
     pubRedundant.publish(redundant_msg);
   }
 
@@ -1730,7 +1666,7 @@ void PillarVoxelMap::PublishPillarPoints(const ros::Publisher &pubRedundant, con
     sensor_msgs::PointCloud2 isolated_msg;
     pcl::toROSMsg(*isolated_cloud, isolated_msg);
     isolated_msg.header.stamp = ros::Time::now();
-    isolated_msg.header.frame_id = "camera_init";
+    isolated_msg.header.frame_id = "world";
     pubIsolated.publish(isolated_msg);
   }
 }

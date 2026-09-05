@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is **voxel_pillar** (package name), a Voxel-Pillar system with pillar voxel redundant point detection. It's a high-speed LiDAR-Inertial Odometry system supporting multi-LiDAR fusion, visual-inertial odometry, and external IMU integration optimized for high-speed scenarios (>5 m/s). The system features 250Hz IMU propagation and efficient voxel-based mapping with LRU caching.
+This is **voxel_pillar** (package name), a Voxel-Pillar system with pillar voxel redundant point detection. It's a high-speed LiDAR-Inertial Odometry system supporting multi-LiDAR fusion and external IMU integration, optimized for high-speed scenarios (>5 m/s). The system features 250Hz IMU propagation and efficient voxel-based mapping with LRU caching. (Visual-inertial odometry support has been removed; only the LIO path remains.)
 
 ## Build System
 
@@ -28,11 +28,9 @@ taskset -c 16-31 bash -c 'source /opt/ros/noetic/setup.bash && catkin_make -C /h
 - Multi-threading: Auto-configured based on CPU core count (`MP_EN`, `MP_PROC_NUM`)
 - Debug builds: `-O0 -g`
 
-**Dependencies**: PCL (≥1.8), Eigen3 (≥3.3.4), OpenCV, Sophus, Boost, vikit_common/vikit_ros (in `src/rpg_vikit/`). Optional: mimalloc, OpenMP, LAStools.
+**Dependencies**: PCL (≥1.8), Eigen3 (≥3.3.4), Boost. Optional: mimalloc, OpenMP, LAStools.
 
-**Sophus note**: Sophus is not installed system-wide; it is found via the cmake user registry from its build tree at `/home/wsl-4080/code/Sophus/build` (`SophusConfig.cmake` there exports `Sophus_LIBRARIES=/home/wsl-4080/code/Sophus/build/libSophus.so`). Do not delete that directory, or `catkin_make` fails at `find_package(Sophus)`.
-
-**Python tooling**: evaluation scripts (`python/evaluate_txt_trajectory.py` etc.) need the conda env `xjh` (Python 3.10, has `evo`): `source /root/miniconda3/etc/profile.d/conda.sh && conda activate xjh` before running them.
+**Python tooling**: evaluation scripts (e.g. `Log/result/ntu_viral/evaluate_viral.py`) need the conda env `xjh` (Python 3.10, has `evo`): `source /root/miniconda3/etc/profile.d/conda.sh && conda activate xjh` before running them.
 
 ## Core Architecture
 
@@ -45,9 +43,7 @@ taskset -c 16-31 bash -c 'source /opt/ros/noetic/setup.bash && catkin_make -C /h
 **Libraries:**
 - `laser_mapping`: Core LiDAR-IMU fusion (src/LIVMapper.cpp)
 - `imu_proc`: 250Hz IMU propagation with bias estimation (src/IMU_Processing.cpp)
-- `imu_filter`: IMU data filtering and preprocessing (src/imu_filter.cpp)
 - `lio`: Voxel octree map with LRU caching (src/voxel_map.cpp)
-- `vio`: Visual-inertial odometry with feature tracking (src/vio.cpp, src/frame.cpp, src/visual_point.cpp)
 - `pre`: Point cloud preprocessing and filtering (src/preprocess.cpp)
 
 ### Data Flow
@@ -55,22 +51,22 @@ taskset -c 16-31 bash -c 'source /opt/ros/noetic/setup.bash && catkin_make -C /h
 1. **Multi-LiDAR Merger** (`merge_lidar`) → `/livox/multi_lidar`
 2. **Preprocessing** (`pre`) filters and voxelizes point clouds
 3. **IMU Processing** (`imu_proc`) propagates at 250Hz, estimates biases, supports external IMU fusion
-4. **LIO/VIO Fusion** (`laser_mapping`) performs state estimation
+4. **State Estimation** (`laser_mapping`) performs LiDAR-inertial odometry
 5. **Voxel Mapping** (`lio`) maintains octree map with LRU caching (configurable via `lio/capacity`)
 
-**State Management**: The `StatesGroup` struct (common_lib.h:144-199) maintains 19-dimensional state including rotation, position, velocity, IMU biases, gravity, and exposure time with covariance.
+**State Management**: The `StatesGroup` struct (common_lib.h:125-214) maintains an 18-dimensional state including rotation, position, velocity, IMU biases, and gravity with covariance.
 
 ### External IMU Integration
 
-**Key Files**: include/LIVMapper.h:45-60, include/IMU_Processing.h:48-51, include/common_lib.h:132-142
+**Key Files**: include/LIVMapper.h:25-40, include/IMU_Processing.h:38-41, include/common_lib.h:113-123
 
 **External IMU Data Structure** (`ExternalIMUData`):
 - Position, linear velocity, orientation (Euler angles), velocity covariance
 - Interpolated from odom messages via `findClosestExternalIMUs()` and `interpolateExternalIMU()`
 
-**Configuration** (config/merge_lidar.yaml:107-114):
+**Configuration** (config/merge_lidar.yaml:92-99):
 - `enable`: Enable external IMU fusion
-- `external_imu_init_frame`: Frames for external IMU initialization (default: 30)
+- `external_imu_init_frame`: Frames for external IMU initialization (code fallback: 3; shipped configs use 30–50)
 - `external_imu_only`: Use only external IMU (default: false)
 - `external_R`, `external_T`: Extrinsic calibration between IMUs
 - `buffer_size`: External IMU buffer size
@@ -81,7 +77,12 @@ taskset -c 16-31 bash -c 'source /opt/ros/noetic/setup.bash && catkin_make -C /h
 
 **Voxel Structure** (include/voxel_map.h):
 - Octree-based with configurable layering (`max_layer`, `layer_init_num`)
-- LRU caching for memory management (`capacity`: 0=disabled, default 100000)
+- LRU caching for memory management (`capacity`: <=1 disables the cache; the
+  cache holds at most `capacity` voxels, evicting least-recently-updated ones.
+  Recency is driven by point insertion (`UpdateVoxelMap`/`BuildVoxelMap`) —
+  voxel lookups during ICP do not refresh it. `enforceCapacity()` runs after
+  both insert paths; evictions are logged with a cumulative counter
+  (`evicted_voxel_count_`))
 - Intensity fusion support (`intensity_fusion_en`): joint geometric+intensity
   score for plane selection, computed as the product of two normalized
   Gaussian likelihoods (geometry prob × intensity prob, both in the
@@ -104,7 +105,7 @@ taskset -c 16-31 bash -c 'source /opt/ros/noetic/setup.bash && catkin_make -C /h
 **Pillar Voxel System** (config/merge_lidar.yaml `pillar_voxel` block):
 - **Purpose**: Redundant point detection and isolated point identification using vertical pillar voxels
 - **Key Functions** (all sequential, no parallelization):
-  1. `BuildPillarMap()`: Organize point cloud into pillar voxels — flat `unordered_map<PILLAR_LOCATION, vector<pair<z, PillarVoxel>>>`, each pillar's array sorted by z (voxel_map.cpp)
+  1. `BuildPillarMap()`: Organize point cloud into pillar voxels — flat `unordered_map<PillarLocation, vector<pair<z, PillarVoxel>>>`, each pillar's array sorted by z (voxel_map.cpp)
   2. `pillarDetection()`: Three sequential steps — initial per-pillar flags → horizontal adjacency check (with height consistency) → point label assignment; early-exits when Step 1 flags nothing
   3. `DefineSkipPoints()`: Apply skip filter to the main point cloud (newest-n-per-voxel retention via `applyVoxelRetention()`)
   4. `PublishPillarPoints()`: Publish redundant/isolated clouds (skips assembly and serialization when a topic has no subscribers)
@@ -148,7 +149,8 @@ rosbag play your_multi_lidar.bag
 ### Available Launch Files
 - `mapping_merge_lidar.launch`: Multi-LiDAR setup with external IMU support
 - `mapping_avia.launch`: Livox Avia LiDAR configuration
-- `mapping_avia_marslvig.launch`: Livox Avia with MARS LVIG visual-inertial dataset
+- `mapping_avia_marslvig.launch`: Livox Avia with MARS LVIG dataset
+- `mapping_geode.launch`: GEODE Livox Avia dataset (Shield & Tunneling tunnels)
 - `mapping_hesaixt32_hilti22.launch`: Hesai XT32 + Hilti dataset setup
 - `mapping_ouster_ntu.launch`: Ouster NTU dataset configuration
 - `mapping_subt_mrs.launch`: SubT-MRS dataset (Velodyne VLP-16)
@@ -158,16 +160,19 @@ rosbag play your_multi_lidar.bag
 - `voxel_pillar.rviz`: General voxel pillar visualization
 - `hilti.rviz`, `ntu_viral.rviz`, `M300.rviz`: Dataset-specific visualizations
 
-### Debugging (launch/mapping_merge_lidar.launch:29-30)
+### Debugging (launch/mapping_merge_lidar.launch:25-28)
 Uncomment and add to `<node>` tag:
 - `launch-prefix="gdb -ex run --args"` for GDB debugging
 - `launch-prefix="valgrind --leak-check=full"` for memory leak detection
 
-### Data Topics (merge_lidar.yaml:2-5)
+### Frame and Topic Conventions
+- World frame id: `world` (renamed from the legacy `camera_init`); body frame: `body`; odometry child frame: `aft_mapped`
+- IMU propagation odometry topic: `/imu_propagate` (renamed from the legacy `/LIVO2/imu_propagate`)
+
+### Data Topics (merge_lidar.yaml:1-5)
 - **LiDAR**: `/livox/lidar` (default input topic)
 - **IMU**: `/livox/imu_192_168_1_159` (default internal IMU from LiDAR 159)
 - **External IMU**: `/novatel/oem7/odom` (external IMU odometry)
-- **Camera**: `/left_camera/image` (optional, VIO mode when `img_en: 1`)
 - **Odometry Output**: `/aft_mapped_to_init`
 - **Redundant Points**: `/cloud_redundant` (pillar voxel redundant point detection output)
 - **Isolated Points**: `/cloud_isolated` (pillar voxel isolated point output)
@@ -177,51 +182,46 @@ Uncomment and add to `<node>` tag:
 ### Key Configuration Files
 - `merge_lidar.yaml`: Multi-LiDAR with external IMU (primary config)
 - `HILTI22.yaml`: Hesai XT32 + Hilti industrial dataset
-- `NTU_VIRAL.yaml`: NTU viral dataset with visual-inertial data
-- `MARS_LVIG.yaml`: MARS LVIG visual-inertial dataset
+- `NTU_VIRAL.yaml`: NTU viral dataset
+- `MARS_LVIG.yaml`: MARS LVIG dataset
 - `avia.yaml`: Livox Avia sensor-specific config
-- `camera_pinhole.yaml`: Pinhole camera intrinsics for VIO
-- `camera_*.yaml`: Dataset-specific camera configurations (fisheye, MARS_LVIG, NTU_VIRAL, SubT_MRS)
+- `GEODE.yaml`: GEODE Livox Avia tunnel dataset
 
 ### Important Parameters (merge_lidar.yaml)
 
-**Common** (lines 1-8):
-- `img_en`: Enable VIO mode (0 = LIO only, 1 = VIO enabled)
+**Common** (lines 1-5):
 - `lidar_en`: Enable LiDAR processing
 - `imu_topic`: Default internal IMU from LiDAR 159 (`/livox/imu_192_168_1_159`)
 
-**Preprocessing** (lines 23-28):
+**Preprocessing** (lines 15-20):
 - `lidar_type`: LiDAR type (1 = Livox Avia)
 - `scan_line`: Scan line count (Avia: 6, Mid360: 4)
 - `blind`: Blind spot distance in meters (default: 0.8)
 - `point_filter_num`: Point downsampling factor (default: 1)
 
-**VIO** (lines 31-42):
-- `capacity`: LRU cache for visual feature map (0 = disable)
-- `exposure_estimate_en`: Enable exposure time estimation
-
-**Publish** (lines 90-95):
+**Publish** (lines 76-80):
 - `dense_map_en`: Publish dense map
 - `pub_effect_en`: Publish effective points for visualization
-- `pub_scan_num`: Number of scans to publish
 
-**Point Cloud Saving** (lines 102-105):
+**Point Cloud Saving** (lines 87-91):
 - `save_en`: Enable PCD file saving
 - `filter_size_pcd`: Voxel filter size for saved PCD
 - `interval`: Frames per PCD file (10 = save every 10 frames)
 
-**Evaluation** (lines 97-99):
+**Evaluation** (lines 82-85):
 - `seq_name`: Sequence name for trajectory evaluation output
 
-**External IMU** (lines 107-114):
+**External IMU** (lines 92-99):
 - `external_imu/enable`: Enable external IMU fusion
-- `external_imu/external_imu_init_frame`: Initialization frames (default: 30)
+- `external_imu/external_imu_init_frame`: Initialization frames (code fallback: 3; shipped configs use 30–50)
 - `external_imu/external_imu_only`: Use only external IMU (default: false)
 - `external_imu/external_R`, `external_T`: Extrinsic calibration
 
-**Voxel Mapping** (lines 54-65):
+**Voxel Mapping** (lines 32-47):
 - `lio/voxel_size`: Voxel resolution (default: 1.0 meter)
-- `lio/capacity`: LRU cache capacity (default: 0 = disabled)
+- `lio/capacity`: LRU cache capacity, <=1 = disabled (default: 100000; all
+  shipped configs set 0 = disabled, so voxel count is unbounded unless this or
+  `local_map/map_sliding_en` is enabled)
 - `lio/intensity_fusion_en`: Enable intensity-based fusion
 - `lio/intensity_gate_en`: Enable intensity-based association rejection (default: false)
 - `lio/intensity_gate_k`: Gate threshold in units of intensity sigma (default: 3.0)
@@ -239,29 +239,22 @@ Uncomment and add to `<node>` tag:
 - `pillar_voxel/keep_redundant` / `pillar_voxel/keep_isolated`: retention toggles per category
 - `pillar_voxel/height_consistency_ratio`: Height tolerance as ratio of voxel_size (default: 0.25)
 
-**Multi-LiDAR Merger** (launch file lines 9-11):
+**Multi-LiDAR Merger** (launch file lines 8-12):
 - Input topics: `/livox/lidar_192_168_1_159`, `_160`, `_161`
   - Topic naming: `159`, `160`, `161` refer to the last octet of LiDAR IP addresses (e.g., 192.168.1.159)
   - Modify these in launch file when using different LiDAR IP configurations
-- Extrinsic calibration in `extrin_calib` section (lines 10-16)
-
-**Camera Image Handling** (launch file line 27):
-- `image_transport republish` node decompresses compressed camera images for VIO
-- Converts `compressed in:=/left_camera/image` to `raw out:=/left_camera/image`
-- Required when camera publishes compressed images only
+- LiDAR-IMU extrinsic calibration in `extrin_calib` section (lines 10-12)
 
 ## SubT-MRS Dataset Support
 
 **Configuration Files:**
 - `config/SubT_MRS.yaml`: Main configuration for SubT-MRS datasets (Velodyne VLP-16)
-- `config/camera_pinhole_SubT_MRS.yaml`: Camera intrinsics (MEI fisheye parameters converted to Pinhole)
 - `launch/mapping_subt_mrs.launch`: Launch file for SubT-MRS
 
 **Key SubT-MRS Settings:**
 - `lidar_type: 2` (Velodyne, uses `sensor_msgs/PointCloud2`)
 - `scan_line: 16` (VLP-16 has 16 laser channels)
 - Input topics: `/velodyne_points`, `/imu/data`
-- No `image_transport` node required (raw images used, `img_en: 0` by default)
 
 ## Point Cloud Format Requirements
 
@@ -295,27 +288,6 @@ struct Point {
 
 **Wrong field order causes**: `[ LIO ]: No point!!!` error or segfault
 
-## Camera Configuration Requirements
-
-**Critical**: Camera YAML files must use proper float notation:
-
-```yaml
-# WRONG - causes segfault during initialization
-scale: 1
-cam_fx: 758.315
-
-# CORRECT
-scale: 1.0
-cam_fx: 758.3153257832925
-```
-
-The `vk::camera_loader::loadFromRosNs()` uses `getParam<double>()` which expects proper float format. Integer values like `scale: 1` can cause parsing failures.
-
-**When VIO is disabled** (`img_en: 0`):
-- Camera config is still loaded (required by initialization)
-- Use `camera_pinhole.yaml` or dataset-specific camera config
-- Camera parameters are read even if not actively used for odometry
-
 ## Common Issues and Debugging
 
 ### "No point!!!" Error
@@ -339,14 +311,12 @@ The `vk::camera_loader::loadFromRosNs()` uses `getParam<double>()` which expects
 **Symptoms**: Node dies immediately after startup
 
 **Common Causes**:
-1. Camera config YAML syntax error (e.g., `scale: 1` instead of `scale: 1.0`)
-2. Missing camera configuration file
-3. ROS master not running when VIO initialization occurs
+1. Missing or malformed config file (launch `rosparam load` path wrong)
+2. ROS master not running when initialization occurs
 
 **Debug Steps**:
-1. Check camera config YAML for proper float notation
-2. Verify camera file exists at correct path
-3. Run with gdb to get backtrace:
+1. Verify the YAML config file referenced by the launch file exists and parses (`rosparam load <file>`)
+2. Run with gdb to get backtrace:
    ```xml
    <node ... launch-prefix="gdb -ex run --args">
    ```
@@ -363,29 +333,8 @@ The `vk::camera_loader::loadFromRosNs()` uses `getParam<double>()` which expects
 
 **Data Processing:**
 - `Log/plot.py`: Plot trajectory, IMU data, and state estimation results (requires `mat_pre.txt`, `mat_out.txt`, `imu.txt`)
-- `scripts/extract_odom_from_bag.py`: Extract odometry data from rosbag to TUM format
-  ```bash
-  python3 scripts/extract_odom_from_bag.py <bag_file> [output_file] --topic /novatel/oem7/odom
-  ```
-- `scripts/mesh.py`: Generate mesh from point cloud data
-- `scripts/colmap_output.sh`: COLMAP integration for visual reconstruction
 
 **Evaluation:**
-- `python/evaluate_txt_trajectory.py`: General trajectory evaluation script
-  - Supports both CSV and TXT trajectory formats with or without headers
-  - Computes ATE (Absolute Trajectory Error) using EVO library
-  - Automatic timestamp alignment and interpolation
-  - Outputs results to `evaluation_results.csv`
-  - Usage (from script's main function):
-    ```python
-    python3 python/evaluate_txt_trajectory.py
-    # Modify paths in __main__ section before running
-    ```
-  - Key parameters:
-    - `align_fraction`: Fraction of trajectory to use for SE(3) alignment (default: 1.0)
-    - `min_completeness`: Minimum completeness threshold (default: 90%)
-    - `visualize`: Enable trajectory visualization plots
-- `python/evaluate_trajectory.py`: Extended evaluation with additional features
 - `Log/result/ntu_viral/evaluate_viral.py`: Convert trajectories for NTU VIRAL dataset evaluation
   - Converts SLAM trajectories from IMU frame to PRISM coordinate system
   - Converts Leica ground truth to TUM format
@@ -394,8 +343,8 @@ The `vk::camera_loader::loadFromRosNs()` uses `getParam<double>()` which expects
 ## Development Notes
 
 **Key Data Structures:**
-- `StatesGroup` (common_lib.h:144-199): 19-dimensional state with covariance
-- `ExternalIMUData` (common_lib.h:132-142): External IMU message with position, velocity, orientation, covariance
+- `StatesGroup` (common_lib.h:125-214): 18-dimensional state with covariance
+- `ExternalIMUData` (common_lib.h:113-123): External IMU message with position, velocity, orientation, covariance
 - `VoxelPlane` (voxel_map.h:77+): Voxel-based plane representation
 - `PointToPlane` (voxel_map.h:61-75): Point-to-plane correspondence for optimization
 - `PillarVoxelConfig` (voxel_map.h): Pillar voxel system configuration
@@ -405,9 +354,8 @@ The `vk::camera_loader::loadFromRosNs()` uses `getParam<double>()` which expects
   bool fields are legacy — the pillar system now tracks per-point state in
   `PillarVoxelMap::point_labels_` instead
 
-**State Machine** (common_lib.h:53-59):
+**State Machine** (common_lib.h:39-44):
 - `WAIT`: Initial state waiting for data
-- `VIO`: Visual-inertial odometry mode
 - `LIO`: LiDAR-inertial odometry mode
 - `LO`: LiDAR-only mode
 
@@ -422,14 +370,12 @@ The `vk::camera_loader::loadFromRosNs()` uses `getParam<double>()` which expects
 
 **Sensor Integration:**
 - Covariance-based external IMU fusion with configurable initialization periods
-- Time synchronization handles offsets between heterogeneous sensors (`imu_time_offset`, `img_time_offset`)
-- Seamless switching between pure LIO and VIO modes (`img_en` flag)
+- Time synchronization handles offsets between heterogeneous sensors (`imu_time_offset`, `lidar_time_offset`)
 - Multi-LiDAR calibration and real-time data fusion via extrinsic parameters
 
 **Memory Management:**
 - Efficient voxel octree with LRU caching
-- VIO feature map LRU cache (`vio/capacity`: 0 = disable)
-- Pillar voxel cleanup: `ClearPillarVoxels()` called after each frame (LIVMapper.cpp:480)
+- Pillar voxel cleanup: `ClearPillarVoxels()` called after each frame (LIVMapper.cpp:437)
 - LAStools integration for point cloud processing (optional)
 - Architecture-specific compile flags for optimal performance
 
@@ -449,6 +395,6 @@ The pillar voxel system operates independently of the main voxel map:
 
 **Important Implementation Notes:**
 - Pillar voxel functions are **sequential only** - no parallelization (do not add OpenMP)
-- Skipped points are excluded from ICP residuals via `skip_list` but **still enter the voxel map** (`UpdateVoxelMap` receives the unfiltered `pv_list_`)
+- Skipped points are excluded from ICP residuals via `skip_list_` but **still enter the voxel map** (`UpdateVoxelMap` receives the unfiltered `pv_list_`)
 - Per-point state lives in `PillarVoxelMap::point_labels_` (LABEL_NORMAL/REDUNDANT/ISOLATED), reset each frame in `BuildPillarMap()`
 - Publishing skips cloud assembly and serialization when a topic has no subscribers

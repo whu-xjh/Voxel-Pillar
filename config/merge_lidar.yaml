@@ -1,24 +1,16 @@
 common:
-  img_topic: "/left_camera/image"
   lid_topic: "/livox/multi_lidar"
   imu_topic: "/livox/imu_192_168_1_159"
   external_imu_topic: "/novatel/oem7/odom"
-  img_en: 0
   lidar_en: 1
   ros_driver_bug_fix: false
 
 extrin_calib:
   extrinsic_T: [-0.011, -0.02329, 0.04412]
   extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
-  Rcl: [0.00610193,-0.999863,-0.0154172,
-        -0.00615449,0.0153796,-0.999863,
-        0.999962,0.00619598,-0.0060598]
-  Pcl: [0.0194384, 0.104689,-0.0251952]
 
 time_offset:
   imu_time_offset: 0.0
-  img_time_offset: 0.1
-  exposure_time_init: 0.0
 
 preprocess:
   point_filter_num: 1
@@ -26,20 +18,6 @@ preprocess:
   lidar_type: 1  # Livox Avia
   scan_line: 6  # Avia: 6, Mid360: 4
   blind: 0.8
-
-# Visual Odometry
-vio:
-  max_iterations: 5
-  outlier_threshold: 1000
-  img_point_cov: 100
-  patch_size: 8
-  patch_pyrimid_level: 4
-  normal_en: true
-  raycast_en: false
-  inverse_composition_en: false
-  exposure_estimate_en: true
-  inv_expo_cov: 0.1
-  capacity: 0  # LRU cache (0 = disable)
 
 # IMU
 imu:
@@ -74,7 +52,7 @@ pillar_voxel:
   voxel_size: 0.5
 
   redundant_detection_method: 1  # 0=none (isolated points only), 1=neighborhood redundant detection
-  redundant_neighbor_type: 0  # 0=4-neighbor, 1=8-neighborzh
+  redundant_neighbor_type: 0  # 0=4-neighbor, 1=8-neighbor
   adjacent_redundant_threshold: 4
 
   isolated_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
@@ -100,8 +78,6 @@ publish:
   pub_effect_en: false
   pub_plane_en: false
   pub_body_en: false
-  pub_scan_num: 1
-  blind_rgb_points: 0.0
 
 evo:
   seq_name: "shawan_tunnel"
@@ -110,7 +86,6 @@ evo:
 
 lidar_save:
   save_en: false
-  colmap_output_en: false
   filter_size_pcd: 0.10
   interval: 100
 

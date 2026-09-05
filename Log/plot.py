@@ -16,17 +16,11 @@ axs[1,0].set_title('Translation')
 axs[2,0].set_title('Velocity')
 axs[0,1].set_title('bg')
 axs[1,1].set_title('ba')
-axs[2,1].set_title('ExposureTime')
 for i in range(1,4):
     for j in range(5):
         axs[j%3, j//3].plot(time_pre, a_pre[:,i+j*3],'.-', label=lab_pre[i])
         axs[j%3, j//3].plot(time_out, a_out[:,i+j*3],'.-', label=lab_out[i])
         axs[j%3, j//3].legend()
-#for i in range(1,4):
-axs[2, 1].plot(time_pre, a_pre[:,1+5*3],'.-', label=lab_pre[0])
-axs[2, 1].plot(time_out, a_out[:,1+5*3],'.-', label=lab_pre[0])
-axs[2, 1].legend(['pre', 'out'])
-#axs[2, 1].legend(['pre', 'out'])
 
 for j in range(6):
     # axs[j].set_xlim(386,389)

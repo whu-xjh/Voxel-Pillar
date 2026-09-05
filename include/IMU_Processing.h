@@ -8,7 +8,6 @@
 #include <nav_msgs/Odometry.h>
 #include <utils/so3_math.h>
 #include <fstream>
-const bool time_list(PointType &x, PointType &y) { return (x.curvature < y.curvature); }
 
 /// *************IMU Process and undistortion
 class ImuProcess
@@ -20,7 +19,6 @@ public:
   ~ImuProcess();
 
   void Reset();
-  void Reset(double start_timestamp, const sensor_msgs::ImuConstPtr &lastimu);
   void set_extrinsic(const V3D &transl, const M3D &rot);
   void set_extrinsic(const V3D &transl);
   void set_extrinsic(const MD(4, 4) & T);
@@ -28,29 +26,24 @@ public:
   void set_acc_cov_scale(const V3D &scaler);
   void set_gyr_bias_cov(const V3D &b_g);
   void set_acc_bias_cov(const V3D &b_a);
-  void set_inv_expo_cov(const double &inv_expo);
   void set_imu_init_frame_num(const int &num);
   void set_external_imu_init_frame_num(const int &num);
   void disable_imu();
   void disable_gravity_est();
   void disable_bias_est();
-  void disable_exposure_est();
-  void Process2(LidarMeasureGroup &lidar_meas, StatesGroup &stat, PointCloudXYZI::Ptr cur_pcl_un_, deque<ExternalIMUData> external_imu_buffer = deque<ExternalIMUData>(), bool external_imu_enable = false, bool external_imu_only = false);
-  void UndistortPcl(LidarMeasureGroup &lidar_meas, StatesGroup &state_inout, PointCloudXYZI &pcl_out, int &external_init_iter_num, deque<ExternalIMUData> external_imu_buffer, bool external_imu_enable = false, bool external_imu_only = false);
+  void Process2(LidarMeasureGroup &lidar_meas, StatesGroup &stat, PointCloudXYZI::Ptr cur_pcl_un_, deque<ExternalIMUData> &external_imu_buffer, bool external_imu_enable, bool external_imu_only);
+  void UndistortPcl(LidarMeasureGroup &lidar_meas, StatesGroup &state_inout, PointCloudXYZI &pcl_out, int &external_init_iter_num, deque<ExternalIMUData> &external_imu_buffer, bool external_imu_enable, bool external_imu_only);
   pair<ExternalIMUData, ExternalIMUData> findClosestExternalIMUs(deque<ExternalIMUData> &external_imu_buffer, double target_time, double max_time_diff = 0.1);
   ExternalIMUData interpolateExternalIMU(const ExternalIMUData &prev_imu, const ExternalIMUData &next_imu, double target_time);
 
   ofstream fout_imu;
   double IMU_mean_acc_norm;
-  V3D unbiased_gyr;
 
   V3D cov_acc;
   V3D cov_gyr;
   V3D cov_bias_gyr;
   V3D cov_bias_acc;
-  double cov_inv_expo;
   double first_lidar_time;
-  bool imu_time_init = false;
   bool imu_need_init = true;
   M3D Eye3d;
   V3D Zero3d;
@@ -76,7 +69,6 @@ private:
   bool imu_en = true;
   bool gravity_est_en = true;
   bool ba_bg_est_en = true;
-  bool exposure_estimate_en = true;
 };
 typedef std::shared_ptr<ImuProcess> ImuProcessPtr;
 #endif
