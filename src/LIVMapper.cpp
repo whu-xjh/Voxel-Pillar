@@ -403,7 +403,7 @@ void LIVMapper::handleLIO()
   double t0 = omp_get_wtime();
   downSizeFilterSurf.setInputCloud(feats_undistort);
   if (filter_size_surf_min == 0.0) {
-    feats_down_body = feats_undistort;
+    *feats_down_body = *feats_undistort; // filter disabled: copy instead of alias, so pillar deletion never truncates feats_undistort
   } else {
     downSizeFilterSurf.filter(*feats_down_body); // voxel filter (filter_size_surf)
   }
@@ -419,13 +419,6 @@ void LIVMapper::handleLIO()
   // Auto-estimate intensity measurement noise during the init window (static platform)
   if (!intensity_noise_done_) { estimateIntensityNoise(); }
 
-  // Build voxel map on first run, based on octree structure
-  if (!lidar_map_inited)
-  {
-    lidar_map_inited = true;
-    voxelmap_manager->BuildVoxelMap();
-  }
-
   double t_pillar1 = 0.0, t_pillar2 = 0.0;
   if (pillar_config.pillar_voxel_en_)
   {
@@ -435,7 +428,27 @@ void LIVMapper::handleLIO()
     voxelmap_manager->DefineSkipPoints(feats_down_world);
     voxelmap_manager->pillar_map_.PublishPillarPoints(pubRedundantCloud, pubIsolatedCloud);
     voxelmap_manager->ClearPillarVoxels();
+
+    // Delete flagged points from the frame outright: they neither contribute
+    // ICP residuals nor enter the voxel map (pv_list_ is rebuilt from
+    // feats_down_body_). Body/world clouds are compacted together inside.
+    const size_t removed = voxelmap_manager->pillar_map_.removeFlaggedPoints(
+        feats_down_body, feats_down_world, voxelmap_manager->skip_list_);
+    if (removed > 0)
+    {
+      feats_down_size = feats_down_body->points.size();
+      voxelmap_manager->feats_down_size_ = feats_down_size;
+      std::cout << "[ Pillar ] Deleted " << removed << " points, kept " << feats_down_size << std::endl;
+    }
     t_pillar2 = omp_get_wtime();
+  }
+
+  // Build voxel map on first run, based on octree structure. Runs after the
+  // pillar pass so that first-frame flagged points are excluded as well.
+  if (!lidar_map_inited)
+  {
+    lidar_map_inited = true;
+    voxelmap_manager->BuildVoxelMap();
   }
 
   // State estimation: ICP registration based on voxel map to estimate current frame pose

@@ -128,6 +128,7 @@ voxelmap_manager->pillar_map_.BuildPillarMap(feats_down_world);
 voxelmap_manager->pillar_map_.pillarDetection();
 voxelmap_manager->DefineSkipPoints(feats_down_world);
 voxelmap_manager->pillar_map_.PublishPillarPoints(pubRedundantCloud, pubIsolatedCloud);
+voxelmap_manager->pillar_map_.removeFlaggedPoints(feats_down_body, feats_down_world, voxelmap_manager->skip_list_);
 voxelmap_manager->ClearPillarVoxels();
 ```
 
@@ -395,6 +396,12 @@ The pillar voxel system operates independently of the main voxel map:
 
 **Important Implementation Notes:**
 - Pillar voxel functions are **sequential only** - no parallelization (do not add OpenMP)
-- Skipped points are excluded from ICP residuals via `skip_list_` but **still enter the voxel map** (`UpdateVoxelMap` receives the unfiltered `pv_list_`)
+- Flagged points are **deleted from the frame outright** in the pillar block of
+  `handleLIO` (`PillarVoxelMap::removeFlaggedPoints` compacts the index-aligned
+  `feats_down_body`/`feats_down_world` together and clears `skip_list_`): they
+  enter neither ICP residuals nor the voxel map. The pillar block runs before
+  first-frame `BuildVoxelMap` so the first frame is filtered as well. With
+  `dense_map_en` enabled, published/saved clouds still come from the full
+  `feats_undistort` (untouched).
 - Per-point state lives in `PillarVoxelMap::point_labels_` (LABEL_NORMAL/REDUNDANT/ISOLATED), reset each frame in `BuildPillarMap()`
 - Publishing skips cloud assembly and serialization when a topic has no subscribers

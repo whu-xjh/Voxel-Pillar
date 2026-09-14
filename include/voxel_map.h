@@ -308,6 +308,8 @@ public:
   void init(const PillarVoxelConfig &config, double voxel_size);
   void BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud);
   void pillarDetection();
+  size_t removeFlaggedPoints(const PointCloudXYZI::Ptr &body_cloud, const PointCloudXYZI::Ptr &world_cloud,
+                             std::vector<bool> &skip_flags);
   void PublishPillarPoints(const ros::Publisher &pubRedundant, const ros::Publisher &pubIsolated);
 
   inline int8_t GetPointLabel(size_t index) const {

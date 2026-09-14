@@ -639,8 +639,7 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
     // Check convergence
     auto rot_add = solution.block<3, 1>(0, 0);
     auto t_add = solution.block<3, 1>(3, 0);
-    // if ((rot_add.norm() * 57.3 < 0.01) && (t_add.norm() * 100 < 0.015)) { flg_EKF_converged = true; }
-    if ((rot_add.norm() * 57.3 < 0.005) && (t_add.norm() * 100 < 0.01)) { flg_EKF_converged = true; }
+    if ((rot_add.norm() * 57.3 < 0.01) && (t_add.norm() * 100 < 0.015)) { flg_EKF_converged = true; }
 
     /*** Rematch Judgement ***/
     if (flg_EKF_converged || ((rematch_num == 0) && (iterCount == (config_setting_.max_iterations_ - 2)))) { rematch_num++; }
@@ -1677,4 +1676,40 @@ void VoxelMapManager::ClearPillarVoxels()
   // Just clear the containers (whole structure is rebuilt next frame)
   pillar_map_.pillars_.clear();
   pillar_map_.point_labels_.clear();
+}
+
+// Delete flagged points from the frame outright: they neither contribute ICP
+// residuals nor enter the voxel map. body_cloud (body frame) and world_cloud
+// (world frame) are index-aligned views of the same frame, and skip_flags
+// indexes that frame too (retention already applied by DefineSkipPoints), so
+// the two clouds are compacted together to keep every downstream stage
+// consistent. Survivors swap in place (caller-held Ptrs stay valid);
+// skip_flags is consumed (cleared) — every kept point participates fully.
+// Returns the number of removed points.
+size_t PillarVoxelMap::removeFlaggedPoints(const PointCloudXYZI::Ptr &body_cloud,
+                                           const PointCloudXYZI::Ptr &world_cloud,
+                                           std::vector<bool> &skip_flags)
+{
+  const size_t n = std::min(world_cloud->points.size(), skip_flags.size());
+
+  PointCloudXYZI::Ptr body_kept(new PointCloudXYZI());
+  PointCloudXYZI::Ptr world_kept(new PointCloudXYZI());
+  body_kept->reserve(n);
+  world_kept->reserve(n);
+
+  size_t removed = 0;
+  for (size_t i = 0; i < n; i++)
+  {
+    if (skip_flags[i]) { removed++; continue; }
+    body_kept->push_back(body_cloud->points[i]);
+    world_kept->push_back(world_cloud->points[i]);
+  }
+
+  if (removed > 0)
+  {
+    body_cloud->swap(*body_kept);
+    world_cloud->swap(*world_kept);
+  }
+  skip_flags.clear();
+  return removed;
 }
