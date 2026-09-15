@@ -160,6 +160,7 @@ private:
   ros::Publisher pubLaserCloudEffect;
   ros::Publisher pubRedundantCloud;
   ros::Publisher pubIsolatedCloud;
+  ros::Publisher pubNewPointsCloud;
   ros::Publisher pubOdomAftMapped;
   ros::Publisher pubPath;
   ros::Publisher pubLaserCloudBody;

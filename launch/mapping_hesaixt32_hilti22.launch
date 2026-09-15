@@ -1,6 +1,6 @@
 <launch>
 
-	<arg name="rviz" default="false" />
+	<arg name="rviz" default="true" />
 
 	<rosparam command="load" file="$(find voxel_pillar)/config/HILTI22.yaml" />
 

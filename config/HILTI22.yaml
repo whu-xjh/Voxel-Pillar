@@ -19,7 +19,7 @@ time_offset:
   imu_time_offset: 0.0
 
 preprocess:
-  point_filter_num: 1
+  point_filter_num: 5
   filter_size_surf: 0.1
   lidar_type: 5  # HesaiXT32
   scan_line: 32
@@ -66,18 +66,22 @@ pillar_voxel:
   pillar_voxel_en: true
   voxel_size: 0.5
 
-  redundant_detection_method: 1  # 0=none (isolated points only), 1=neighborhood redundant detection
+  height_consistency_ratio: 0.25  # ratio of voxel_size for height consistency check
+  keep_num_per_voxel: 1  # 0=skip all points, n=keep n newest points per voxel
+  min_num: 5  # redundant voxel needs > this many points to confirm, isolated voxel needs < this
+
   redundant_neighbor_type: 0  # 0=4-neighbor, 1=8-neighbor
   adjacent_redundant_threshold: 4
+  keep_redundant: false
 
   isolated_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
-  adjacent_isolated_threshold: 3
-
-  height_consistency_ratio: 0.25  # ratio of voxel_size for height consistency check
-
-  keep_num_per_voxel: 1  # 0=skip all points, n=keep n newest points per voxel
-  keep_redundant: true
+  adjacent_isolated_threshold: 2
   keep_isolated: false
+
+  new_point_detect_en: true  # mark points whose pillar voxel was unseen in the last n frames; publish to /cloud_new_points
+  history_frame_num: 10  # history reference frame count n; detection starts at frame n+1 (n<=0: no reference kept, every point new)
+  adjacent_new_point_threshold: 0  # candidate new voxel confirmed only if same-layer occupied neighbors < this (0=check off)
+  keep_new_point: false  # true=apply keep_num_per_voxel retention to new voxels, false=skip all new points
 
 local_map:
   map_sliding_en: false

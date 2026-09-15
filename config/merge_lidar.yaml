@@ -51,7 +51,6 @@ pillar_voxel:
   pillar_voxel_en: false
   voxel_size: 0.5
 
-  redundant_detection_method: 1  # 0=none (isolated points only), 1=neighborhood redundant detection
   redundant_neighbor_type: 0  # 0=4-neighbor, 1=8-neighbor
   adjacent_redundant_threshold: 4
 
@@ -63,6 +62,12 @@ pillar_voxel:
   keep_num_per_voxel: 1  # 0=skip all points, n=keep n newest points per voxel
   keep_redundant: true
   keep_isolated: false
+  keep_new_point: true  # true=apply keep_num_per_voxel retention to new voxels, false=skip all new points
+
+  min_num: 5  # redundant voxel needs > this many points to confirm, isolated voxel needs < this
+  new_point_detect_en: false  # mark points whose pillar voxel was unseen in the last n frames; publish to /cloud_new_points
+  history_frame_num: 10  # history reference frame count n; detection starts at frame n+1 (n<=0: no reference kept, every point new)
+  adjacent_new_point_threshold: 2  # candidate new voxel confirmed only if same-layer occupied neighbors < this (0=check off)
 
 local_map:
   map_sliding_en: false

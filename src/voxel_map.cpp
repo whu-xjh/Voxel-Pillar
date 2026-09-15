@@ -82,11 +82,15 @@ void loadPillarVoxelConfig(ros::NodeHandle &nh, PillarVoxelConfig &config)
   nh.param<bool>("pillar_voxel/keep_redundant", config.keep_redundant_, true);
   nh.param<bool>("pillar_voxel/keep_isolated", config.keep_isolated_, false);
   nh.param<int>("pillar_voxel/adjacent_isolated_threshold", config.adjacent_isolated_threshold_, 3);
-  nh.param<int>("pillar_voxel/redundant_detection_method", config.redundant_detection_method_, 0);
   nh.param<int>("pillar_voxel/neighbor_type", config.redundant_neighbor_type_, 1);  // legacy alias
   nh.param<int>("pillar_voxel/redundant_neighbor_type", config.redundant_neighbor_type_, config.redundant_neighbor_type_);
   nh.param<int>("pillar_voxel/isolated_neighbor_type", config.isolated_neighbor_type_, 1);
   nh.param<double>("pillar_voxel/height_consistency_ratio", config.height_consistency_ratio_, 0.25);
+  nh.param<int>("pillar_voxel/min_num", config.min_num_, 5);  // redundant voxel needs > this many points, isolated needs < this
+  nh.param<bool>("pillar_voxel/new_point_detect_en", config.new_point_detect_en_, false);
+  nh.param<int>("pillar_voxel/history_frame_num", config.history_frame_num_, 10);
+  nh.param<bool>("pillar_voxel/keep_new_point", config.keep_new_point_, true);
+  nh.param<int>("pillar_voxel/adjacent_new_point_threshold", config.adjacent_new_point_threshold_, 0);
 }
 
 void VoxelOctoTree::init_plane(const std::vector<pointWithVar> &points, VoxelPlane *plane)
@@ -1285,22 +1289,24 @@ void PillarVoxelMap::setVoxelPointLabels(PillarVoxel* voxel, int8_t label)
 // the begin/next/prev/rbegin arithmetic below relies on that order
 void PillarVoxelMap::updatePillarFlag(PillarVoxelArray &pillar_voxels)
 {
-  // Step 1: Bottom voxel redundant check
+  // Step 1: Bottom voxel redundant check. Point-count gate: only dense voxels
+  // (> config_.min_num_ points) are confirmed redundant
   PillarVoxel* bottom_voxel = &pillar_voxels.begin()->second;
   bool has_close_above = std::next(pillar_voxels.begin()) != pillar_voxels.end()
       && (std::next(pillar_voxels.begin())->second).center_z_ - bottom_voxel->center_z_ < (voxel_size_ * 2);
-  if (!has_close_above) {
+  if (!has_close_above && bottom_voxel->point_count_ > config_.min_num_) {
     bottom_voxel->is_redundant_voxel_ = true;
     voxel_label_count_++;
   }
 
-  // Step 2: Isolated voxel detection
+  // Step 2: Isolated voxel detection. Point-count gate: only sparse voxels
+  // (< config_.min_num_ points) are confirmed isolated
   if (pillar_voxels.size() == 2)
   {
     PillarVoxel* top_voxel = &std::next(pillar_voxels.begin())->second;
     auto z_diff = top_voxel->center_z_ - bottom_voxel->center_z_;
 
-    if (z_diff >= (voxel_size_ * 2)) {
+    if (z_diff >= (voxel_size_ * 2) && top_voxel->point_count_ < config_.min_num_) {
       top_voxel->is_isolated_voxel_ = true;
       voxel_label_count_++;
     }
@@ -1314,12 +1320,13 @@ void PillarVoxelMap::updatePillarFlag(PillarVoxelArray &pillar_voxels)
       double down_z_diff = pillar_iter->second.center_z_ - std::prev(pillar_iter)->second.center_z_;
       up_z_diff = std::next(pillar_iter)->second.center_z_ - pillar_iter->second.center_z_;
 
-      if (down_z_diff >= (voxel_size_ * 2) && up_z_diff >= (voxel_size_ * 2)) {
+      if (down_z_diff >= (voxel_size_ * 2) && up_z_diff >= (voxel_size_ * 2) &&
+          pillar_iter->second.point_count_ < config_.min_num_) {
         pillar_iter->second.is_isolated_voxel_ = true;
         voxel_label_count_++;
       }
     }
-    if (up_z_diff >= (voxel_size_ * 2)) {
+    if (up_z_diff >= (voxel_size_ * 2) && pillar_voxels.rbegin()->second.point_count_ < config_.min_num_) {
       pillar_voxels.rbegin()->second.is_isolated_voxel_ = true;
       voxel_label_count_++;
     }
@@ -1419,6 +1426,82 @@ void PillarVoxelMap::BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud)
   }
 }
 
+// New point detection: a point whose pillar voxel was not occupied in any of
+// the last history_frame_num_ frames is flagged new. Runs right after
+// BuildPillarMap — point_is_new_ is independent of point_labels_ (a point can
+// be new AND redundant/isolated), so ordering vs. pillarDetection() does not
+// matter, only vs. ClearPillarVoxels() (this must run first). The first
+// history_frame_num_ frames only accumulate the reference window; detection
+// output starts at frame history_frame_num_ + 1. Per frame: check-then-insert,
+// so a voxel first seen THIS frame still counts as new; the current frame then
+// joins the window and the oldest frame is evicted.
+// No-op when new_point_detect_en_ is false: the history containers stay empty
+// and the feature costs nothing.
+void PillarVoxelMap::DetectNewPoints()
+{
+  if (!config_.new_point_detect_en_) return;
+
+  const size_t num_points = point_cloud_ptr_ ? point_cloud_ptr_->points.size() : 0;
+  point_is_new_.assign(num_points, 0);
+
+  const int n = std::max(config_.history_frame_num_, 0);
+  const bool detection_on = history_frame_count_ >= static_cast<size_t>(n);
+  const int adjacent_threshold = config_.adjacent_new_point_threshold_;
+  history_frame_count_++;
+
+  // Phase 1: flag points of voxels absent from the current window (once the
+  // window is full), and collect this frame's occupied voxel keys (unique by
+  // construction: pillars_ holds each (pillar, z) pair exactly once).
+  // Sparse-neighborhood confirmation: a voxel surrounded by same-layer
+  // occupied neighbors is existing surface, not newly seen — hasAdjacentVoxel
+  // answers ">= threshold consistent neighbors", so the candidate is confirmed
+  // only when that is false; threshold <= 0 keeps every candidate
+  std::vector<PillarVoxelKey> current_keys;
+  current_keys.reserve(pillars_.size());
+  for (auto &pillar_entry : pillars_)
+  {
+    for (auto &voxel_entry : pillar_entry.second)
+    {
+      const PillarVoxelKey key(pillar_entry.first, voxel_entry.first);
+      current_keys.push_back(key);
+      if (!detection_on || history_counts_.find(key) != history_counts_.end())
+        continue;  // seen within the window (or still warming up): not new
+
+      if (adjacent_threshold > 0)
+      {
+        const VoxelLocation voxel_pos = {pillar_entry.first.axis1, pillar_entry.first.axis2, voxel_entry.first};
+        if (hasAdjacentVoxel(voxel_pos, adjacent_threshold, isolated_neighbor_offsets_,
+                             voxel_entry.second.virtual_point_.z()))
+          continue;
+      }
+
+      voxel_entry.second.is_new_voxel_ = true;
+      for (const size_t idx : voxel_entry.second.point_indices_)
+      {
+        point_is_new_[idx] = 1;  // indices < num_points by construction in BuildPillarMap
+      }
+    }
+  }
+
+  // Phase 2: insert the current frame into the window, then evict beyond n
+  // frames. Runs every frame regardless of subscribers — otherwise "new"
+  // would degrade to "not seen since someone subscribed"
+  history_frames_.push_back(std::move(current_keys));
+  for (const PillarVoxelKey &key : history_frames_.back())
+  {
+    history_counts_[key]++;
+  }
+  while (history_frames_.size() > static_cast<size_t>(n))
+  {
+    for (const PillarVoxelKey &key : history_frames_.front())
+    {
+      auto it = history_counts_.find(key);
+      if (it != history_counts_.end() && --(it->second) <= 0) history_counts_.erase(it);
+    }
+    history_frames_.pop_front();
+  }
+}
+
 void PillarVoxelMap::pillarDetection()
 {
   // Step 1: Initial redundant/isolated voxel flag per pillar
@@ -1481,8 +1564,11 @@ void PillarVoxelMap::pillarDetection()
 }
 
 // Shared retention pass: keep the newest keep_num points per flagged voxel
-// (the tail of point_indices_, which follows scan order), mark the rest in skip_list_
-void VoxelMapManager::applyVoxelRetention(int keep_num, int &redundant_total, int &redundant_kept, int &final_skip_count)
+// (the tail of point_indices_, which follows scan order), mark the rest in skip_list_.
+// voxel_class selects the flagged set: 0 = redundant/isolated voxels (legacy
+// behavior), 1 = new-point voxels only
+void VoxelMapManager::applyVoxelRetention(int keep_num, int &flagged_total, int &flagged_kept, int &final_skip_count,
+                                          int voxel_class)
 {
   for (const auto &pillar_entry : pillar_map_.pillars_)
   {
@@ -1490,14 +1576,18 @@ void VoxelMapManager::applyVoxelRetention(int keep_num, int &redundant_total, in
     {
       const PillarVoxel &voxel = voxel_entry.second;
 
-      bool is_redundant = voxel.is_redundant_voxel_;
-      bool is_isolated = voxel.is_isolated_voxel_;
-      if (!is_redundant && !is_isolated)
-        continue;
-
-      // Check keep flags
-      if (is_redundant && pillar_map_.config_.keep_redundant_ <= 0) continue;
-      if (is_isolated && pillar_map_.config_.keep_isolated_ <= 0) continue;
+      // Select the flagged set and check its keep flag
+      if (voxel_class == 1)
+      {
+        if (!voxel.is_new_voxel_) continue;
+        if (pillar_map_.config_.keep_new_point_ <= 0) continue;
+      }
+      else
+      {
+        if (!voxel.is_redundant_voxel_ && !voxel.is_isolated_voxel_) continue;
+        if (voxel.is_redundant_voxel_ && pillar_map_.config_.keep_redundant_ <= 0) continue;
+        if (voxel.is_isolated_voxel_ && pillar_map_.config_.keep_isolated_ <= 0) continue;
+      }
 
       const std::vector<size_t> &point_indices = voxel.point_indices_;
       const int voxel_point_num = static_cast<int>(point_indices.size());
@@ -1505,12 +1595,12 @@ void VoxelMapManager::applyVoxelRetention(int keep_num, int &redundant_total, in
       if (voxel_point_num == 0)
         continue;
 
-      redundant_total += voxel_point_num;
+      flagged_total += voxel_point_num;
 
       // If voxel has <= keep_num points, keep all
       if (voxel_point_num <= keep_num)
       {
-        redundant_kept += voxel_point_num;
+        flagged_kept += voxel_point_num;
         continue;
       }
 
@@ -1525,7 +1615,7 @@ void VoxelMapManager::applyVoxelRetention(int keep_num, int &redundant_total, in
           final_skip_count++;
         }
       }
-      redundant_kept += keep_num;
+      flagged_kept += keep_num;
     }
   }
 }
@@ -1542,7 +1632,9 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
 
   int isolated_count = 0;
   int redundant_count = 0;
+  int new_count = 0;
   int final_skip_count = 0;
+  const bool new_detect_on = pillar_map_.config_.new_point_detect_en_;
 
   for (size_t i = 0; i < point_num; ++i)
   {
@@ -1561,33 +1653,25 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
     {
       redundant_count++;
     }
+
+    if (new_detect_on && pillar_map_.GetPointIsNew(i)) new_count++;
   }
 
-  if (pillar_map_.config_.redundant_detection_method_ == 0)
+  // New points: same retention scheme as redundant/isolated. A voxel flagged
+  // both new and redundant/isolated is handled by this pass (the redundant/
+  // isolated retention below ignores is_new_voxel_)
+  int new_total = 0;
+  int new_kept = 0;
+  if (new_detect_on)
   {
-    ROS_DEBUG("[DefineSkipPoints] Method 0 (None): Isolated: %d/%zu (%.1f%%)",
-              isolated_count, point_num, 100.0 * isolated_count / point_num);
-
-    // Update statistics
-    current_skip_count_ = final_skip_count;
-    total_skip_count_ += final_skip_count;
-    total_point_count_ += point_num;
-    return;
-  }
-  else if (pillar_map_.config_.redundant_detection_method_ == 1)
-  {
-    // Method 1 (Neighborhood): skip redundant + isolated points, with newest-point retention
-    int redundant_total = 0;
-    int redundant_kept = 0;
-
-    if (pillar_map_.config_.keep_redundant_ <= 0 || pillar_map_.config_.keep_num_per_voxel_ <= 0)
+    if (pillar_map_.config_.keep_new_point_ <= 0 || pillar_map_.config_.keep_num_per_voxel_ <= 0)
     {
-      // Skip ALL redundant points
+      // Skip ALL new points
       for (size_t i = 0; i < point_num; ++i)
       {
-        if (pillar_map_.GetPointLabel(i) == LABEL_REDUNDANT)
+        if (pillar_map_.GetPointIsNew(i))
         {
-          redundant_total++;
+          new_total++;
           if (!skip_list_[i])
           {
             skip_list_[i] = true;
@@ -1598,18 +1682,44 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
     }
     else
     {
-      // Keep newest n points per redundant/isolated voxel
-      applyVoxelRetention(pillar_map_.config_.keep_num_per_voxel_, redundant_total, redundant_kept, final_skip_count);
+      // Keep newest n points per new voxel
+      applyVoxelRetention(pillar_map_.config_.keep_num_per_voxel_, new_total, new_kept, final_skip_count, 1);
     }
-
-    ROS_DEBUG("[DefineSkipPoints] Method 1 (Neighborhood): Isolated: %d, Redundant: %d (kept %d/%d), Skip_total: %d/%zu (%.1f%%)",
-              isolated_count, redundant_count, redundant_kept, redundant_total, final_skip_count, point_num, 100.0 * final_skip_count / point_num);
-
-    current_skip_count_ = final_skip_count;
-    total_skip_count_ += final_skip_count;
-    total_point_count_ += point_num;
-    return;
   }
+
+  // Redundant points: skip all, or keep newest n per voxel
+  int redundant_total = 0;
+  int redundant_kept = 0;
+  if (pillar_map_.config_.keep_redundant_ <= 0 || pillar_map_.config_.keep_num_per_voxel_ <= 0)
+  {
+    // Skip ALL redundant points
+    for (size_t i = 0; i < point_num; ++i)
+    {
+      if (pillar_map_.GetPointLabel(i) == LABEL_REDUNDANT)
+      {
+        redundant_total++;
+        if (!skip_list_[i])
+        {
+          skip_list_[i] = true;
+          final_skip_count++;
+        }
+      }
+    }
+  }
+  else
+  {
+    // Keep newest n points per redundant/isolated voxel
+    applyVoxelRetention(pillar_map_.config_.keep_num_per_voxel_, redundant_total, redundant_kept, final_skip_count, 0);
+  }
+
+  ROS_DEBUG("[DefineSkipPoints]: Isolated: %d, Redundant: %d (kept %d/%d), New: %d (kept %d/%d), Skip_total: %d/%zu (%.1f%%)",
+            isolated_count, redundant_count, redundant_kept, redundant_total, new_count, new_kept, new_total,
+            final_skip_count, point_num, 100.0 * final_skip_count / point_num);
+
+  // Update statistics
+  current_skip_count_ = final_skip_count;
+  total_skip_count_ += final_skip_count;
+  total_point_count_ += point_num;
 }
 
 void PillarVoxelMap::PublishPillarPoints(const ros::Publisher &pubRedundant, const ros::Publisher &pubIsolated)
@@ -1670,12 +1780,48 @@ void PillarVoxelMap::PublishPillarPoints(const ros::Publisher &pubRedundant, con
   }
 }
 
+void PillarVoxelMap::PublishNewPoints(const ros::Publisher &pubNew)
+{
+  // Same self-gating pattern as PublishPillarPoints: skip cloud assembly and
+  // toROSMsg entirely when nobody subscribes. Empty point_is_new_ covers the
+  // disabled feature, all-zero flags cover the warm-up frames
+  if (pubNew.getNumSubscribers() == 0 || point_is_new_.empty() || !point_cloud_ptr_ ||
+      point_cloud_ptr_->points.empty())
+    return;
+
+  PointCloudXYZI::Ptr new_cloud(new PointCloudXYZI());
+  // Steady state only a small fraction of points is new, but entering unseen
+  // areas can spike: reserve a fraction and let the vector grow
+  new_cloud->points.reserve(point_is_new_.size() / 5);
+
+  const size_t count = std::min(point_is_new_.size(), point_cloud_ptr_->points.size());
+  for (size_t i = 0; i < count; ++i)
+  {
+    if (point_is_new_[i]) new_cloud->points.push_back(point_cloud_ptr_->points[i]);
+  }
+
+  if (new_cloud->points.empty()) return;
+
+  new_cloud->width = new_cloud->points.size();
+  new_cloud->height = 1;
+  new_cloud->is_dense = true;
+
+  sensor_msgs::PointCloud2 new_msg;
+  pcl::toROSMsg(*new_cloud, new_msg);
+  new_msg.header.stamp = ros::Time::now();
+  new_msg.header.frame_id = "world";
+  pubNew.publish(new_msg);
+}
+
 void VoxelMapManager::ClearPillarVoxels()
 {
   // PillarVoxel is a lightweight value type, no manual delete needed.
   // Just clear the containers (whole structure is rebuilt next frame)
   pillar_map_.pillars_.clear();
   pillar_map_.point_labels_.clear();
+  // Per-frame new-point flags; the n-frame history window
+  // (history_frames_/history_counts_) deliberately survives
+  pillar_map_.point_is_new_.clear();
 }
 
 // Delete flagged points from the frame outright: they neither contribute ICP
