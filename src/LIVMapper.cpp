@@ -175,9 +175,7 @@ void LIVMapper::initializeSubscribersAndPublishers(ros::NodeHandle &nh)
   pubLaserCloudFullRes = nh.advertise<sensor_msgs::PointCloud2>("/cloud_registered", 100);
   pubLaserCloudBody = nh.advertise<sensor_msgs::PointCloud2>("/cloud_body", 100);
   pubLaserCloudEffect = nh.advertise<sensor_msgs::PointCloud2>("/cloud_effected", 100);
-  pubRedundantCloud = nh.advertise<sensor_msgs::PointCloud2>("/cloud_redundant", 100);
-  pubIsolatedCloud = nh.advertise<sensor_msgs::PointCloud2>("/cloud_isolated", 100);
-  pubNewPointsCloud = nh.advertise<sensor_msgs::PointCloud2>("/cloud_new_points", 100);
+  pubPillarMapCloud = nh.advertise<sensor_msgs::PointCloud2>("/cloud_pillarmap", 100);
   pubOdomAftMapped = nh.advertise<nav_msgs::Odometry>("/aft_mapped_to_init", 10);
   pubPath = nh.advertise<nav_msgs::Path>("/path", 10);
   mavros_pose_publisher = nh.advertise<geometry_msgs::PoseStamped>("/mavros/vision_pose/pose", 10);
@@ -425,11 +423,11 @@ void LIVMapper::handleLIO()
   {
     t_pillar1 = omp_get_wtime();
     voxelmap_manager->pillar_map_.BuildPillarMap(feats_down_world);
-    voxelmap_manager->pillar_map_.DetectNewPoints();  // mark new points + update n-frame history (no-op unless enabled)
+    voxelmap_manager->pillar_map_.DetectNewPoints();  // mark new points (no-op unless enabled)
+    voxelmap_manager->pillar_map_.UpdateHistory();    // advance the n-frame window (every frame; also feeds redundant/isolated checks)
     voxelmap_manager->pillar_map_.pillarDetection();
     voxelmap_manager->DefineSkipPoints(feats_down_world);
-    voxelmap_manager->pillar_map_.PublishPillarPoints(pubRedundantCloud, pubIsolatedCloud);
-    voxelmap_manager->pillar_map_.PublishNewPoints(pubNewPointsCloud);
+    voxelmap_manager->pillar_map_.PublishPillarMapCloud(pubPillarMapCloud);
     voxelmap_manager->ClearPillarVoxels();
 
     // Delete flagged points from the frame outright: they neither contribute

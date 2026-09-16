@@ -158,9 +158,7 @@ private:
   ros::Subscriber sub_imu;
   ros::Publisher pubLaserCloudFullRes;
   ros::Publisher pubLaserCloudEffect;
-  ros::Publisher pubRedundantCloud;
-  ros::Publisher pubIsolatedCloud;
-  ros::Publisher pubNewPointsCloud;
+  ros::Publisher pubPillarMapCloud;
   ros::Publisher pubOdomAftMapped;
   ros::Publisher pubPath;
   ros::Publisher pubLaserCloudBody;

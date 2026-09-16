@@ -65,9 +65,13 @@ pillar_voxel:
   keep_new_point: true  # true=apply keep_num_per_voxel retention to new voxels, false=skip all new points
 
   min_num: 5  # redundant voxel needs > this many points to confirm, isolated voxel needs < this
-  new_point_detect_en: false  # mark points whose pillar voxel was unseen in the last n frames; publish to /cloud_new_points
+  new_point_detect_en: false  # mark points whose pillar voxel was unseen in the last n frames; publish to /cloud_pillarmap
   history_frame_num: 10  # history reference frame count n; detection starts at frame n+1 (n<=0: no reference kept, every point new)
   adjacent_new_point_threshold: 2  # candidate new voxel confirmed only if same-layer occupied neighbors < this (0=check off)
+  new_point_cluster_en: false  # cluster candidate new points; scattered singletons are downgraded to normal
+  new_point_cluster_min_num: 5  # min points per cluster to confirm as new (sparse clouds: start small, 3-5)
+  new_point_flat_filter_en: false  # reject clusters fitting in a thin slab along any coordinate axis (only 3D blobs survive)
+  new_point_flat_band: 0.2  # max per-axis extent for a cluster to count as flat; keep < narrow-target depth (<=0: check off; over-large band silences all output)
 
 local_map:
   map_sliding_en: false

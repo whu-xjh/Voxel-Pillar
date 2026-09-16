@@ -10,12 +10,12 @@ extrin_calib:
   # Corridor: extrinsic_R: [0.999954875339377, 0.0, 0.009499857104811, 0.0, 1.0, 0.0, -0.009499857104811, 0.0, 0.999954875339377]
 
   # Laurel_Cavern, cave
-  # extrinsic_T: [0.080, 0.029, 0.030]
-  # extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+  extrinsic_T: [0.080, 0.029, 0.030]
+  extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
 
   # Final_Challenge, Urban_Challenge
-  extrinsic_T: [0.0, 0.0, 0.0]
-  extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+  # extrinsic_T: [0.0, 0.0, 0.0]
+  # extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
 
   # Corridor01
   # extrinsic_T: [0.080, 0.029, 0.030]
@@ -33,7 +33,7 @@ time_offset:
   imu_time_offset: 0.1
 
 preprocess:
-  point_filter_num: 3
+  point_filter_num: 5
   filter_size_surf: 0.1
   lidar_type: 2  # Velodyne
   scan_line: 16
@@ -86,28 +86,36 @@ lio:
   layer_init_num: [5, 5, 5, 5, 5]
   sigma_num: 3
   capacity: 0  # LRU cache (0 = disable)
-  intensity_fusion_en: true
+  intensity_fusion_en: false
   intensity_gate_en: true  # Intensity-based association gate (reject material-inconsistent matches)
   intensity_gate_k: 3.0     # Gate threshold in units of intensity sigma
-  intensity_noise_est_en: false  # Online estimation of intensity measurement noise (init window)
-  intensity_ema_alpha: 0.1      # EMA adaptation rate of plane intensity stats, in (0,1]; higher = faster
+  intensity_noise_est_en: true  # Online estimation of intensity measurement noise (init window)
+  intensity_ema_alpha: 0.5      # EMA adaptation rate of plane intensity stats, in (0,1]; higher = faster
  
 # Pillar Voxel Redundant Detection
 pillar_voxel:
-  pillar_voxel_en: true
+  pillar_voxel_en: false
   voxel_size: 0.5
-
-  redundant_neighbor_type: 0  # 0=4-neighbor, 1=8-neighbor
-  adjacent_redundant_threshold: 4
-
-  isolated_neighbor_type: 0  # 0=4-neighbor, 1=8-neighbor
-  adjacent_isolated_threshold: 3
-
+  history_frame_num: 5  # history reference frame count n; detection starts at frame n+1 (n<=0: no reference kept, every point new)
   height_consistency_ratio: 0.25  # ratio of voxel_size for height consistency check
-
   keep_num_per_voxel: 1  # 0=skip all points, n=keep n newest points per voxel
-  keep_redundant: true
+  min_num: 5  # redundant voxel needs > this many points to confirm, isolated voxel needs < this
+
+  redundant_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
+  adjacent_redundant_threshold: 6
+  keep_redundant: false
+
+  isolated_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
+  adjacent_isolated_threshold: 3
   keep_isolated: false
+
+  new_point_detect_en: true  # mark points whose pillar voxel was unseen in the last n frames; publish to /cloud_pillarmap
+  adjacent_new_point_threshold: 3  # candidate new voxel confirmed only if same-layer occupied neighbors < this (0=check off)
+  keep_new_point: false  # true=apply keep_num_per_voxel retention to new voxels, false=skip all new points
+  new_point_cluster_en: true  # cluster candidate new points; scattered singletons are downgraded to normal
+  new_point_cluster_min_num: 3  # min points per cluster to confirm as new (sparse clouds: start small, 3-5)
+  new_point_flat_filter_en: true  # reject clusters fitting in a thin slab along any coordinate axis (only 3D blobs survive)
+  new_point_flat_band: 0.2  # max per-axis extent to count as flat; keep < narrow-target depth (~0.3m); over-large band silences all output
 
 local_map:
   map_sliding_en: false
@@ -115,7 +123,7 @@ local_map:
   sliding_thresh: 8
 
 uav:
-  imu_rate_odom: true
+  imu_rate_odom: false
   gravity_align_en: true
 
 publish:

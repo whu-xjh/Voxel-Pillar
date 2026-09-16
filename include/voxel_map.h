@@ -10,6 +10,7 @@
 #include <map>
 #include <omp.h>
 #include <pcl/common/io.h>
+#include <pcl/segmentation/extract_clusters.h>
 #include <ros/ros.h>
 #include <thread>
 #include <unistd.h>
@@ -305,13 +306,19 @@ typedef struct PillarVoxelConfig
   int history_frame_num_;        // history reference frame count n; detection starts at frame n+1 (n<=0: no reference kept, every point new)
   bool keep_new_point_;          // true=apply keep_num_per_voxel retention to new voxels, false=skip all new points
   int adjacent_new_point_threshold_;  // candidate new voxel confirmed only if occupied same-layer neighbors < this (0=check off)
+  bool new_point_cluster_en_;    // cluster candidate new points, keep only valid clusters (default: false)
+  int new_point_cluster_min_num_;  // min points per cluster to confirm as new (default: 5)
+  bool new_point_flat_filter_en_;  // reject clusters fitting in a thin slab along any axis (default: false)
+  double new_point_flat_band_;     // max per-axis extent for a cluster to count as flat (default: 0.2; <=0: check off)
 
   PillarVoxelConfig() : pillar_voxel_en_(false), voxel_size_(1.0), adjacent_redundant_threshold_(3),
                        keep_num_per_voxel_(0), keep_redundant_(true), keep_isolated_(false),
                        adjacent_isolated_threshold_(3), min_num_(5),
                        redundant_neighbor_type_(1), isolated_neighbor_type_(1),
                        height_consistency_ratio_(0.25), new_point_detect_en_(false), history_frame_num_(10),
-                       keep_new_point_(true), adjacent_new_point_threshold_(0) {}
+                       keep_new_point_(true), adjacent_new_point_threshold_(0),
+                       new_point_cluster_en_(false), new_point_cluster_min_num_(5),
+                       new_point_flat_filter_en_(false), new_point_flat_band_(0.2) {}
 } PillarVoxelConfig;
 
 void loadPillarVoxelConfig(ros::NodeHandle &nh, PillarVoxelConfig &config);
@@ -339,9 +346,11 @@ public:
   // Used for early-exit: if 0 after Step 1, skip the remaining steps entirely.
   size_t voxel_label_count_ = 0;
 
-  // --- New point detection (n-frame history reference window) ---
+  // --- Pillar map history (n-frame occupancy reference window) ---
   // Occupied voxel keys per frame, newest at back; at most history_frame_num_
-  // frames retained. Deliberately survives ClearPillarVoxels().
+  // frames retained. Maintained by UpdateHistory() every frame; deliberately
+  // survives ClearPillarVoxels(). Consumed by new-point detection AND the
+  // redundant/isolated vertical-continuity checks
   std::deque<std::vector<PillarVoxelKey>> history_frames_;
   // Voxel key -> number of frames of the current window containing it.
   // "New" <=> key absent here (checked before the current frame is inserted)
@@ -351,7 +360,7 @@ public:
   // redundant/isolated; deletion/retention is decided per keep_new_point in
   // DefineSkipPoints()
   std::vector<int8_t> point_is_new_;
-  // Frames processed since startup while the feature is enabled; detection
+  // Frames processed since startup; the new-point gate uses it so detection
   // output starts at frame history_frame_num_ + 1 (earlier frames only
   // accumulate the history window)
   size_t history_frame_count_ = 0;
@@ -359,11 +368,13 @@ public:
   void init(const PillarVoxelConfig &config, double voxel_size);
   void BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud);
   void DetectNewPoints();
+  void UpdateHistory();
   void pillarDetection();
   size_t removeFlaggedPoints(const PointCloudXYZI::Ptr &body_cloud, const PointCloudXYZI::Ptr &world_cloud,
                              std::vector<bool> &skip_flags);
-  void PublishPillarPoints(const ros::Publisher &pubRedundant, const ros::Publisher &pubIsolated);
-  void PublishNewPoints(const ros::Publisher &pubNew);
+  // Unified pillar map output: redundant (purple), isolated (blue) and new
+  // (red, priority on overlap) points in one RGB cloud
+  void PublishPillarMapCloud(const ros::Publisher &pub);
 
   inline int8_t GetPointLabel(size_t index) const {
     return (index < point_labels_.size()) ? point_labels_[index] : LABEL_NORMAL;
@@ -377,8 +388,26 @@ private:
   void setVoxelPointLabels(PillarVoxel* voxel, int8_t label);
   void initHorizontalNeighborOffsets();
   PillarLocation GetPillarLocation(const VoxelLocation &position) const;
-  void updatePillarFlag(PillarVoxelArray &pillar_voxels);
+  void updatePillarFlag(const PillarLocation &pillar_key, PillarVoxelArray &pillar_voxels);
+  // History-window occupancy oracle: was (pillar, z) occupied in any of the
+  // last history_frame_num frames?
+  bool seenInHistory(const PillarLocation &pillar, int64_t z_key) const;
+  // True when any z layer strictly between low_key and high_key was occupied
+  // within the history window (vertical gap is a transient sampling hole)
+  bool gapSeenInHistory(const PillarLocation &pillar, int64_t low_key, int64_t high_key) const;
   bool hasAdjacentVoxel(const VoxelLocation &current_pos, int threshold, const std::vector<VoxelLocation> &neighbor_offsets, double current_vp_z);
+  // Clustering confirmation for candidate new points: candidates must form a
+  // cluster of >= new_point_cluster_min_num points to stay flagged. Scattered
+  // candidates (quantization hops of static surfaces near voxel boundaries)
+  // are downgraded to normal points — neither published nor deleted downstream;
+  // surviving voxels re-mark all their points, fully-downgraded ones lose
+  // is_new_voxel_
+  void confirmClusteredNewPoints();
+  // True when the cluster fits in a thin slab along any coordinate axis
+  // (per-axis extent < band): constant-height layers, ground stripes,
+  // axis-aligned wall slivers — not moving-object blobs
+  bool isFlatCluster(const pcl::PointCloud<pcl::PointXYZ> &cloud,
+                     const std::vector<int> &indices, double band);
 };
 
 class VoxelMapManager

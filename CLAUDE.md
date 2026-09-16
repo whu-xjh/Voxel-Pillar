@@ -106,11 +106,11 @@ taskset -c 16-31 bash -c 'source /opt/ros/noetic/setup.bash && catkin_make -C /h
 - **Purpose**: Redundant point detection and isolated point identification using vertical pillar voxels
 - **Key Functions** (all sequential, no parallelization):
   1. `BuildPillarMap()`: Organize point cloud into pillar voxels — flat `unordered_map<PillarLocation, vector<pair<z, PillarVoxel>>>`, each pillar's array sorted by z (voxel_map.cpp)
-  2. `DetectNewPoints()`: Flag points whose pillar voxel was unseen in the last `history_frame_num` frames into `point_is_new_` (candidates additionally need fewer occupied same-layer consistent neighbors than `adjacent_new_point_threshold`, 0=off) and set `is_new_voxel_` per voxel (independent of `point_labels_`), then push the current frame into the n-frame history window and evict beyond n; the first n frames only accumulate history (output starts at frame n+1); no-op unless `new_point_detect_en` (voxel_map.cpp)
-  3. `pillarDetection()`: Three sequential steps — initial per-pillar flags → horizontal adjacency check (with height consistency) → point label assignment; early-exits when Step 1 flags nothing
-  4. `DefineSkipPoints()`: Apply skip filter to the main point cloud (newest-n-per-voxel retention via `applyVoxelRetention()`)
-  5. `PublishPillarPoints()`: Publish redundant/isolated clouds (skips assembly and serialization when a topic has no subscribers)
-  6. `PublishNewPoints()`: Publish new-point cloud on `/cloud_new_points` (same self-gating pattern)
+  2. `DetectNewPoints()`: Flag points whose pillar voxel was unseen in the last `history_frame_num` frames into `point_is_new_` (candidates additionally need fewer occupied same-layer consistent neighbors than `adjacent_new_point_threshold`, 0=off) and set `is_new_voxel_` per voxel (independent of `point_labels_`); the first n frames only accumulate history (output starts at frame n+1); no-op unless `new_point_detect_en` (voxel_map.cpp)
+  3. `UpdateHistory()`: Advance the n-frame occupancy window by one frame (insert current frame's keys, evict beyond n, erase zero-count keys) — runs every frame regardless of `new_point_detect_en`, feeding both new-point detection and the history-aware redundant/isolated checks (voxel_map.cpp)
+  4. `pillarDetection()`: Three sequential steps — initial per-pillar flags (history-aware: redundant needs no above voxel seen in the window; isolated gaps must have no intermediate layer seen in the window) → horizontal adjacency check (with height consistency) → point label assignment; early-exits when Step 1 flags nothing
+  5. `DefineSkipPoints()`: Apply skip filter to the main point cloud (newest-n-per-voxel retention via `applyVoxelRetention()`)
+  6. `PublishPillarMapCloud()`: Publish `/cloud_pillarmap` — one RGB cloud carrying redundant (purple), isolated (blue) and new (red, priority on overlap) points (skips assembly when no subscribers)
   7. `ClearPillarVoxels()`: Per-frame structure and flags cleared after each frame (the n-frame history window survives)
 
 **Configuration Parameters** (loaded by `loadPillarVoxelConfig`, voxel_map.cpp):
@@ -122,28 +122,30 @@ taskset -c 16-31 bash -c 'source /opt/ros/noetic/setup.bash && catkin_make -C /h
 - `keep_num_per_voxel`: 0=skip all flagged points, n=keep the n newest points per flagged voxel (default: 0)
 - `keep_redundant` / `keep_isolated`: apply retention (true) or skip all (false), per category
 - `height_consistency_ratio`: adjacent voxels count as neighbors only if virtual-point heights differ by ≤ ratio × voxel_size (default: 0.25)
-- `new_point_detect_en`: Mark points entering pillar voxels unseen in the last n frames and publish them on `/cloud_new_points` (default: false)
-- `history_frame_num`: History reference frame count n; detection starts at frame n+1 (n<=0: no reference kept, every point new; default: 10)
+- `new_point_detect_en`: Mark points entering pillar voxels unseen in the last n frames and publish them on `/cloud_pillarmap` (default: false)
+- `history_frame_num`: History reference frame count n; new-point detection starts at frame n+1, and the window also feeds the redundant/isolated vertical-continuity checks (n<=0: no reference kept, every point new; default: 10)
 - `keep_new_point`: Apply retention (true) or skip all (false) for new points, same semantics as `keep_redundant`/`keep_isolated` (default: true)
 - `adjacent_new_point_threshold`: Candidate new voxel confirmed only if occupied same-layer consistent neighbors < this (0 = check off; default: 0)
+- `new_point_cluster_en`: Cluster candidate new points (Euclidean, tolerance = `voxel_size`); scattered singletons are downgraded to normal (default: false)
+- `new_point_cluster_min_num`: Min points per cluster to confirm as new (default: 5)
+- `new_point_flat_filter_en`: Reject clusters fitting in a thin slab along any coordinate axis (default: false)
+- `new_point_flat_band`: Max per-axis extent for a cluster to count as flat; with the filter on, only 3D blobs (all three axis extents >= band) survive — 2-point/linear/planar clusters are always rejected; keep < narrow-target depth (<=0: check off; a band above every cluster's extents rejects all clusters and silences `/cloud_pillarmap`; default: 0.2)
 - `min_num`: Redundant candidate voxel needs > this many points to confirm, isolated candidate needs < this (default: 5)
 
 **Execution Flow** (LIVMapper.cpp, guarded by `if (pillar_config.pillar_voxel_en_)`):
 ```cpp
 voxelmap_manager->pillar_map_.BuildPillarMap(feats_down_world);
 voxelmap_manager->pillar_map_.DetectNewPoints();
+voxelmap_manager->pillar_map_.UpdateHistory();
 voxelmap_manager->pillar_map_.pillarDetection();
 voxelmap_manager->DefineSkipPoints(feats_down_world);
-voxelmap_manager->pillar_map_.PublishPillarPoints(pubRedundantCloud, pubIsolatedCloud);
-voxelmap_manager->pillar_map_.PublishNewPoints(pubNewPointsCloud);
+voxelmap_manager->pillar_map_.PublishPillarMapCloud(pubPillarMapCloud);
 voxelmap_manager->pillar_map_.removeFlaggedPoints(feats_down_body, feats_down_world, voxelmap_manager->skip_list_);
 voxelmap_manager->ClearPillarVoxels();
 ```
 
 **Output Topics**:
-- `/cloud_redundant`: Redundant point cloud
-- `/cloud_isolated`: Isolated point cloud (single voxels without redundant neighbors)
-- `/cloud_new_points`: New-point cloud (points whose pillar voxel was unseen in the last `history_frame_num` frames; silent for the first n frames)
+- `/cloud_pillarmap`: Unified RGB point cloud — new points red (pillar voxels unseen in the last `history_frame_num` frames; silent for the first n frames), isolated points blue (single voxels without redundant neighbors), redundant points purple; a point qualifying for several categories is drawn red; assembled only when subscribers exist
 
 ## Usage
 
@@ -184,9 +186,7 @@ Uncomment and add to `<node>` tag:
 - **IMU**: `/livox/imu_192_168_1_159` (default internal IMU from LiDAR 159)
 - **External IMU**: `/novatel/oem7/odom` (external IMU odometry)
 - **Odometry Output**: `/aft_mapped_to_init`
-- **Redundant Points**: `/cloud_redundant` (pillar voxel redundant point detection output)
-- **Isolated Points**: `/cloud_isolated` (pillar voxel isolated point output)
-- **New Points**: `/cloud_new_points` (pillar voxel new-point detection output)
+- **Pillar Map**: `/cloud_pillarmap` (unified RGB output: new=red / isolated=blue / redundant=purple)
 
 ## Configuration
 
@@ -248,10 +248,14 @@ Uncomment and add to `<node>` tag:
 - `pillar_voxel/keep_num_per_voxel`: 0=skip all flagged points, n=keep n newest per voxel
 - `pillar_voxel/keep_redundant` / `pillar_voxel/keep_isolated`: retention toggles per category
 - `pillar_voxel/height_consistency_ratio`: Height tolerance as ratio of voxel_size (default: 0.25)
-- `pillar_voxel/new_point_detect_en`: Mark points entering unseen voxels and publish on `/cloud_new_points` (default: false)
-- `pillar_voxel/history_frame_num`: History reference frame count n; detection starts at frame n+1 (n<=0: no reference kept, every point new; default: 10)
+- `pillar_voxel/new_point_detect_en`: Mark points entering unseen voxels and publish on `/cloud_pillarmap` (default: false)
+- `pillar_voxel/history_frame_num`: History reference frame count n; feeds new-point detection and the redundant/isolated temporal evidence (default: 10)
 - `pillar_voxel/keep_new_point`: Retention (true) or skip-all (false) for new points (default: true)
 - `pillar_voxel/adjacent_new_point_threshold`: New-voxel confirmation neighbor cap (0 = off; default: 0)
+- `pillar_voxel/new_point_cluster_en`: Cluster-confirmation for new points (default: false)
+- `pillar_voxel/new_point_cluster_min_num`: Min points per new-point cluster (default: 5)
+- `pillar_voxel/new_point_flat_filter_en`: Reject flat clusters (default: false)
+- `pillar_voxel/new_point_flat_band`: Max per-axis extent to count as flat (<=0: off; default: 0.2)
 - `pillar_voxel/min_num`: Redundant needs > this many points per voxel, isolated needs < this (default: 5)
 
 **Multi-LiDAR Merger** (launch file lines 8-12):
@@ -398,17 +402,18 @@ struct Point {
 The pillar voxel system operates independently of the main voxel map:
 1. **Input**: Downsampled world point cloud (`feats_down_world`)
 2. **Pillar Organization**: Points grouped by (x,y) pillar, vertical voxels by z; per-pillar voxel arrays sorted by z; each voxel keeps point indices and a running-average virtual point
-3. **New Point Detection** (`DetectNewPoints()`, no-op unless `new_point_detect_en`): points whose pillar voxel key (PillarLocation + z layer) is absent from the n-frame history window get `point_is_new_[i] = 1`, provided the voxel also has fewer occupied same-layer consistent neighbors than `adjacent_new_point_threshold` (0 = off); the first n frames only accumulate the window (output starts at frame n+1); the history update runs every frame regardless of subscribers; independent of `point_labels_` — deletion/retention goes through `DefineSkipPoints()` per `keep_new_point`
-4. **Detection** (`pillarDetection()`, three steps):
-   - Step 1: per-pillar flags — the bottom voxel without a close voxel above (< 2·voxel_size) is a redundant candidate (confirmed only if it holds > `min_num` points); a voxel with ≥ 2·voxel_size gaps to both vertical neighbors is an isolated candidate (confirmed only if it holds < `min_num` points); early-exit when nothing is flagged
+3. **New Point Detection** (`DetectNewPoints()`, no-op unless `new_point_detect_en`): points whose pillar voxel key (PillarLocation + z layer) is absent from the n-frame history window get `point_is_new_[i] = 1`, provided the voxel also has fewer occupied same-layer consistent neighbors than `adjacent_new_point_threshold` (0 = off); the first n frames only accumulate the window (output starts at frame n+1); runs BEFORE `UpdateHistory()` so the window is the last n previous frames; independent of `point_labels_` — deletion/retention goes through `DefineSkipPoints()` per `keep_new_point`. With `new_point_cluster_en`, a final clustering pass (`confirmClusteredNewPoints`, M-detector-style) requires candidates to form a Euclidean cluster of >= `new_point_cluster_min_num` points (tolerance = `voxel_size`) — scattered quantization-hop false positives are downgraded to normal points; with `new_point_flat_filter_en`, clusters fitting in a thin slab along any coordinate axis (per-axis extent < `new_point_flat_band`, e.g. constant-height layers) are rejected as well — with the filter on only 3D blobs survive
+4. **History Update** (`UpdateHistory()`, every frame when the pillar map is on): the current frame's occupied voxel keys join the n-frame window (oldest evicted, zero-count keys erased); shared by new-point detection and the redundant/isolated vertical-continuity checks
+5. **Detection** (`pillarDetection()`, three steps, history-aware):
+   - Step 1: per-pillar flags — the bottom voxel without a close voxel above (< 2·voxel_size) in the current frame OR the window is a redundant candidate (confirmed only if it holds > `min_num` points); a voxel with ≥ 2·voxel_size gaps to both vertical neighbors is an isolated candidate (confirmed only if it holds < `min_num` points AND no intermediate z layer was seen in the window — transient sampling holes don't count as gaps); early-exit when nothing is flagged
    - Step 2: horizontal adjacency check — redundant candidates need ≥ `adjacent_redundant_threshold` occupied neighbor voxels in the same z-layer with consistent height (≤ `height_consistency_ratio`·voxel_size); isolated candidates with ≥ `adjacent_isolated_threshold` such neighbors are cancelled
    - Step 3: assign per-point labels (LABEL_REDUNDANT / LABEL_ISOLATED)
-5. **Skip Point Definition** (`DefineSkipPoints()`):
+6. **Skip Point Definition** (`DefineSkipPoints()`):
    - Isolated points: subject to `keep_isolated`/`keep_num_per_voxel` retention
    - Redundant points: subject to `keep_redundant`/`keep_num_per_voxel` retention (newest-n-per-voxel via `applyVoxelRetention()`)
    - New points: subject to `keep_new_point`/`keep_num_per_voxel` retention (via `applyVoxelRetention()` with `voxel_class = 1`); skipped points are deleted by `removeFlaggedPoints()` like the others
-6. **Output**: `/cloud_redundant`, `/cloud_isolated` and `/cloud_new_points` (only assembled and published when subscribers exist)
-7. **Cleanup**: Per-frame pillar voxels and `point_is_new_` cleared after each frame; the n-frame history window (`history_frames_`/`history_counts_`) is the only pillar state that persists
+7. **Output**: `/cloud_pillarmap` — one RGB cloud (new=red / isolated=blue / redundant=purple; only assembled and published when subscribers exist)
+8. **Cleanup**: Per-frame pillar voxels and `point_is_new_` cleared after each frame; the n-frame history window (`history_frames_`/`history_counts_`) is the only pillar state that persists
 
 **Important Implementation Notes:**
 - Pillar voxel functions are **sequential only** - no parallelization (do not add OpenMP)
@@ -420,7 +425,8 @@ The pillar voxel system operates independently of the main voxel map:
   `dense_map_en` enabled, published/saved clouds still come from the full
   `feats_undistort` (untouched).
 - Per-point state lives in `PillarVoxelMap::point_labels_` (LABEL_NORMAL/REDUNDANT/ISOLATED), reset each frame in `BuildPillarMap()`
-- New-point state lives in `PillarVoxelMap::point_is_new_` (separate from `point_labels_` — a point can be new AND redundant/isolated), reset each frame in `DetectNewPoints()`; `PublishNewPoints` must run before `ClearPillarVoxels`/`removeFlaggedPoints` (its indices refer to the pre-compaction cloud)
+- New-point state lives in `PillarVoxelMap::point_is_new_` (separate from `point_labels_` — a point can be new AND redundant/isolated), reset each frame in `DetectNewPoints()`; `PublishPillarMapCloud` must run before `ClearPillarVoxels`/`removeFlaggedPoints` (its indices refer to the pre-compaction cloud)
+- `UpdateHistory()` advances the n-frame window every frame whenever the pillar map is on — independent of `new_point_detect_en` — because `pillarDetection()` consumes it via `seenInHistory`/`gapSeenInHistory`; call order per frame: `DetectNewPoints` (window = last n previous frames) → `UpdateHistory` (window += current frame) → `pillarDetection` (window includes current frame; harmless there since current-frame evidence is checked separately)
 - With `keep_new_point` enabled, `DefineSkipPoints()` applies the same skip/retention scheme to new voxels (`applyVoxelRetention` with `voxel_class = 1`); a voxel flagged both new and redundant/isolated is handled by the new-point pass (class-0 retention ignores `is_new_voxel_`)
 - The n-frame history (`history_frames_`/`history_counts_`) is the only pillar state that survives `ClearPillarVoxels()`, and it advances every frame regardless of topic subscribers
 - Publishing skips cloud assembly and serialization when a topic has no subscribers
