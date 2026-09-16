@@ -149,14 +149,14 @@ public:
 // Struct instead of std::pair: named members match the VoxelLocation/PillarLocation
 // style, and a custom hash is required either way (std::hash has no pair
 // specialization), so the struct costs nothing extra.
-struct PillarVoxelKey
+struct PillarMapKey
 {
   PillarLocation pillar;
   int64_t z;
 
-  PillarVoxelKey(const PillarLocation &p = PillarLocation(), int64_t vz = 0) : pillar(p), z(vz) {}
+  PillarMapKey(const PillarLocation &p = PillarLocation(), int64_t vz = 0) : pillar(p), z(vz) {}
 
-  bool operator==(const PillarVoxelKey &other) const { return (pillar == other.pillar && z == other.z); }
+  bool operator==(const PillarMapKey &other) const { return (pillar == other.pillar && z == other.z); }
 };
 
 namespace std
@@ -184,9 +184,9 @@ template <> struct hash<PillarLocation>
   }
 };
 
-template <> struct hash<PillarVoxelKey>
+template <> struct hash<PillarMapKey>
 {
-  int64_t operator()(const PillarVoxelKey &s) const
+  int64_t operator()(const PillarMapKey &s) const
   {
     using std::hash;
     using std::size_t;
@@ -282,7 +282,7 @@ enum PointLabel
 
 // Lightweight voxel structure for Pillar Voxel Map (decoupled from VoxelOctoTree)
 // Designed specifically for redundant/isolated point detection without octree overhead
-struct PillarVoxel
+struct PillarMapVoxel
 {
   std::vector<size_t> point_indices_;  // Point indices in original point cloud
   double center_z_;                    // Voxel center Z coordinate (X,Y derived from PillarLocation)
@@ -292,18 +292,18 @@ struct PillarVoxel
   bool is_isolated_voxel_ = false;
   bool is_new_voxel_ = false;          // set by DetectNewPoints: voxel unseen in the last history_frame_num frames
 
-  PillarVoxel(double z = 0.0) : center_z_(z)
+  PillarMapVoxel(double z = 0.0) : center_z_(z)
   {
     point_indices_.reserve(10);  // Pre-allocate to reduce reallocations
   }
 
   // Disable copy to avoid deep copy of vector
-  PillarVoxel(const PillarVoxel&) = delete;
-  PillarVoxel& operator=(const PillarVoxel&) = delete;
+  PillarMapVoxel(const PillarMapVoxel&) = delete;
+  PillarMapVoxel& operator=(const PillarMapVoxel&) = delete;
 
   // Enable move semantics
-  PillarVoxel(PillarVoxel&&) = default;
-  PillarVoxel& operator=(PillarVoxel&&) = default;
+  PillarMapVoxel(PillarMapVoxel&&) = default;
+  PillarMapVoxel& operator=(PillarMapVoxel&&) = default;
 
   // Clear state for reuse (optional, for object pool pattern)
   void clear()
@@ -317,9 +317,9 @@ struct PillarVoxel
   }
 };
 
-typedef struct PillarVoxelConfig
+typedef struct PillarMapConfig
 {
-  bool pillar_voxel_en_;
+  bool pillar_map_en_;
   double voxel_size_;
   int adjacent_redundant_threshold_;
   int keep_num_per_voxel_;   // 0=skip all, n=keep n newest points per redundant voxel
@@ -338,30 +338,30 @@ typedef struct PillarVoxelConfig
   bool new_point_flat_filter_en_;  // reject clusters fitting in a thin slab along any axis (default: false)
   double new_point_flat_band_;     // max per-axis extent for a cluster to count as flat (default: 0.2; <=0: check off)
 
-  PillarVoxelConfig() : pillar_voxel_en_(false), voxel_size_(1.0), adjacent_redundant_threshold_(3),
+  PillarMapConfig() : pillar_map_en_(false), voxel_size_(1.0), adjacent_redundant_threshold_(3),
                        keep_num_per_voxel_(0), keep_redundant_(true), keep_isolated_(false),
                        adjacent_isolated_threshold_(3), neighbor_ring_num_(1), min_num_(5),
                        height_consistency_ratio_(0.25), new_point_detect_en_(false), history_frame_num_(10),
                        keep_new_point_(true), adjacent_new_point_threshold_(0),
                        new_point_cluster_en_(false), new_point_cluster_min_num_(5),
                        new_point_flat_filter_en_(false), new_point_flat_band_(0.2) {}
-} PillarVoxelConfig;
+} PillarMapConfig;
 
-void loadPillarVoxelConfig(ros::NodeHandle &nh, PillarVoxelConfig &config);
+void loadPillarMapConfig(ros::NodeHandle &nh, PillarMapConfig &config);
 
 // Per-pillar voxel array sorted by z key (built once per frame in BuildPillarMap).
 // Flat vector instead of std::map: most pillars hold only a few z voxels and the
 // whole structure is rebuilt every frame, so cache locality and allocation count
 // beat tree lookups.
-typedef std::vector<std::pair<int64_t, PillarVoxel>> PillarVoxelArray;
+typedef std::vector<std::pair<int64_t, PillarMapVoxel>> PillarMapArray;
 
-class PillarVoxelMap
+class PillarMap
 {
 public:
-  PillarVoxelMap() = default;
-  PillarVoxelConfig config_;
+  PillarMap() = default;
+  PillarMapConfig config_;
   double voxel_size_;
-  std::unordered_map<PillarLocation, PillarVoxelArray> pillars_;
+  std::unordered_map<PillarLocation, PillarMapArray> pillars_;
   // Two-ring 3D neighborhood (fixed geometry): ring 1 = 6 face neighbors at
   // distance 1; ring 2 = 12 edge neighbors at distance sqrt(2). Ring 1 is
   // always probed first, ring 2 only when the threshold is not yet met
@@ -378,12 +378,12 @@ public:
   // --- Pillar map history (n-frame occupancy reference window) ---
   // Occupied voxel keys per frame, newest at back; at most history_frame_num_
   // frames retained. Maintained by UpdateHistory() every frame; deliberately
-  // survives ClearPillarVoxels(). Consumed by new-point detection AND the
+  // survives ClearPillarMapVoxels(). Consumed by new-point detection AND the
   // redundant/isolated vertical-continuity checks
-  std::deque<std::vector<PillarVoxelKey>> history_frames_;
+  std::deque<std::vector<PillarMapKey>> history_frames_;
   // Voxel key -> number of frames of the current window containing it.
   // "New" <=> key absent here (checked before the current frame is inserted)
-  std::unordered_map<PillarVoxelKey, int> history_counts_;
+  std::unordered_map<PillarMapKey, int> history_counts_;
   // Per-point new flag, index-aligned with point_cloud_ptr_, reset each frame in
   // DetectNewPoints(). Kept separate from point_labels_: a point can be new AND
   // redundant/isolated; deletion/retention is decided per keep_new_point in
@@ -394,7 +394,7 @@ public:
   // accumulate the history window)
   size_t history_frame_count_ = 0;
 
-  void init(const PillarVoxelConfig &config, double voxel_size);
+  void init(const PillarMapConfig &config, double voxel_size);
   void BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud);
   void DetectNewPoints();
   void UpdateHistory();
@@ -414,10 +414,10 @@ public:
   }
 
 private:
-  void setVoxelPointLabels(PillarVoxel* voxel, int8_t label);
+  void setVoxelPointLabels(PillarMapVoxel* voxel, int8_t label);
   void initNeighborOffsets();
   PillarLocation GetPillarLocation(const VoxelLocation &position) const;
-  void updatePillarFlag(const PillarLocation &pillar_key, PillarVoxelArray &pillar_voxels);
+  void updatePillarFlag(const PillarLocation &pillar_key, PillarMapArray &pillar_maps);
   // Scan one neighbor ring (offsets of a 3D window around current_pos): count
   // occupied voxels, gating dz=0 neighbors with the height-consistency test.
   // Returns true as soon as adjacent_count reaches threshold (early exit)
@@ -484,7 +484,7 @@ public:
   int total_skip_count_ = 0;
   int total_point_count_ = 0;
 
-  PillarVoxelMap pillar_map_;
+  PillarMap pillar_map_;
 
   // Total voxels evicted by the LRU since start (statistics for capacity tuning)
   size_t evicted_voxel_count_ = 0;
@@ -518,7 +518,7 @@ public:
 
   void mapSliding();
   void clearMemOutOfMap(const int& x_max,const int& x_min,const int& y_max,const int& y_min,const int& z_max,const int& z_min );
-  void ClearPillarVoxels();
+  void ClearPillarMapVoxels();
 
 private:
   // Evict least-recently-updated voxels from the LRU tail until the cache is

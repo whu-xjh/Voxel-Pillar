@@ -81,26 +81,26 @@ void loadVoxelConfig(ros::NodeHandle &nh, VoxelMapConfig &voxel_config)
   nh.param<double>("local_map/sliding_thresh", voxel_config.sliding_thresh_, 8);
   }
 
-void loadPillarVoxelConfig(ros::NodeHandle &nh, PillarVoxelConfig &config)
+void loadPillarMapConfig(ros::NodeHandle &nh, PillarMapConfig &config)
 {
-  nh.param<bool>("pillar_voxel/pillar_voxel_en", config.pillar_voxel_en_, false);
-  nh.param<double>("pillar_voxel/voxel_size", config.voxel_size_, 1.0);
-  nh.param<int>("pillar_voxel/adjacent_redundant_threshold", config.adjacent_redundant_threshold_, 3);
-  nh.param<int>("pillar_voxel/keep_num_per_voxel", config.keep_num_per_voxel_, 0);
-  nh.param<bool>("pillar_voxel/keep_redundant", config.keep_redundant_, true);
-  nh.param<bool>("pillar_voxel/keep_isolated", config.keep_isolated_, false);
-  nh.param<int>("pillar_voxel/adjacent_isolated_threshold", config.adjacent_isolated_threshold_, 3);
-  nh.param<int>("pillar_voxel/neighbor_ring_num", config.neighbor_ring_num_, 1);
-  nh.param<double>("pillar_voxel/height_consistency_ratio", config.height_consistency_ratio_, 0.25);
-  nh.param<int>("pillar_voxel/min_num", config.min_num_, 5);  // redundant voxel needs > this many points, isolated needs < this
-  nh.param<bool>("pillar_voxel/new_point_detect_en", config.new_point_detect_en_, false);
-  nh.param<int>("pillar_voxel/history_frame_num", config.history_frame_num_, 10);
-  nh.param<bool>("pillar_voxel/keep_new_point", config.keep_new_point_, true);
-  nh.param<int>("pillar_voxel/adjacent_new_point_threshold", config.adjacent_new_point_threshold_, 0);
-  nh.param<bool>("pillar_voxel/new_point_cluster_en", config.new_point_cluster_en_, false);
-  nh.param<int>("pillar_voxel/new_point_cluster_min_num", config.new_point_cluster_min_num_, 5);
-  nh.param<bool>("pillar_voxel/new_point_flat_filter_en", config.new_point_flat_filter_en_, false);
-  nh.param<double>("pillar_voxel/new_point_flat_band", config.new_point_flat_band_, 0.2);
+  nh.param<bool>("pillar_map/pillar_map_en", config.pillar_map_en_, false);
+  nh.param<double>("pillar_map/voxel_size", config.voxel_size_, 1.0);
+  nh.param<int>("pillar_map/adjacent_redundant_threshold", config.adjacent_redundant_threshold_, 3);
+  nh.param<int>("pillar_map/keep_num_per_voxel", config.keep_num_per_voxel_, 0);
+  nh.param<bool>("pillar_map/keep_redundant", config.keep_redundant_, true);
+  nh.param<bool>("pillar_map/keep_isolated", config.keep_isolated_, false);
+  nh.param<int>("pillar_map/adjacent_isolated_threshold", config.adjacent_isolated_threshold_, 3);
+  nh.param<int>("pillar_map/neighbor_ring_num", config.neighbor_ring_num_, 1);
+  nh.param<double>("pillar_map/height_consistency_ratio", config.height_consistency_ratio_, 0.25);
+  nh.param<int>("pillar_map/min_num", config.min_num_, 5);  // redundant voxel needs > this many points, isolated needs < this
+  nh.param<bool>("pillar_map/new_point_detect_en", config.new_point_detect_en_, false);
+  nh.param<int>("pillar_map/history_frame_num", config.history_frame_num_, 10);
+  nh.param<bool>("pillar_map/keep_new_point", config.keep_new_point_, true);
+  nh.param<int>("pillar_map/adjacent_new_point_threshold", config.adjacent_new_point_threshold_, 0);
+  nh.param<bool>("pillar_map/new_point_cluster_en", config.new_point_cluster_en_, false);
+  nh.param<int>("pillar_map/new_point_cluster_min_num", config.new_point_cluster_min_num_, 5);
+  nh.param<bool>("pillar_map/new_point_flat_filter_en", config.new_point_flat_filter_en_, false);
+  nh.param<double>("pillar_map/new_point_flat_band", config.new_point_flat_band_, 0.2);
 }
 
 namespace
@@ -1454,19 +1454,19 @@ void VoxelMapManager::clearMemOutOfMap(const int& x_max,const int& x_min,const i
 }
 
 // Compute pillar location (fixed elevation direction as z-axis, pillar composed of x,y)
-PillarLocation PillarVoxelMap::GetPillarLocation(const VoxelLocation &position) const
+PillarLocation PillarMap::GetPillarLocation(const VoxelLocation &position) const
 {
   return PillarLocation(position.x, position.y);
 }
 
-void PillarVoxelMap::init(const PillarVoxelConfig &config, double voxel_size)
+void PillarMap::init(const PillarMapConfig &config, double voxel_size)
 {
   config_ = config;
   voxel_size_ = voxel_size;
   initNeighborOffsets();
 }
 
-void PillarVoxelMap::initNeighborOffsets()
+void PillarMap::initNeighborOffsets()
 {
   ring1_offsets_.clear();
   ring2_offsets_.clear();
@@ -1502,7 +1502,7 @@ void PillarVoxelMap::initNeighborOffsets()
   addOffset(ring2_offsets_, 0, 1, 1);
 }
 
-void PillarVoxelMap::setVoxelPointLabels(PillarVoxel* voxel, int8_t label)
+void PillarMap::setVoxelPointLabels(PillarMapVoxel* voxel, int8_t label)
 {
   voxel->is_redundant_voxel_ = (label == LABEL_REDUNDANT);
   voxel->is_isolated_voxel_  = (label == LABEL_ISOLATED);
@@ -1513,18 +1513,18 @@ void PillarVoxelMap::setVoxelPointLabels(PillarVoxel* voxel, int8_t label)
   }
 }
 
-// pillar_voxels must be sorted by z key (done at the end of BuildPillarMap);
+// pillar_maps must be sorted by z key (done at the end of BuildPillarMap);
 // the begin/next/prev/rbegin arithmetic below relies on that order
-void PillarVoxelMap::updatePillarFlag(const PillarLocation &pillar_key, PillarVoxelArray &pillar_voxels)
+void PillarMap::updatePillarFlag(const PillarLocation &pillar_key, PillarMapArray &pillar_maps)
 {
   // Step 1: Bottom voxel redundant check. Point-count gate: only dense voxels
   // (> config_.min_num_ points) are confirmed redundant. History: the layer
   // directly above (bottom_z + 1) seen in any of the last history_frame_num
   // frames means the missing close-above is a transient sampling hole
-  PillarVoxel* bottom_voxel = &pillar_voxels.begin()->second;
-  bool has_close_above = std::next(pillar_voxels.begin()) != pillar_voxels.end()
-      && (std::next(pillar_voxels.begin())->second).center_z_ - bottom_voxel->center_z_ < (voxel_size_ * 2);
-  if (!has_close_above) has_close_above = seenInHistory(pillar_key, pillar_voxels.begin()->first + 1);
+  PillarMapVoxel* bottom_voxel = &pillar_maps.begin()->second;
+  bool has_close_above = std::next(pillar_maps.begin()) != pillar_maps.end()
+      && (std::next(pillar_maps.begin())->second).center_z_ - bottom_voxel->center_z_ < (voxel_size_ * 2);
+  if (!has_close_above) has_close_above = seenInHistory(pillar_key, pillar_maps.begin()->first + 1);
   if (!has_close_above && bottom_voxel->point_count_ > config_.min_num_) {
     bottom_voxel->is_redundant_voxel_ = true;
     voxel_label_count_++;
@@ -1537,11 +1537,11 @@ void PillarVoxelMap::updatePillarFlag(const PillarLocation &pillar_key, PillarVo
   // (< config_.min_num_ points) are confirmed isolated. History: a gap whose
   // intermediate layers were occupied in the window is a transient sampling
   // hole, not real free space
-  const int64_t bottom_key = pillar_voxels.begin()->first;
-  if (pillar_voxels.size() == 2)
+  const int64_t bottom_key = pillar_maps.begin()->first;
+  if (pillar_maps.size() == 2)
   {
-    const int64_t top_key = std::next(pillar_voxels.begin())->first;
-    PillarVoxel* top_voxel = &std::next(pillar_voxels.begin())->second;
+    const int64_t top_key = std::next(pillar_maps.begin())->first;
+    PillarMapVoxel* top_voxel = &std::next(pillar_maps.begin())->second;
 
     if (top_key - bottom_key >= 2 && top_voxel->point_count_ < config_.min_num_ &&
         !gapSeenInHistory(pillar_key, bottom_key, top_key)) {
@@ -1549,10 +1549,10 @@ void PillarVoxelMap::updatePillarFlag(const PillarLocation &pillar_key, PillarVo
       voxel_label_count_++;
     }
   }
-  if (pillar_voxels.size() > 2)
+  if (pillar_maps.size() > 2)
   {
-    auto pillar_iter = std::next(pillar_voxels.begin());
-    for (; pillar_iter != std::prev(pillar_voxels.end()); ++pillar_iter)
+    auto pillar_iter = std::next(pillar_maps.begin());
+    for (; pillar_iter != std::prev(pillar_maps.end()); ++pillar_iter)
     {
       const int64_t down_key = std::prev(pillar_iter)->first;
       const int64_t this_key = pillar_iter->first;
@@ -1567,11 +1567,11 @@ void PillarVoxelMap::updatePillarFlag(const PillarLocation &pillar_key, PillarVo
       }
     }
 
-    const int64_t top_key = pillar_voxels.rbegin()->first;
-    const int64_t prev_key = std::next(pillar_voxels.rbegin())->first;
-    if (top_key - prev_key >= 2 && pillar_voxels.rbegin()->second.point_count_ < config_.min_num_ &&
+    const int64_t top_key = pillar_maps.rbegin()->first;
+    const int64_t prev_key = std::next(pillar_maps.rbegin())->first;
+    if (top_key - prev_key >= 2 && pillar_maps.rbegin()->second.point_count_ < config_.min_num_ &&
         !gapSeenInHistory(pillar_key, prev_key, top_key)) {
-      pillar_voxels.rbegin()->second.is_isolated_voxel_ = true;
+      pillar_maps.rbegin()->second.is_isolated_voxel_ = true;
       voxel_label_count_++;
     }
   }
@@ -1582,7 +1582,7 @@ void PillarVoxelMap::updatePillarFlag(const PillarLocation &pillar_key, PillarVo
 // dz = 0 neighbors only — dz != 0 neighbors are ungated, their layer offset
 // already bounds the height difference). Returns true as soon as
 // adjacent_count reaches threshold (early exit)
-bool PillarVoxelMap::scanNeighborRing(const VoxelLocation &current_pos, const std::vector<VoxelLocation> &offsets,
+bool PillarMap::scanNeighborRing(const VoxelLocation &current_pos, const std::vector<VoxelLocation> &offsets,
                                       int threshold, double current_vp_z, double height_threshold, int &adjacent_count)
 {
   for (const auto &voxel_offset : offsets)
@@ -1597,9 +1597,9 @@ bool PillarVoxelMap::scanNeighborRing(const VoxelLocation &current_pos, const st
     if (pillar_iter == pillars_.end() || pillar_iter->second.empty()) continue;
 
     // Pillar voxel array is sorted by z key: binary search for the target layer
-    const PillarVoxelArray &voxels = pillar_iter->second;
+    const PillarMapArray &voxels = pillar_iter->second;
     auto voxel_iter = std::lower_bound(voxels.begin(), voxels.end(), adjacent_pos.z,
-        [](const std::pair<int64_t, PillarVoxel> &entry, int64_t z) { return entry.first < z; });
+        [](const std::pair<int64_t, PillarMapVoxel> &entry, int64_t z) { return entry.first < z; });
     if (voxel_iter == voxels.end() || voxel_iter->first != adjacent_pos.z) continue;
 
     if (voxel_offset.z == 0 &&
@@ -1613,7 +1613,7 @@ bool PillarVoxelMap::scanNeighborRing(const VoxelLocation &current_pos, const st
 // Ring-ordered 3D neighborhood test: ring 1 = 6 face neighbors at distance
 // exactly 1 voxel, ring 2 = 12 edge neighbors at distance sqrt(2). Ring 1 is
 // probed first; the threshold early-exits inside either ring
-bool PillarVoxelMap::hasAdjacentVoxel(const VoxelLocation &current_pos, int threshold, double current_vp_z)
+bool PillarMap::hasAdjacentVoxel(const VoxelLocation &current_pos, int threshold, double current_vp_z)
 {
   if (threshold <= 0) {
     return false;
@@ -1630,7 +1630,7 @@ bool PillarVoxelMap::hasAdjacentVoxel(const VoxelLocation &current_pos, int thre
   return false;
 }
 
-void PillarVoxelMap::BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud)
+void PillarMap::BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud)
 {
   const size_t num_points = input_cloud->points.size();
   const double inv_voxel_size = 1.0 / voxel_size_;
@@ -1652,16 +1652,16 @@ void PillarVoxelMap::BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud)
     PillarLocation pillar_loc = GetPillarLocation(voxel_location);
     int64_t voxel_key = voxel_location.z;
 
-    PillarVoxelArray& pillar_voxels = pillars_[pillar_loc];
+    PillarMapArray& pillar_maps = pillars_[pillar_loc];
     // Pillars typically hold only a few z voxels: linear scan beats a keyed lookup
-    PillarVoxel* voxel = nullptr;
-    for (auto& entry : pillar_voxels) {
+    PillarMapVoxel* voxel = nullptr;
+    for (auto& entry : pillar_maps) {
       if (entry.first == voxel_key) { voxel = &entry.second; break; }
     }
     if (voxel == nullptr) {
       double center_z = (voxel_location.z + 0.5) * voxel_size_;
-      pillar_voxels.emplace_back(voxel_key, PillarVoxel(center_z));
-      voxel = &pillar_voxels.back().second;
+      pillar_maps.emplace_back(voxel_key, PillarMapVoxel(center_z));
+      voxel = &pillar_maps.back().second;
     }
 
     voxel->point_indices_.push_back(i);
@@ -1678,7 +1678,7 @@ void PillarVoxelMap::BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud)
   // std::map; updatePillarFlag and hasAdjacentVoxel rely on it)
   for (auto& pillar_entry : pillars_) {
     std::sort(pillar_entry.second.begin(), pillar_entry.second.end(),
-              [](const std::pair<int64_t, PillarVoxel> &a, const std::pair<int64_t, PillarVoxel> &b) {
+              [](const std::pair<int64_t, PillarMapVoxel> &a, const std::pair<int64_t, PillarMapVoxel> &b) {
                 return a.first < b.first;
               });
   }
@@ -1688,13 +1688,13 @@ void PillarVoxelMap::BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud)
 // the last history_frame_num_ frames is flagged new. Runs right after
 // BuildPillarMap — point_is_new_ is independent of point_labels_ (a point can
 // be new AND redundant/isolated), so ordering vs. pillarDetection() does not
-// matter, only vs. ClearPillarVoxels() (this must run first). The first
+// matter, only vs. ClearPillarMapVoxels() (this must run first). The first
 // history_frame_num_ frames only accumulate the reference window; detection
 // output starts at frame history_frame_num_ + 1. Runs BEFORE UpdateHistory(),
 // so the window consulted here is exactly the last n previous frames.
 // No-op when new_point_detect_en_ is false (the history itself is advanced by
 // UpdateHistory() every frame — the redundant/isolated checks consume it too).
-void PillarVoxelMap::DetectNewPoints()
+void PillarMap::DetectNewPoints()
 {
   if (!config_.new_point_detect_en_) return;
 
@@ -1714,7 +1714,7 @@ void PillarVoxelMap::DetectNewPoints()
   {
     for (auto &voxel_entry : pillar_entry.second)
     {
-      const PillarVoxelKey key(pillar_entry.first, voxel_entry.first);
+      const PillarMapKey key(pillar_entry.first, voxel_entry.first);
       if (!detection_on || history_counts_.find(key) != history_counts_.end())
         continue;  // seen within the window (or still warming up): not new
 
@@ -1746,11 +1746,11 @@ void PillarVoxelMap::DetectNewPoints()
 // the same history. Must run AFTER DetectNewPoints() (whose check must see
 // the window WITHOUT the current frame) and BEFORE pillarDetection() (whose
 // vertical-continuity checks may include it)
-void PillarVoxelMap::UpdateHistory()
+void PillarMap::UpdateHistory()
 {
   history_frame_count_++;
 
-  std::vector<PillarVoxelKey> current_keys;
+  std::vector<PillarMapKey> current_keys;
   current_keys.reserve(pillars_.size());
   for (const auto &pillar_entry : pillars_)
   {
@@ -1761,7 +1761,7 @@ void PillarVoxelMap::UpdateHistory()
   }
 
   history_frames_.push_back(std::move(current_keys));
-  for (const PillarVoxelKey &key : history_frames_.back())
+  for (const PillarMapKey &key : history_frames_.back())
   {
     history_counts_[key]++;
   }
@@ -1769,7 +1769,7 @@ void PillarVoxelMap::UpdateHistory()
   const int n = std::max(config_.history_frame_num_, 0);
   while (history_frames_.size() > static_cast<size_t>(n))
   {
-    for (const PillarVoxelKey &key : history_frames_.front())
+    for (const PillarMapKey &key : history_frames_.front())
     {
       auto it = history_counts_.find(key);
       if (it != history_counts_.end() && --(it->second) <= 0) history_counts_.erase(it);
@@ -1781,16 +1781,16 @@ void PillarVoxelMap::UpdateHistory()
 // History-window occupancy oracle shared by the redundant/isolated checks:
 // was the (pillar, z) voxel occupied in any of the last history_frame_num
 // frames?
-bool PillarVoxelMap::seenInHistory(const PillarLocation &pillar, int64_t z_key) const
+bool PillarMap::seenInHistory(const PillarLocation &pillar, int64_t z_key) const
 {
-  return history_counts_.count(PillarVoxelKey(pillar, z_key)) > 0;
+  return history_counts_.count(PillarMapKey(pillar, z_key)) > 0;
 }
 
 // True when any z layer strictly between low_key and high_key was occupied
 // within the history window: the vertical gap seen in the current frame is a
 // transient sampling hole, not real free space. The probe is capped at 4096
 // layers (>= 1 km at any sane voxel size) as insurance against degenerate keys
-bool PillarVoxelMap::gapSeenInHistory(const PillarLocation &pillar, int64_t low_key, int64_t high_key) const
+bool PillarMap::gapSeenInHistory(const PillarLocation &pillar, int64_t low_key, int64_t high_key) const
 {
   for (int64_t z = low_key + 1; z < high_key && z - low_key <= 4096; ++z)
   {
@@ -1809,7 +1809,7 @@ bool PillarVoxelMap::gapSeenInHistory(const PillarLocation &pillar, int64_t low_
 // ALL their points: a voxel absent from the history window holds no static
 // surface, so its cluster-split points are genuine new observations too, and
 // point_is_new_ stays voxel-wise all-or-nothing for DefineSkipPoints retention
-void PillarVoxelMap::confirmClusteredNewPoints()
+void PillarMap::confirmClusteredNewPoints()
 {
   if (!point_cloud_ptr_ || point_is_new_.empty()) return;
 
@@ -1911,7 +1911,7 @@ void PillarVoxelMap::confirmClusteredNewPoints()
 // True when the cluster fits in a thin slab along any coordinate axis (per-axis
 // extent < band): constant-height layers, ground stripes, axis-aligned wall
 // slivers — not moving-object blobs. band <= 0 never triggers (check off)
-bool PillarVoxelMap::isFlatCluster(const pcl::PointCloud<pcl::PointXYZ> &cloud,
+bool PillarMap::isFlatCluster(const pcl::PointCloud<pcl::PointXYZ> &cloud,
                                    const std::vector<int> &indices, double band)
 {
   if (indices.empty()) return false;
@@ -1930,7 +1930,7 @@ bool PillarVoxelMap::isFlatCluster(const pcl::PointCloud<pcl::PointXYZ> &cloud,
   return (x_max - x_min < band) || (y_max - y_min < band) || (z_max - z_min < band);
 }
 
-void PillarVoxelMap::pillarDetection()
+void PillarMap::pillarDetection()
 {
   // Step 1: Initial redundant/isolated voxel flag per pillar
   voxel_label_count_ = 0;
@@ -1952,9 +1952,9 @@ void PillarVoxelMap::pillarDetection()
   for (auto& pillar_entry : pillars_)
   {
     const PillarLocation& pillar_key = pillar_entry.first;
-    auto& pillar_voxels = pillar_entry.second;
+    auto& pillar_maps = pillar_entry.second;
 
-    for (auto voxel_iter = pillar_voxels.begin(); voxel_iter != pillar_voxels.end(); ++voxel_iter)
+    for (auto voxel_iter = pillar_maps.begin(); voxel_iter != pillar_maps.end(); ++voxel_iter)
     {
       if (!voxel_iter->second.is_redundant_voxel_ && !voxel_iter->second.is_isolated_voxel_) continue;
 
@@ -2002,7 +2002,7 @@ void VoxelMapManager::applyVoxelRetention(int keep_num, int &flagged_total, int 
   {
     for (const auto &voxel_entry : pillar_entry.second)
     {
-      const PillarVoxel &voxel = voxel_entry.second;
+      const PillarMapVoxel &voxel = voxel_entry.second;
 
       // Select the flagged set and check its keep flag
       if (voxel_class == 1)
@@ -2155,9 +2155,9 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
 // new = red (priority when a point qualifies for several categories),
 // isolated = blue, redundant = purple. Same self-gating pattern as before
 // (no cloud assembly at all when nobody subscribes). Must run before
-// ClearPillarVoxels()/removeFlaggedPoints() — the flags index the
+// ClearPillarMapVoxels()/removeFlaggedPoints() — the flags index the
 // pre-compaction cloud
-void PillarVoxelMap::PublishPillarMapCloud(const ros::Publisher &pub)
+void PillarMap::PublishPillarMapCloud(const ros::Publisher &pub)
 {
   if (pub.getNumSubscribers() == 0 || !point_cloud_ptr_ || point_cloud_ptr_->points.empty())
     return;
@@ -2194,9 +2194,9 @@ void PillarVoxelMap::PublishPillarMapCloud(const ros::Publisher &pub)
   pub.publish(pillar_msg);
 }
 
-void VoxelMapManager::ClearPillarVoxels()
+void VoxelMapManager::ClearPillarMapVoxels()
 {
-  // PillarVoxel is a lightweight value type, no manual delete needed.
+  // PillarMapVoxel is a lightweight value type, no manual delete needed.
   // Just clear the containers (whole structure is rebuilt next frame)
   pillar_map_.pillars_.clear();
   pillar_map_.point_labels_.clear();
@@ -2213,7 +2213,7 @@ void VoxelMapManager::ClearPillarVoxels()
 // consistent. Survivors swap in place (caller-held Ptrs stay valid);
 // skip_flags is consumed (cleared) — every kept point participates fully.
 // Returns the number of removed points.
-size_t PillarVoxelMap::removeFlaggedPoints(const PointCloudXYZI::Ptr &body_cloud,
+size_t PillarMap::removeFlaggedPoints(const PointCloudXYZI::Ptr &body_cloud,
                                            const PointCloudXYZI::Ptr &world_cloud,
                                            std::vector<uint8_t> &skip_flags)
 {

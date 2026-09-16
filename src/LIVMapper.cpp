@@ -33,7 +33,7 @@ LIVMapper::LIVMapper(ros::NodeHandle &nh)
   pcl_w_wait_pub.reset(new PointCloudXYZI());
   pcl_wait_save_intensity.reset(new PointCloudXYZI());
 
-  loadPillarVoxelConfig(nh, pillar_config);
+  loadPillarMapConfig(nh, pillar_config);
   voxelmap_manager.reset(new VoxelMapManager(voxel_config));
   voxelmap_manager->pillar_map_.init(pillar_config, pillar_config.voxel_size_);
   root_dir = ROOT_DIR;
@@ -419,7 +419,7 @@ void LIVMapper::handleLIO()
   if (!intensity_noise_done_) { estimateIntensityNoise(); }
 
   double t_pillar1 = 0.0, t_pillar2 = 0.0;
-  if (pillar_config.pillar_voxel_en_)
+  if (pillar_config.pillar_map_en_)
   {
     t_pillar1 = omp_get_wtime();
     voxelmap_manager->pillar_map_.BuildPillarMap(feats_down_world);
@@ -428,7 +428,7 @@ void LIVMapper::handleLIO()
     voxelmap_manager->pillar_map_.pillarDetection();
     voxelmap_manager->DefineSkipPoints(feats_down_world);
     voxelmap_manager->pillar_map_.PublishPillarMapCloud(pubPillarMapCloud);
-    voxelmap_manager->ClearPillarVoxels();
+    voxelmap_manager->ClearPillarMapVoxels();
 
     // Delete flagged points from the frame outright: they neither contribute
     // ICP residuals nor enter the voxel map (pv_list_ is rebuilt from
@@ -603,7 +603,7 @@ void LIVMapper::reportTiming(double t0, double t_down, double t_pillar1, double 
   printf("\033[1;34m| %-29s | %-13s %-13s |\033[0m\n", "Algorithm Stage", "Current", "Average");
   printf("\033[1;34m+-------------------------------------------------------------+\033[0m\n");
   printf("\033[1;36m| %-29s | %-13f %-13f |\033[0m\n", "DownSample", t_down - t0, total_downsample_time / frame_num);
-  printf("\033[1;36m| %-29s | %-13f %-13f |\033[0m\n", "Pillar Process", pillar_config.pillar_voxel_en_ ? (t_pillar2 - t_pillar1) : 0.0, pillar_config.pillar_voxel_en_ ? (total_pillar_process_time / frame_num) : 0.0);
+  printf("\033[1;36m| %-29s | %-13f %-13f |\033[0m\n", "Pillar Process", pillar_config.pillar_map_en_ ? (t_pillar2 - t_pillar1) : 0.0, pillar_config.pillar_map_en_ ? (total_pillar_process_time / frame_num) : 0.0);
   printf("\033[1;36m| %-29s | %-13f %-13f |\033[0m\n", "ICP", t2 - t1, total_icp_time / frame_num);
   printf("\033[1;36m| %-29s | %-13f %-13f |\033[0m\n", "updateVoxelMap", t4 - t3, total_update_voxel_map_time / frame_num);
   printf("\033[1;36m| %-29s | %-13f %-13f |\033[0m\n", "Point Transform", t6 - t5, total_point_transform_time / frame_num);

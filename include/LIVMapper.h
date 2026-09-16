@@ -152,7 +152,7 @@ private:
   PreprocessPtr p_pre;
   ImuProcessPtr p_imu;
   VoxelMapManagerPtr voxelmap_manager;
-  PillarVoxelConfig pillar_config;
+  PillarMapConfig pillar_config;
 
   ros::Subscriber sub_pcl;
   ros::Subscriber sub_imu;
