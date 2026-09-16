@@ -38,6 +38,15 @@ lio:
   max_layer: 2
   max_points_num: 100
   layer_init_num: [5, 5, 5, 5, 5]
+
+  # R-VoxelMap-style plane init refinements
+  plane_refine_en: true             # master switch: false = fully revert to original behavior (no distance filter, no check_and_update)
+  init_distance_threshold: 0.1      # init_plane: drop points farther than this from the first PCA fit (m)
+  plane_valid_check_en: true        # coplanar-disjoint-surface guard (2D grid DFS clustering)
+  valid_check_max_layer: 0          # run the guard only on voxels at/above this layer
+  valid_check_min_points_size: 10   # min retained points to run the guard
+  valid_check_resolution: 5         # projection grid resolution factor
+  valid_check_p_threshold: 0.8      # largest-cluster point-ratio threshold
   sigma_num: 3
   capacity: 0  # LRU cache (0 = disable)
   intensity_fusion_en: true

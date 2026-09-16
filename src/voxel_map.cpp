@@ -58,6 +58,14 @@ void loadVoxelConfig(ros::NodeHandle &nh, VoxelMapConfig &voxel_config)
   nh.param<double>("lio/dept_err", voxel_config.dept_err_, 0.05);
   nh.param<vector<int>>("lio/layer_init_num", voxel_config.layer_init_num_, vector<int>{5,5,5,5,5});
   nh.param<int>("lio/max_points_num", voxel_config.max_points_num_, 50);
+  nh.param<bool>("lio/plane_refine_en", voxel_config.plane_refine_en_, true);
+  nh.param<double>("lio/init_distance_threshold", voxel_config.init_distance_threshold_, 0.1);
+  nh.param<bool>("lio/plane_valid_check_en", voxel_config.plane_valid_check_en_, true);
+  nh.param<int>("lio/valid_check_max_layer", voxel_config.valid_check_max_layer_, 0);
+  nh.param<int>("lio/valid_check_min_points_size", voxel_config.valid_check_min_points_size_, 10);
+  nh.param<int>("lio/valid_check_resolution", voxel_config.valid_check_resolution_, 5);
+  nh.param<double>("lio/valid_check_p_threshold", voxel_config.valid_check_p_threshold_, 0.8);
+  if (voxel_config.valid_check_resolution_ < 1) voxel_config.valid_check_resolution_ = 1;  // 0 would degenerate the projection grid
   nh.param<int>("lio/max_iterations", voxel_config.max_iterations_, 5);
   nh.param<int>("lio/capacity", voxel_config.capacity_, 100000);
   nh.param<bool>("lio/intensity_fusion_en", voxel_config.intensity_fusion_en_, false);
@@ -95,26 +103,114 @@ void loadPillarVoxelConfig(ros::NodeHandle &nh, PillarVoxelConfig &config)
   nh.param<double>("pillar_voxel/new_point_flat_band", config.new_point_flat_band_, 0.2);
 }
 
-void VoxelOctoTree::init_plane(const std::vector<pointWithVar> &points, VoxelPlane *plane)
+namespace
+{
+// Plain PCA over a point set: centroid, covariance, eigen decomposition
+// (ascending eigenvalues, col(0) = min-eigenvalue direction). Shared by the
+// multi-pass plane fitting in init_plane
+void pcaFit(const std::vector<pointWithVar> &points, Eigen::Vector3d &center, Eigen::Matrix3d &cov,
+            Eigen::Matrix3d &evecs, Eigen::Vector3d &evals)
+{
+  center.setZero();
+  cov.setZero();
+  for (const auto &pv : points)
+  {
+    cov += pv.point_w * pv.point_w.transpose();
+    center += pv.point_w;
+  }
+  const double inv_n = 1.0 / static_cast<double>(points.size());
+  center *= inv_n;
+  cov = cov * inv_n - center * center.transpose();
+  Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> saes(cov);
+  evecs = saes.eigenvectors();
+  evals = saes.eigenvalues();
+}
+} // namespace
+
+void VoxelOctoTree::init_plane(std::vector<pointWithVar> &points, VoxelPlane *plane)
 {
   // 1. Initialize plane parameters
   plane->plane_var_ = Eigen::Matrix<double, 6, 6>::Zero();
   plane->covariance_ = Eigen::Matrix3d::Zero();
+  plane->sum_ppt_ = Eigen::Matrix3d::Zero();
   plane->center_ = Eigen::Vector3d::Zero();
   plane->normal_ = Eigen::Vector3d::Zero();
   plane->points_size_ = points.size();
   plane->radius_ = 0;
 
-  // 2. Compute covariance matrix and centroid
-  for (auto pv : points)
+  // 2. Pass 1: PCA over ALL points for a first plane estimate (ascending
+  // eigenvalues; col(0) is the plane normal)
+  Eigen::Vector3d center;
+  Eigen::Matrix3d cov, evecs;
+  Eigen::Vector3d evals;
+  if (config_ptr_->plane_refine_en_)
   {
-    plane->covariance_ += pv.point_w * pv.point_w.transpose();
-    plane->center_ += pv.point_w;
-  }
-  plane->center_ = plane->center_ / plane->points_size_;
-  plane->covariance_ = plane->covariance_ / plane->points_size_ - plane->center_ * plane->center_.transpose();
+    // 2. Pass 1: PCA over ALL points for a first plane estimate (ascending
+    // eigenvalues; col(0) is the plane normal)
+    pcaFit(points, center, cov, evecs, evals);
+    const Eigen::Vector3d first_normal = evecs.col(0);
 
-  // 3. Batch-initialize intensity statistics only on the first init. On periodic
+    // 3. Outlier removal (R-VoxelMap-style): drop points farther than
+    // init_distance_threshold_ from the first fit — the in-place erase releases
+    // their storage — then re-fit on the retained set
+    points.erase(std::remove_if(points.begin(), points.end(),
+                                [&](const pointWithVar &pv) {
+                                  return std::abs((pv.point_w - center).dot(first_normal)) >
+                                         config_ptr_->init_distance_threshold_;
+                                }),
+                 points.end());
+    plane->points_size_ = points.size();
+
+    // Degenerate guard: too few points left to fit a plane — treat as non-plane
+    // (the caller subdivides whatever remains). is_update_ stays false: these
+    // voxels are not planes and must not enter the pubVoxelMap plane list
+    if (points.size() < 3)
+    {
+      plane->is_plane_ = false;
+      return;
+    }
+
+    // 4. Pass 2: PCA over the retained points
+    pcaFit(points, center, cov, evecs, evals);
+    Eigen::Matrix3f::Index first_evals_min, first_evals_max;
+    evals.rowwise().sum().minCoeff(&first_evals_min);
+    evals.rowwise().sum().maxCoeff(&first_evals_max);
+    int first_evals_mid = 3 - static_cast<int>(first_evals_min) - static_cast<int>(first_evals_max);
+
+    // 5. Coplanar-disjoint-surface guard (ported from R-VoxelMap): on the
+    // configured layers, project the retained points onto the fitted plane and
+    // keep only the largest 4-connected cluster — smaller clusters belong to
+    // different physical surfaces that happen to be coplanar, and are dropped
+    if (config_ptr_->plane_valid_check_en_ && layer_ <= config_ptr_->valid_check_max_layer_ &&
+        static_cast<int>(points.size()) >= config_ptr_->valid_check_min_points_size_)
+    {
+      if (!plane_valid_check(points, center, evecs.col(first_evals_max), evecs.col(first_evals_mid)))
+      {
+        // is_update_ stays false: not a trustworthy plane, must not enter the
+        // pubVoxelMap plane list; the caller subdivides the remaining points
+        plane->is_plane_ = false;
+        return;
+      }
+      // Re-fit on the pruned set
+      pcaFit(points, center, cov, evecs, evals);
+      evals.rowwise().sum().minCoeff(&first_evals_min);
+      evals.rowwise().sum().maxCoeff(&first_evals_max);
+      first_evals_mid = 3 - static_cast<int>(first_evals_min) - static_cast<int>(first_evals_max);
+    }
+  }
+  else
+  {
+    // Original behavior: single PCA over all points
+    pcaFit(points, center, cov, evecs, evals);
+  }
+
+  // 6. Write the final fit back; the eigen decomposition and plane_var
+  // propagation below run on the filtered (and possibly pruned) set
+  plane->center_ = center;
+  plane->covariance_ = cov;
+  plane->points_size_ = points.size();
+
+  // 7. Batch-initialize intensity statistics only on the first init. On periodic
   // re-inits every point has already been folded into the EMA state by
   // UpdateOctoTree, so overwriting from the recent temp_points_ window would
   // discard the accumulated history. No hard std floor here: the measurement
@@ -139,7 +235,7 @@ void VoxelOctoTree::init_plane(const std::vector<pointWithVar> &points, VoxelPla
     plane->intensity_init_ = true;
   }
 
-  // 4. Eigenvalue decomposition to extract plane normal and other parameters
+  // 8. Eigenvalue decomposition to extract plane normal and other parameters
   // Eigenvalues represent variance in three principal directions:
   // - λ1 (max): variance in first principal direction
   // - λ2 (mid): variance in second principal direction
@@ -182,7 +278,7 @@ void VoxelOctoTree::init_plane(const std::vector<pointWithVar> &points, VoxelPla
   Eigen::Matrix3d J_Q;
   J_Q << 1.0 / plane->points_size_, 0, 0, 0, 1.0 / plane->points_size_, 0, 0, 0, 1.0 / plane->points_size_;
 
-  // 5. Check if points form a plane based on min eigenvalue
+  // 9. Check if points form a plane based on min eigenvalue
   if (evalsReal(evalsMin) < planner_threshold_)
   {
     // Points form a plane when variance in third direction is significantly smaller
@@ -238,12 +334,140 @@ void VoxelOctoTree::init_plane(const std::vector<pointWithVar> &points, VoxelPla
       voxel_plane_id++;
       plane->is_init_ = true;
     }
+
+    // Incremental statistics for check_and_update (reset after every refit so
+    // the cached mean/sum_ppt/cov match the stored points exactly)
+    plane->sum_ppt_.setZero();
+    for (const auto &pv : points)
+    {
+      plane->sum_ppt_ += pv.point_w * pv.point_w.transpose();
+    }
+    plane->points_size_ = points.size();
+    plane->cov_need_update_ = false;
   }
   else
   {
     plane->is_update_ = true;
     plane->is_plane_ = false;
   }
+}
+
+// R-VoxelMap check_and_update: O(1) rank-1 trial before accepting a new point
+// into a plane voxel. Returns false (point rejected, not stored) when the
+// insertion would push the min eigenvalue past the planarity threshold; on
+// acceptance the incremental statistics and plane parameters are updated in
+// place (plane_var_ refresh deferred — cov_need_update_)
+bool VoxelOctoTree::check_and_update(const pointWithVar &pv)
+{
+  VoxelPlane *plane = plane_ptr_;
+  const int curr_points_num = plane->points_size_;
+  if (curr_points_num < 3) return true;  // too few points to judge planarity: accept
+
+  const Eigen::Vector3d p_vec(pv.point_w[0], pv.point_w[1], pv.point_w[2]);
+  const Eigen::Vector3d new_mean = (plane->center_ * curr_points_num + p_vec) / (curr_points_num + 1);
+  const Eigen::Matrix3d new_ppt = plane->sum_ppt_ + p_vec * p_vec.transpose();
+  const Eigen::Matrix3d new_cov = new_ppt / (curr_points_num + 1) - new_mean * new_mean.transpose();
+
+  Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> es(new_cov);
+  if (es.eigenvalues()(0) >= planner_threshold_) return false;  // would break planarity: reject
+
+  // Accept: refresh the cached statistics and plane parameters in place
+  plane->center_ = new_mean;
+  plane->sum_ppt_ = new_ppt;
+  plane->covariance_ = new_cov;
+  plane->normal_ = es.eigenvectors().col(0);
+  plane->y_normal_ = es.eigenvectors().col(1);
+  plane->x_normal_ = plane->y_normal_.cross(plane->normal_);
+  plane->min_eigen_value_ = es.eigenvalues()(0);
+  plane->mid_eigen_value_ = es.eigenvalues()(1);
+  plane->max_eigen_value_ = es.eigenvalues()(2);
+  plane->radius_ = sqrt(es.eigenvalues()(2));
+  plane->d_ = -plane->normal_.dot(plane->center_);
+  plane->points_size_ = curr_points_num + 1;
+  plane->cov_need_update_ = true;
+  return true;
+}
+
+// Coplanar-disjoint-surface guard (ported from R-VoxelMap): project the
+// retained points onto the fitted plane, rasterize into a 2D grid of
+// resolution = quater_length * 4 / valid_check_resolution, cluster occupied
+// grids with 4-connected DFS, and keep only the largest cluster (by point
+// count) — smaller clusters belong to different physical surfaces that happen
+// to be coplanar. Returns false when even the largest cluster holds less than
+// valid_check_p_threshold_ of the points (the plane is untrustworthy and the
+// caller treats the voxel as non-planar)
+bool VoxelOctoTree::plane_valid_check(std::vector<pointWithVar> &points, const Eigen::Vector3d &center,
+                                      const Eigen::Vector3d &x_normal, const Eigen::Vector3d &y_normal)
+{
+  const double resolution = quater_length_ * 4 / config_ptr_->valid_check_resolution_;
+
+  std::map<std::pair<int, int>, std::vector<size_t>> grid_map;
+  for (size_t i = 0; i < points.size(); ++i)
+  {
+    const Eigen::Vector3d relative_point = points[i].point_w - center;
+    double x_coord = relative_point.dot(x_normal);
+    double y_coord = relative_point.dot(y_normal);
+    double grid_x_f = x_coord / resolution;
+    if (x_coord < 0) grid_x_f -= 1;
+    double grid_y_f = y_coord / resolution;
+    if (y_coord < 0) grid_y_f -= 1;
+    grid_map[{static_cast<int>(grid_x_f), static_cast<int>(grid_y_f)}].push_back(i);
+  }
+
+  // 4-connected DFS clustering over occupied grids
+  std::map<std::pair<int, int>, bool> visited;
+  std::vector<std::vector<std::pair<int, int>>> clusters;
+  std::function<void(int, int, std::vector<std::pair<int, int>> &)> dfs =
+      [&](int x, int y, std::vector<std::pair<int, int>> &cluster) {
+        std::pair<int, int> key(x, y);
+        if (visited[key] || grid_map.find(key) == grid_map.end()) return;
+        visited[key] = true;
+        cluster.push_back(key);
+        dfs(x + 1, y, cluster);
+        dfs(x - 1, y, cluster);
+        dfs(x, y + 1, cluster);
+        dfs(x, y - 1, cluster);
+      };
+  for (const auto &grid_pair : grid_map)
+  {
+    if (!visited[grid_pair.first])
+    {
+      std::vector<std::pair<int, int>> cluster;
+      dfs(grid_pair.first.first, grid_pair.first.second, cluster);
+      clusters.push_back(cluster);
+    }
+  }
+
+  // Largest cluster by point count
+  size_t max_cluster_size = 0;
+  size_t max_cluster_idx = 0;
+  for (size_t i = 0; i < clusters.size(); ++i)
+  {
+    size_t cluster_size = 0;
+    for (const auto &grid_pair : clusters[i]) cluster_size += grid_map[grid_pair].size();
+    if (cluster_size > max_cluster_size)
+    {
+      max_cluster_size = cluster_size;
+      max_cluster_idx = i;
+    }
+  }
+
+  if (static_cast<double>(max_cluster_size) / points.size() <= config_ptr_->valid_check_p_threshold_)
+    return false;
+
+  // Keep only the largest cluster: mark its points, erase the rest in place
+  std::unordered_set<size_t> keep;
+  for (const auto &grid_pair : clusters[max_cluster_idx])
+  {
+    for (size_t idx : grid_map[grid_pair]) keep.insert(idx);
+  }
+  size_t write = 0;
+  for (size_t i = 0; i < points.size(); ++i)
+  {
+    if (keep.count(i)) points[write++] = points[i];
+  }
+  points.resize(write);
+  return true;
 }
 
 void VoxelOctoTree::init_octo_tree()
@@ -254,8 +478,8 @@ void VoxelOctoTree::init_octo_tree()
     if (plane_ptr_->is_plane_ == true)
     {
       octo_state_ = 0;  // Current voxel is plane, set as leaf node
-      // Release memory when too many points
-      if (temp_points_.size() > max_points_num_)
+      // Release memory when the retained (post-filter) point count reaches max
+      if (temp_points_.size() >= max_points_num_)
       {
         update_enable_ = false;
         std::vector<pointWithVar>().swap(temp_points_);
@@ -299,7 +523,7 @@ void VoxelOctoTree::cut_octo_tree()
     // Create child octree node if not exists
     if (leaves_[leafnum] == nullptr)
     {
-      leaves_[leafnum] = new VoxelOctoTree(max_layer_, layer_ + 1, layer_init_num_[layer_ + 1], max_points_num_, planner_threshold_);
+      leaves_[leafnum] = new VoxelOctoTree(max_layer_, layer_ + 1, layer_init_num_[layer_ + 1], max_points_num_, planner_threshold_, config_ptr_);
       leaves_[leafnum]->layer_init_num_ = layer_init_num_;
       // Compute child voxel center
       leaves_[leafnum]->voxel_center_[0] = voxel_center_[0] + (2 * xyz[0] - 1) * quater_length_;
@@ -322,7 +546,7 @@ void VoxelOctoTree::cut_octo_tree()
         if (leaves_[i]->plane_ptr_->is_plane_)
         {
           leaves_[i]->octo_state_ = 0;
-          if (leaves_[i]->temp_points_.size() > leaves_[i]->max_points_num_)
+          if (leaves_[i]->temp_points_.size() >= leaves_[i]->max_points_num_)
           {
             leaves_[i]->update_enable_ = false;
             std::vector<pointWithVar>().swap(leaves_[i]->temp_points_);
@@ -369,6 +593,11 @@ void VoxelOctoTree::UpdateOctoTree(const pointWithVar &pv)
 
       if (update_enable_)
       {
+        // R-VoxelMap check_and_update: reject points whose insertion would
+        // push the min eigenvalue past the planarity threshold (O(1) rank-1
+        // trial; accepted points refresh the incremental plane statistics).
+        // Skipped entirely when plane_refine_en_ is off (original behavior)
+        if (config_ptr_->plane_refine_en_ && !check_and_update(pv)) return;
         new_points_++;
         temp_points_.push_back(pv);
         if (new_points_ > update_size_threshold_)
@@ -396,7 +625,7 @@ void VoxelOctoTree::UpdateOctoTree(const pointWithVar &pv)
         if (leaves_[leafnum] != nullptr) { leaves_[leafnum]->UpdateOctoTree(pv); }
         else
         {
-          leaves_[leafnum] = new VoxelOctoTree(max_layer_, layer_ + 1, layer_init_num_[layer_ + 1], max_points_num_, planner_threshold_);
+          leaves_[leafnum] = new VoxelOctoTree(max_layer_, layer_ + 1, layer_init_num_[layer_ + 1], max_points_num_, planner_threshold_, config_ptr_);
           leaves_[leafnum]->layer_init_num_ = layer_init_num_;
           leaves_[leafnum]->voxel_center_[0] = voxel_center_[0] + (2 * xyz[0] - 1) * quater_length_;
           leaves_[leafnum]->voxel_center_[1] = voxel_center_[1] + (2 * xyz[1] - 1) * quater_length_;
@@ -429,7 +658,7 @@ void VoxelOctoTree::UpdateOctoTree(const pointWithVar &pv)
             init_plane(temp_points_, plane_ptr_);
             new_points_ = 0;
           }
-          if (temp_points_.size() > max_points_num_)
+          if (temp_points_.size() >= max_points_num_)
           {
             update_enable_ = false;
             std::vector<pointWithVar>().swap(temp_points_);
@@ -475,7 +704,7 @@ VoxelOctoTree *VoxelOctoTree::Insert(const pointWithVar &pv)
     if (leaves_[leafnum] != nullptr) { return leaves_[leafnum]->Insert(pv); }
     else
     {
-      leaves_[leafnum] = new VoxelOctoTree(max_layer_, layer_ + 1, layer_init_num_[layer_ + 1], max_points_num_, planner_threshold_);
+      leaves_[leafnum] = new VoxelOctoTree(max_layer_, layer_ + 1, layer_init_num_[layer_ + 1], max_points_num_, planner_threshold_, config_ptr_);
       leaves_[leafnum]->layer_init_num_ = layer_init_num_;
       leaves_[leafnum]->voxel_center_[0] = voxel_center_[0] + (2 * xyz[0] - 1) * quater_length_;
       leaves_[leafnum]->voxel_center_[1] = voxel_center_[1] + (2 * xyz[1] - 1) * quater_length_;
@@ -740,7 +969,7 @@ void VoxelMapManager::BuildVoxelMap()
     else
     {
       // If voxel does not exist, create new voxel and add point
-      VoxelOctoTree *octo_tree = new VoxelOctoTree(max_layer, 0, layer_init_num[0], max_points_num, planer_threshold);
+      VoxelOctoTree *octo_tree = new VoxelOctoTree(max_layer, 0, layer_init_num[0], max_points_num, planer_threshold, &config_setting_);
       octo_tree->quater_length_ = voxel_size / 4;
       octo_tree->voxel_center_[0] = (0.5 + position.x) * voxel_size;
       octo_tree->voxel_center_[1] = (0.5 + position.y) * voxel_size;
@@ -791,7 +1020,7 @@ void VoxelMapManager::UpdateVoxelMap(const std::vector<pointWithVar> &input_poin
     }
     else
     {
-      VoxelOctoTree *octo_tree = new VoxelOctoTree(max_layer, 0, layer_init_num[0], max_points_num, planer_threshold);
+      VoxelOctoTree *octo_tree = new VoxelOctoTree(max_layer, 0, layer_init_num[0], max_points_num, planer_threshold, &config_setting_);
       octo_tree->quater_length_ = voxel_size / 4;
       octo_tree->voxel_center_[0] = (0.5 + position.x) * voxel_size;
       octo_tree->voxel_center_[1] = (0.5 + position.y) * voxel_size;

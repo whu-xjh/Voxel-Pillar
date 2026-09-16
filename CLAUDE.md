@@ -75,6 +75,31 @@ taskset -c 16-31 bash -c 'source /opt/ros/noetic/setup.bash && catkin_make -C /h
 
 ### Voxel Map System
 
+**Plane Init Pipeline** (R-VoxelMap/SuperLIO-style refinements, `init_plane` in voxel_map.cpp).
+Master switch `lio/plane_refine_en` (default true): false = fully revert to original
+behavior — no distance filter, no valid check, no check_and_update:
+- Multi-pass fitting: all-point PCA → drop points with point-to-plane distance >
+  `lio/init_distance_threshold` (0.1 m, in-place erase releases storage) → re-fit on
+  retained points
+- Coplanar-disjoint-surface guard (`plane_valid_check`, ported from R-VoxelMap, gated
+  by `lio/plane_valid_check_en` + `valid_check_max_layer`(0 = root layer only) +
+  `valid_check_min_points_size`(10)): project retained points onto the plane, 2D-grid
+  rasterize, 4-connected DFS clustering — only the largest cluster (by point count,
+  must exceed `valid_check_p_threshold` 0.8 of points) survives; the rest are dropped.
+  Off-plane outliers cannot be caught by this guard and vice versa — the distance
+  filter and the cluster guard are complementary
+- Per-plane incremental statistics (`sum_ppt_`, `points_size_`, `cov_need_update_`):
+  `check_and_update` (called from `UpdateOctoTree` before storing) performs an O(1)
+  rank-1 trial — points whose insertion would push the min eigenvalue past
+  `planner_threshold` are REJECTED (not stored, no refit trigger); accepted points
+  update center/sum_ppt/covariance/normal in place. `plane_var_` refresh is deferred
+  (`cov_need_update_`) to the next refit
+- Freeze: when the retained point count reaches `max_points_num` the voxel and plane
+  freeze (`update_enable_ = false`, `temp_points_` released) — new points no longer
+  update anything; only the intensity EMA keeps running
+- `init_plane` mutates its `points` argument (non-const ref): callers pass owned
+  `temp_points_` vectors, so the shrink propagates to the voxel
+
 **Voxel Structure** (include/voxel_map.h):
 - Octree-based with configurable layering (`max_layer`, `layer_init_num`)
 - LRU caching for memory management (`capacity`: <=1 disables the cache; the

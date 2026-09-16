@@ -5,6 +5,7 @@
 #include "common_lib.h"
 #include <Eigen/Dense>
 #include <algorithm>
+#include <functional>
 #include <fstream>
 #include <math.h>
 #include <map>
@@ -37,6 +38,15 @@ typedef struct VoxelMapConfig
   double dept_err_;
   double sigma_num_;
   bool is_pub_plane_map_;
+
+  // R-VoxelMap-style plane-init refinements
+  bool plane_refine_en_;              // master switch: false = fully revert to original behavior (no distance filter, no check_and_update)
+  double init_distance_threshold_;    // init_plane: drop points farther than this from the first PCA fit (m)
+  bool plane_valid_check_en_;         // coplanar-disjoint-surface guard (2D grid DFS clustering)
+  int valid_check_max_layer_;         // run the guard only on voxels at/above this layer
+  int valid_check_min_points_size_;   // min retained points to run the guard
+  int valid_check_resolution_;        // projection grid resolution factor
+  double valid_check_p_threshold_;    // largest-cluster point-ratio threshold
 
   double sliding_thresh_;
   bool map_sliding_en_;
@@ -72,6 +82,9 @@ typedef struct VoxelPlane
   Eigen::Vector3d y_normal_;
   Eigen::Vector3d x_normal_;
   Eigen::Matrix3d covariance_;
+  // Incremental sufficient statistics (Σp·pᵀ over stored points), maintained
+  // by init_plane and check_and_update for O(1) insertion trials
+  Eigen::Matrix3d sum_ppt_;
   Eigen::Matrix<double, 6, 6> plane_var_;
   float radius_ = 0;
   float min_eigen_value_ = 1;
@@ -83,6 +96,10 @@ typedef struct VoxelPlane
   bool is_init_ = false;
   int id_ = 0;
   bool is_update_ = false;
+  // Set when accepted insertions shift the incremental statistics. plane_var_
+  // is currently recomputed (eagerly) at the next refit; the flag is kept as
+  // the hook for a future lazy refresh
+  bool cov_need_update_ = false;
   double mean_intensity_ = 0.0f;
   double intensity_std_ = 1.0f;
   // Whether batch intensity statistics have been initialized at least once
@@ -205,10 +222,12 @@ public:
   bool update_enable_;
   bool is_redundant_voxel_ = false;
   bool is_isolated_voxel_ = false;
+  const VoxelMapConfig *config_ptr_ = nullptr;  // plane-init refinement parameters (outlier distance, valid check)
 
-  VoxelOctoTree(int max_layer, int layer, int points_size_threshold, int max_points_num, float planner_threshold)
+  VoxelOctoTree(int max_layer, int layer, int points_size_threshold, int max_points_num, float planner_threshold,
+                const VoxelMapConfig *config_ptr)
       : max_layer_(max_layer), layer_(layer), points_size_threshold_(points_size_threshold), max_points_num_(max_points_num),
-        planner_threshold_(planner_threshold), is_redundant_voxel_(false), is_isolated_voxel_(false)
+        planner_threshold_(planner_threshold), is_redundant_voxel_(false), is_isolated_voxel_(false), config_ptr_(config_ptr)
   {
     temp_points_.clear();
     octo_state_ = 0;
@@ -233,9 +252,18 @@ public:
     delete plane_ptr_;
     plane_ptr_ = nullptr;
   }
-  void init_plane(const std::vector<pointWithVar> &points, VoxelPlane *plane);
+  void init_plane(std::vector<pointWithVar> &points, VoxelPlane *plane);
   void init_octo_tree();
   void cut_octo_tree();
+  // R-VoxelMap check_and_update: O(1) rank-1 trial — accept the point only if
+  // the min eigenvalue of the augmented covariance stays below the planarity
+  // threshold; on acceptance the incremental statistics are updated in place
+  bool check_and_update(const pointWithVar &pv);
+  // Coplanar-disjoint-surface guard (ported from R-VoxelMap): prune points to
+  // the largest 4-connected cluster of the plane-projected 2D grid. Returns
+  // false when even the largest cluster is too small to trust the plane
+  bool plane_valid_check(std::vector<pointWithVar> &points, const Eigen::Vector3d &center,
+                         const Eigen::Vector3d &x_normal, const Eigen::Vector3d &y_normal);
   void UpdateOctoTree(const pointWithVar &pv);
 
   VoxelOctoTree *find_correspond(Eigen::Vector3d pw);
