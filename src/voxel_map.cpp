@@ -82,9 +82,7 @@ void loadPillarVoxelConfig(ros::NodeHandle &nh, PillarVoxelConfig &config)
   nh.param<bool>("pillar_voxel/keep_redundant", config.keep_redundant_, true);
   nh.param<bool>("pillar_voxel/keep_isolated", config.keep_isolated_, false);
   nh.param<int>("pillar_voxel/adjacent_isolated_threshold", config.adjacent_isolated_threshold_, 3);
-  nh.param<int>("pillar_voxel/neighbor_type", config.redundant_neighbor_type_, 1);  // legacy alias
-  nh.param<int>("pillar_voxel/redundant_neighbor_type", config.redundant_neighbor_type_, config.redundant_neighbor_type_);
-  nh.param<int>("pillar_voxel/isolated_neighbor_type", config.isolated_neighbor_type_, 1);
+  nh.param<int>("pillar_voxel/neighbor_ring_num", config.neighbor_ring_num_, 1);
   nh.param<double>("pillar_voxel/height_consistency_ratio", config.height_consistency_ratio_, 0.25);
   nh.param<int>("pillar_voxel/min_num", config.min_num_, 5);  // redundant voxel needs > this many points, isolated needs < this
   nh.param<bool>("pillar_voxel/new_point_detect_en", config.new_point_detect_en_, false);
@@ -845,7 +843,9 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
   // std::mutex mylock;
   ptpl_list.clear();
   std::vector<PointToPlane> all_ptpl_list(pv_list.size());
-  std::vector<bool> useful_ptpl(pv_list.size());
+  // NOT vector<bool>: per-index proxy writes inside the parallel loop below
+  // would be non-atomic word-level RMW races
+  std::vector<uint8_t> useful_ptpl(pv_list.size());
   std::vector<size_t> index(pv_list.size());
 
   for (size_t i = 0; i < index.size(); ++i)
@@ -1234,48 +1234,43 @@ void PillarVoxelMap::init(const PillarVoxelConfig &config, double voxel_size)
 {
   config_ = config;
   voxel_size_ = voxel_size;
-  initHorizontalNeighborOffsets();
+  initNeighborOffsets();
 }
 
-void PillarVoxelMap::initHorizontalNeighborOffsets()
+void PillarVoxelMap::initNeighborOffsets()
 {
-  redundant_neighbor_offsets_.clear();
-  isolated_neighbor_offsets_.clear();
+  ring1_offsets_.clear();
+  ring2_offsets_.clear();
 
-  auto buildOffsets = [](int type, std::vector<VoxelLocation>& offsets) {
-    if (type == 0) {
-      // 4-neighbor: North, South, East, West
-      const std::vector<std::pair<int, int>> four_offsets = {
-        {-1, 0}, {1, 0}, {0, -1}, {0, 1}
-      };
-      offsets.reserve(4);
-      for (const auto& offset : four_offsets) {
-        VoxelLocation voxel_offset;
-        voxel_offset.x = offset.first;
-        voxel_offset.y = offset.second;
-        voxel_offset.z = 0;
-        offsets.push_back(voxel_offset);
-      }
-    } else {
-      // 8-neighbor: includes diagonals (default)
-      const std::vector<std::pair<int, int>> eight_offsets = {
-        {-1, -1}, {-1, 0}, {-1, 1},
-        {0, -1},           {0, 1},
-        {1, -1},  {1, 0},  {1, 1}
-      };
-      offsets.reserve(8);
-      for (const auto& offset : eight_offsets) {
-        VoxelLocation voxel_offset;
-        voxel_offset.x = offset.first;
-        voxel_offset.y = offset.second;
-        voxel_offset.z = 0;
-        offsets.push_back(voxel_offset);
-      }
-    }
+  auto addOffset = [](std::vector<VoxelLocation> &offsets, int dx, int dy, int dz) {
+    VoxelLocation voxel_offset;
+    voxel_offset.x = dx;
+    voxel_offset.y = dy;
+    voxel_offset.z = dz;
+    offsets.push_back(voxel_offset);
   };
 
-  buildOffsets(config_.redundant_neighbor_type_, redundant_neighbor_offsets_);
-  buildOffsets(config_.isolated_neighbor_type_, isolated_neighbor_offsets_);
+  // Ring 1: 6 face neighbors at distance exactly 1 voxel
+  addOffset(ring1_offsets_, -1, 0, 0);
+  addOffset(ring1_offsets_, 1, 0, 0);
+  addOffset(ring1_offsets_, 0, -1, 0);
+  addOffset(ring1_offsets_, 0, 1, 0);
+  addOffset(ring1_offsets_, 0, 0, -1);
+  addOffset(ring1_offsets_, 0, 0, 1);
+
+  // Ring 2: 12 edge neighbors at distance sqrt(2) voxels
+  addOffset(ring2_offsets_, -1, -1, 0);
+  addOffset(ring2_offsets_, -1, 1, 0);
+  addOffset(ring2_offsets_, 1, -1, 0);
+  addOffset(ring2_offsets_, 1, 1, 0);
+  addOffset(ring2_offsets_, -1, 0, -1);
+  addOffset(ring2_offsets_, -1, 0, 1);
+  addOffset(ring2_offsets_, 1, 0, -1);
+  addOffset(ring2_offsets_, 1, 0, 1);
+  addOffset(ring2_offsets_, 0, -1, -1);
+  addOffset(ring2_offsets_, 0, -1, 1);
+  addOffset(ring2_offsets_, 0, 1, -1);
+  addOffset(ring2_offsets_, 0, 1, 1);
 }
 
 void PillarVoxelMap::setVoxelPointLabels(PillarVoxel* voxel, int8_t label)
@@ -1306,16 +1301,21 @@ void PillarVoxelMap::updatePillarFlag(const PillarLocation &pillar_key, PillarVo
     voxel_label_count_++;
   }
 
-  // Step 2: Isolated voxel detection. Point-count gate: only sparse voxels
-  // (< config_.min_num_ points) are confirmed isolated. History: a vertical
-  // gap whose intermediate layers were occupied in the window is transient
+  // Step 2: Isolated voxel detection, expressed as adjacent-layer occupancy:
+  // the top voxel is a candidate when the layer directly below it (z - 1) is
+  // empty (key diff to the voxel below >= 2); a middle voxel when BOTH z - 1
+  // and z + 1 are empty. Point-count gate: only sparse voxels
+  // (< config_.min_num_ points) are confirmed isolated. History: a gap whose
+  // intermediate layers were occupied in the window is a transient sampling
+  // hole, not real free space
+  const int64_t bottom_key = pillar_voxels.begin()->first;
   if (pillar_voxels.size() == 2)
   {
+    const int64_t top_key = std::next(pillar_voxels.begin())->first;
     PillarVoxel* top_voxel = &std::next(pillar_voxels.begin())->second;
-    auto z_diff = top_voxel->center_z_ - bottom_voxel->center_z_;
 
-    if (z_diff >= (voxel_size_ * 2) && top_voxel->point_count_ < config_.min_num_ &&
-        !gapSeenInHistory(pillar_key, pillar_voxels.begin()->first, std::next(pillar_voxels.begin())->first)) {
+    if (top_key - bottom_key >= 2 && top_voxel->point_count_ < config_.min_num_ &&
+        !gapSeenInHistory(pillar_key, bottom_key, top_key)) {
       top_voxel->is_isolated_voxel_ = true;
       voxel_label_count_++;
     }
@@ -1323,64 +1323,81 @@ void PillarVoxelMap::updatePillarFlag(const PillarLocation &pillar_key, PillarVo
   if (pillar_voxels.size() > 2)
   {
     auto pillar_iter = std::next(pillar_voxels.begin());
-    double up_z_diff = 0;
     for (; pillar_iter != std::prev(pillar_voxels.end()); ++pillar_iter)
     {
-      double down_z_diff = pillar_iter->second.center_z_ - std::prev(pillar_iter)->second.center_z_;
-      up_z_diff = std::next(pillar_iter)->second.center_z_ - pillar_iter->second.center_z_;
+      const int64_t down_key = std::prev(pillar_iter)->first;
+      const int64_t this_key = pillar_iter->first;
+      const int64_t up_key = std::next(pillar_iter)->first;
 
-      if (down_z_diff >= (voxel_size_ * 2) && up_z_diff >= (voxel_size_ * 2) &&
+      if (this_key - down_key >= 2 && up_key - this_key >= 2 &&
           pillar_iter->second.point_count_ < config_.min_num_ &&
-          !gapSeenInHistory(pillar_key, std::prev(pillar_iter)->first, pillar_iter->first) &&
-          !gapSeenInHistory(pillar_key, pillar_iter->first, std::next(pillar_iter)->first)) {
+          !gapSeenInHistory(pillar_key, down_key, this_key) &&
+          !gapSeenInHistory(pillar_key, this_key, up_key)) {
         pillar_iter->second.is_isolated_voxel_ = true;
         voxel_label_count_++;
       }
     }
-    if (up_z_diff >= (voxel_size_ * 2) && pillar_voxels.rbegin()->second.point_count_ < config_.min_num_ &&
-        !gapSeenInHistory(pillar_key, std::next(pillar_voxels.rbegin())->first, pillar_voxels.rbegin()->first)) {
+
+    const int64_t top_key = pillar_voxels.rbegin()->first;
+    const int64_t prev_key = std::next(pillar_voxels.rbegin())->first;
+    if (top_key - prev_key >= 2 && pillar_voxels.rbegin()->second.point_count_ < config_.min_num_ &&
+        !gapSeenInHistory(pillar_key, prev_key, top_key)) {
       pillar_voxels.rbegin()->second.is_isolated_voxel_ = true;
       voxel_label_count_++;
     }
   }
 }
 
-bool PillarVoxelMap::hasAdjacentVoxel(const VoxelLocation &current_pos, int threshold, const std::vector<VoxelLocation> &neighbor_offsets, double current_vp_z)
+// Scan one neighbor ring around current_pos: count occupied voxels whose
+// virtual point is height-consistent with the query (the gate applies to
+// dz = 0 neighbors only — dz != 0 neighbors are ungated, their layer offset
+// already bounds the height difference). Returns true as soon as
+// adjacent_count reaches threshold (early exit)
+bool PillarVoxelMap::scanNeighborRing(const VoxelLocation &current_pos, const std::vector<VoxelLocation> &offsets,
+                                      int threshold, double current_vp_z, double height_threshold, int &adjacent_count)
+{
+  for (const auto &voxel_offset : offsets)
+  {
+    VoxelLocation adjacent_pos = {
+      current_pos.x + voxel_offset.x,
+      current_pos.y + voxel_offset.y,
+      current_pos.z + voxel_offset.z
+    };
+
+    auto pillar_iter = pillars_.find(GetPillarLocation(adjacent_pos));
+    if (pillar_iter == pillars_.end() || pillar_iter->second.empty()) continue;
+
+    // Pillar voxel array is sorted by z key: binary search for the target layer
+    const PillarVoxelArray &voxels = pillar_iter->second;
+    auto voxel_iter = std::lower_bound(voxels.begin(), voxels.end(), adjacent_pos.z,
+        [](const std::pair<int64_t, PillarVoxel> &entry, int64_t z) { return entry.first < z; });
+    if (voxel_iter == voxels.end() || voxel_iter->first != adjacent_pos.z) continue;
+
+    if (voxel_offset.z == 0 &&
+        std::abs(voxel_iter->second.virtual_point_.z() - current_vp_z) > height_threshold) continue;
+
+    if (++adjacent_count >= threshold) return true;
+  }
+  return false;
+}
+
+// Ring-ordered 3D neighborhood test: ring 1 = 6 face neighbors at distance
+// exactly 1 voxel, ring 2 = 12 edge neighbors at distance sqrt(2). Ring 1 is
+// probed first; the threshold early-exits inside either ring
+bool PillarVoxelMap::hasAdjacentVoxel(const VoxelLocation &current_pos, int threshold, double current_vp_z)
 {
   if (threshold <= 0) {
     return false;
   }
 
+  const double height_threshold = voxel_size_ * config_.height_consistency_ratio_;
   int adjacent_count = 0;
-  int64_t current_z = current_pos.z;
-  double height_threshold = voxel_size_ * config_.height_consistency_ratio_;
-
-  for (const auto& voxel_offset : neighbor_offsets) {
-    VoxelLocation adjacent_pos = {
-      current_pos.x + voxel_offset.x,
-      current_pos.y + voxel_offset.y,
-      current_pos.z
-    };
-
-    PillarLocation adjacent_pillar = GetPillarLocation(adjacent_pos);
-
-    auto pillar_iter = pillars_.find(adjacent_pillar);
-    if (pillar_iter != pillars_.end() && !pillar_iter->second.empty()) {
-      // Pillar voxel array is sorted by z key: binary search for the same layer
-      const PillarVoxelArray &voxels = pillar_iter->second;
-      auto voxel_iter = std::lower_bound(voxels.begin(), voxels.end(), current_z,
-          [](const std::pair<int64_t, PillarVoxel> &entry, int64_t z) { return entry.first < z; });
-      if (voxel_iter != voxels.end() && voxel_iter->first == current_z) {
-        if (std::abs(voxel_iter->second.virtual_point_.z() - current_vp_z) <= height_threshold) {
-          adjacent_count++;
-          if (adjacent_count >= threshold) {
-            return true;
-          }
-        }
-      }
-    }
+  if (scanNeighborRing(current_pos, ring1_offsets_, threshold, current_vp_z, height_threshold, adjacent_count)) {
+    return true;
   }
-
+  if (config_.neighbor_ring_num_ >= 2) {
+    return scanNeighborRing(current_pos, ring2_offsets_, threshold, current_vp_z, height_threshold, adjacent_count);
+  }
   return false;
 }
 
@@ -1475,8 +1492,7 @@ void PillarVoxelMap::DetectNewPoints()
       if (adjacent_threshold > 0)
       {
         const VoxelLocation voxel_pos = {pillar_entry.first.axis1, pillar_entry.first.axis2, voxel_entry.first};
-        if (hasAdjacentVoxel(voxel_pos, adjacent_threshold, isolated_neighbor_offsets_,
-                             voxel_entry.second.virtual_point_.z()))
+        if (hasAdjacentVoxel(voxel_pos, adjacent_threshold, voxel_entry.second.virtual_point_.z()))
           continue;
       }
 
@@ -1719,13 +1735,13 @@ void PillarVoxelMap::pillarDetection()
       voxel_loc.z = voxel_iter->first;
 
       if (voxel_iter->second.is_redundant_voxel_) {
-        bool has_adjacent_redundant = hasAdjacentVoxel(voxel_loc, config_.adjacent_redundant_threshold_, redundant_neighbor_offsets_, voxel_iter->second.virtual_point_.z());
+        bool has_adjacent_redundant = hasAdjacentVoxel(voxel_loc, config_.adjacent_redundant_threshold_, voxel_iter->second.virtual_point_.z());
         if (!has_adjacent_redundant) {
           voxel_iter->second.is_redundant_voxel_ = false;
         }
       }
       if (voxel_iter->second.is_isolated_voxel_) {
-        bool has_adjacent_isolated = hasAdjacentVoxel(voxel_loc, config_.adjacent_isolated_threshold_, isolated_neighbor_offsets_, voxel_iter->second.virtual_point_.z());
+        bool has_adjacent_isolated = hasAdjacentVoxel(voxel_loc, config_.adjacent_isolated_threshold_, voxel_iter->second.virtual_point_.z());
         if (has_adjacent_isolated) {
           voxel_iter->second.is_isolated_voxel_ = false;
         }
@@ -1970,7 +1986,7 @@ void VoxelMapManager::ClearPillarVoxels()
 // Returns the number of removed points.
 size_t PillarVoxelMap::removeFlaggedPoints(const PointCloudXYZI::Ptr &body_cloud,
                                            const PointCloudXYZI::Ptr &world_cloud,
-                                           std::vector<bool> &skip_flags)
+                                           std::vector<uint8_t> &skip_flags)
 {
   const size_t n = std::min(world_cloud->points.size(), skip_flags.size());
 

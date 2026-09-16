@@ -106,9 +106,9 @@ taskset -c 16-31 bash -c 'source /opt/ros/noetic/setup.bash && catkin_make -C /h
 - **Purpose**: Redundant point detection and isolated point identification using vertical pillar voxels
 - **Key Functions** (all sequential, no parallelization):
   1. `BuildPillarMap()`: Organize point cloud into pillar voxels — flat `unordered_map<PillarLocation, vector<pair<z, PillarVoxel>>>`, each pillar's array sorted by z (voxel_map.cpp)
-  2. `DetectNewPoints()`: Flag points whose pillar voxel was unseen in the last `history_frame_num` frames into `point_is_new_` (candidates additionally need fewer occupied same-layer consistent neighbors than `adjacent_new_point_threshold`, 0=off) and set `is_new_voxel_` per voxel (independent of `point_labels_`); the first n frames only accumulate history (output starts at frame n+1); no-op unless `new_point_detect_en` (voxel_map.cpp)
+  2. `DetectNewPoints()`: Flag points whose pillar voxel was unseen in the last `history_frame_num` frames into `point_is_new_` (candidates additionally need fewer occupied ring neighbors than `adjacent_new_point_threshold`, 0=off; dz=0 ring neighbors are height-gated) and set `is_new_voxel_` per voxel (independent of `point_labels_`); the first n frames only accumulate history (output starts at frame n+1); no-op unless `new_point_detect_en` (voxel_map.cpp)
   3. `UpdateHistory()`: Advance the n-frame occupancy window by one frame (insert current frame's keys, evict beyond n, erase zero-count keys) — runs every frame regardless of `new_point_detect_en`, feeding both new-point detection and the history-aware redundant/isolated checks (voxel_map.cpp)
-  4. `pillarDetection()`: Three sequential steps — initial per-pillar flags (history-aware: redundant needs no above voxel seen in the window; isolated gaps must have no intermediate layer seen in the window) → horizontal adjacency check (with height consistency) → point label assignment; early-exits when Step 1 flags nothing
+  4. `pillarDetection()`: Three sequential steps — initial per-pillar flags (history-aware: redundant needs no above voxel seen in the window; isolated gaps must have no intermediate layer seen in the window) → ring-based 3D adjacency check (ring 1: 6 face neighbors at 1 voxel; ring 2: 12 edge neighbors at √2, probed only if ring 1 is insufficient; dz=0 neighbors height-gated) → point label assignment; early-exits when Step 1 flags nothing
   5. `DefineSkipPoints()`: Apply skip filter to the main point cloud (newest-n-per-voxel retention via `applyVoxelRetention()`)
   6. `PublishPillarMapCloud()`: Publish `/cloud_pillarmap` — one RGB cloud carrying redundant (purple), isolated (blue) and new (red, priority on overlap) points (skips assembly when no subscribers)
   7. `ClearPillarVoxels()`: Per-frame structure and flags cleared after each frame (the n-frame history window survives)
@@ -118,14 +118,15 @@ taskset -c 16-31 bash -c 'source /opt/ros/noetic/setup.bash && catkin_make -C /h
 - `voxel_size`: Pillar voxel resolution (default: 1.0)
 - `adjacent_redundant_threshold`: Minimum adjacent occupied voxels (same z-layer, height-consistent) to confirm a redundant voxel (0 = disable redundant detection)
 - `adjacent_isolated_threshold`: Minimum adjacent voxels to CANCEL isolation (caution: 0 skips the check entirely — opposite semantics to the redundant threshold)
-- `redundant_neighbor_type` / `isolated_neighbor_type`: 0=4-neighbor, 1=8-neighbor (`neighbor_type` is a legacy alias of the former)
+- `neighbor_type` (removed): the old 4/8-neighborhood selector was replaced by a fixed two-ring 3D neighborhood — ring 1 = 6 face neighbors at distance 1 voxel, ring 2 = 12 edge neighbors at distance √2 (probed in order, threshold early-exits)
 - `keep_num_per_voxel`: 0=skip all flagged points, n=keep the n newest points per flagged voxel (default: 0)
 - `keep_redundant` / `keep_isolated`: apply retention (true) or skip all (false), per category
 - `height_consistency_ratio`: adjacent voxels count as neighbors only if virtual-point heights differ by ≤ ratio × voxel_size (default: 0.25)
 - `new_point_detect_en`: Mark points entering pillar voxels unseen in the last n frames and publish them on `/cloud_pillarmap` (default: false)
 - `history_frame_num`: History reference frame count n; new-point detection starts at frame n+1, and the window also feeds the redundant/isolated vertical-continuity checks (n<=0: no reference kept, every point new; default: 10)
 - `keep_new_point`: Apply retention (true) or skip all (false) for new points, same semantics as `keep_redundant`/`keep_isolated` (default: true)
-- `adjacent_new_point_threshold`: Candidate new voxel confirmed only if occupied same-layer consistent neighbors < this (0 = check off; default: 0)
+- `adjacent_new_point_threshold`: Candidate new voxel confirmed only if occupied ring neighbors < this (0 = check off; default: 0)
+- `neighbor_ring_num`: Max ring probed by the adjacency check — 1 = ring 1 only (6 face neighbors at distance 1 voxel), 2 = ring 1 + ring 2 (12 edge neighbors, all neighbors ≤ √2 voxels) (default: 1)
 - `new_point_cluster_en`: Cluster candidate new points (Euclidean, tolerance = `voxel_size`); scattered singletons are downgraded to normal (default: false)
 - `new_point_cluster_min_num`: Min points per cluster to confirm as new (default: 5)
 - `new_point_flat_filter_en`: Reject clusters fitting in a thin slab along any coordinate axis (default: false)
@@ -244,7 +245,7 @@ Uncomment and add to `<node>` tag:
 - `pillar_voxel/voxel_size`: Pillar voxel resolution (default: 1.0)
 - `pillar_voxel/adjacent_redundant_threshold`: Minimum adjacent redundant voxels
 - `pillar_voxel/adjacent_isolated_threshold`: Minimum adjacent voxels for isolation
-- `pillar_voxel/redundant_neighbor_type` / `pillar_voxel/isolated_neighbor_type`: 0=4-neighbor, 1=8-neighbor
+- `pillar_voxel/neighbor_type` (removed): superseded by the fixed two-ring neighborhood (see above)
 - `pillar_voxel/keep_num_per_voxel`: 0=skip all flagged points, n=keep n newest per voxel
 - `pillar_voxel/keep_redundant` / `pillar_voxel/keep_isolated`: retention toggles per category
 - `pillar_voxel/height_consistency_ratio`: Height tolerance as ratio of voxel_size (default: 0.25)
@@ -402,11 +403,11 @@ struct Point {
 The pillar voxel system operates independently of the main voxel map:
 1. **Input**: Downsampled world point cloud (`feats_down_world`)
 2. **Pillar Organization**: Points grouped by (x,y) pillar, vertical voxels by z; per-pillar voxel arrays sorted by z; each voxel keeps point indices and a running-average virtual point
-3. **New Point Detection** (`DetectNewPoints()`, no-op unless `new_point_detect_en`): points whose pillar voxel key (PillarLocation + z layer) is absent from the n-frame history window get `point_is_new_[i] = 1`, provided the voxel also has fewer occupied same-layer consistent neighbors than `adjacent_new_point_threshold` (0 = off); the first n frames only accumulate the window (output starts at frame n+1); runs BEFORE `UpdateHistory()` so the window is the last n previous frames; independent of `point_labels_` — deletion/retention goes through `DefineSkipPoints()` per `keep_new_point`. With `new_point_cluster_en`, a final clustering pass (`confirmClusteredNewPoints`, M-detector-style) requires candidates to form a Euclidean cluster of >= `new_point_cluster_min_num` points (tolerance = `voxel_size`) — scattered quantization-hop false positives are downgraded to normal points; with `new_point_flat_filter_en`, clusters fitting in a thin slab along any coordinate axis (per-axis extent < `new_point_flat_band`, e.g. constant-height layers) are rejected as well — with the filter on only 3D blobs survive
+3. **New Point Detection** (`DetectNewPoints()`, no-op unless `new_point_detect_en`): points whose pillar voxel key (PillarLocation + z layer) is absent from the n-frame history window get `point_is_new_[i] = 1`, provided the voxel also has fewer occupied ring neighbors than `adjacent_new_point_threshold` (0 = off); the first n frames only accumulate the window (output starts at frame n+1); runs BEFORE `UpdateHistory()` so the window is the last n previous frames; independent of `point_labels_` — deletion/retention goes through `DefineSkipPoints()` per `keep_new_point`. With `new_point_cluster_en`, a final clustering pass (`confirmClusteredNewPoints`, M-detector-style) requires candidates to form a Euclidean cluster of >= `new_point_cluster_min_num` points (tolerance = `voxel_size`) — scattered quantization-hop false positives are downgraded to normal points; with `new_point_flat_filter_en`, clusters fitting in a thin slab along any coordinate axis (per-axis extent < `new_point_flat_band`, e.g. constant-height layers) are rejected as well — with the filter on only 3D blobs survive
 4. **History Update** (`UpdateHistory()`, every frame when the pillar map is on): the current frame's occupied voxel keys join the n-frame window (oldest evicted, zero-count keys erased); shared by new-point detection and the redundant/isolated vertical-continuity checks
 5. **Detection** (`pillarDetection()`, three steps, history-aware):
    - Step 1: per-pillar flags — the bottom voxel without a close voxel above (< 2·voxel_size) in the current frame OR the window is a redundant candidate (confirmed only if it holds > `min_num` points); a voxel with ≥ 2·voxel_size gaps to both vertical neighbors is an isolated candidate (confirmed only if it holds < `min_num` points AND no intermediate z layer was seen in the window — transient sampling holes don't count as gaps); early-exit when nothing is flagged
-   - Step 2: horizontal adjacency check — redundant candidates need ≥ `adjacent_redundant_threshold` occupied neighbor voxels in the same z-layer with consistent height (≤ `height_consistency_ratio`·voxel_size); isolated candidates with ≥ `adjacent_isolated_threshold` such neighbors are cancelled
+   - Step 2: ring-based 3D adjacency check — redundant candidates need ≥ `adjacent_redundant_threshold` occupied ring neighbors (ring 1: 6 face neighbors at distance 1 voxel; ring 2: 12 edge neighbors at distance √2, probed only if `neighbor_ring_num` ≥ 2 and ring 1 is insufficient); isolated candidates with ≥ `adjacent_isolated_threshold` such neighbors are cancelled; dz=0 neighbors require height consistency (≤ `height_consistency_ratio`·voxel_size), dz≠0 neighbors are ungated
    - Step 3: assign per-point labels (LABEL_REDUNDANT / LABEL_ISOLATED)
 6. **Skip Point Definition** (`DefineSkipPoints()`):
    - Isolated points: subject to `keep_isolated`/`keep_num_per_voxel` retention
@@ -416,7 +417,7 @@ The pillar voxel system operates independently of the main voxel map:
 8. **Cleanup**: Per-frame pillar voxels and `point_is_new_` cleared after each frame; the n-frame history window (`history_frames_`/`history_counts_`) is the only pillar state that persists
 
 **Important Implementation Notes:**
-- Pillar voxel functions are **sequential only** - no parallelization (do not add OpenMP)
+- Pillar voxel functions are **sequential only** - no parallelization (do not add OpenMP). Parallelizing them was tried and reverted: at typical downsampled cloud sizes (~1 ms pillar block) OpenMP fork/join overhead exceeds the compute saved. If revisiting, note per-index flag containers must stay byte-typed (`uint8_t`/`int8_t`) — `vector<bool>` proxy writes are non-atomic word-level RMW and race (this is also why `useful_ptpl`/`skip_list_` are `uint8_t` despite `BuildResidualListOMP` being parallel)
 - Flagged points are **deleted from the frame outright** in the pillar block of
   `handleLIO` (`PillarVoxelMap::removeFlaggedPoints` compacts the index-aligned
   `feats_down_body`/`feats_down_world` together and clears `skip_list_`): they

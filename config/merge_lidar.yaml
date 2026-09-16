@@ -51,11 +51,11 @@ pillar_voxel:
   pillar_voxel_en: false
   voxel_size: 0.5
 
-  redundant_neighbor_type: 0  # 0=4-neighbor, 1=8-neighbor
   adjacent_redundant_threshold: 4
 
-  isolated_neighbor_type: 1  # 0=4-neighbor, 1=8-neighbor
   adjacent_isolated_threshold: 2
+
+  neighbor_ring_num: 1  # max ring probed: 1=6 face neighbors (distance 1 voxel), 2=+12 edge neighbors (all neighbors <= sqrt(2))
 
   height_consistency_ratio: 0.25  # ratio of voxel_size for height consistency check
 

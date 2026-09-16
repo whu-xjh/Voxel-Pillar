@@ -298,10 +298,9 @@ typedef struct PillarVoxelConfig
   bool keep_redundant_;      // true=apply keep_num_per_voxel to redundant voxels, false=skip all
   bool keep_isolated_;       // true=apply keep_num_per_voxel to isolated voxels, false=skip all
   int adjacent_isolated_threshold_;
+  int neighbor_ring_num_;        // max ring probed by hasAdjacentVoxel: 1 = ring 1 only (6 face neighbors at distance 1), 2 = + ring 2 (12 edge neighbors, all neighbors <= sqrt(2)) (default: 1)
   int min_num_;                  // redundant voxel needs point_count_ > this, isolated voxel needs < this (default: 5)
-  int redundant_neighbor_type_;     // 0=4-neighbor, 1=8-neighbor (for redundant detection)
-  int isolated_neighbor_type_;   // 0=4-neighbor, 1=8-neighbor (for isolated detection)
-  double height_consistency_ratio_;  // ratio of voxel_size for height consistency check (default: 0.25)
+  double height_consistency_ratio_;  // ratio of voxel_size for the height-consistency gate on dz=0 neighbors (default: 0.25)
   bool new_point_detect_en_;     // mark points whose pillar voxel was unseen in the last n frames (default: false)
   int history_frame_num_;        // history reference frame count n; detection starts at frame n+1 (n<=0: no reference kept, every point new)
   bool keep_new_point_;          // true=apply keep_num_per_voxel retention to new voxels, false=skip all new points
@@ -313,8 +312,7 @@ typedef struct PillarVoxelConfig
 
   PillarVoxelConfig() : pillar_voxel_en_(false), voxel_size_(1.0), adjacent_redundant_threshold_(3),
                        keep_num_per_voxel_(0), keep_redundant_(true), keep_isolated_(false),
-                       adjacent_isolated_threshold_(3), min_num_(5),
-                       redundant_neighbor_type_(1), isolated_neighbor_type_(1),
+                       adjacent_isolated_threshold_(3), neighbor_ring_num_(1), min_num_(5),
                        height_consistency_ratio_(0.25), new_point_detect_en_(false), history_frame_num_(10),
                        keep_new_point_(true), adjacent_new_point_threshold_(0),
                        new_point_cluster_en_(false), new_point_cluster_min_num_(5),
@@ -336,8 +334,11 @@ public:
   PillarVoxelConfig config_;
   double voxel_size_;
   std::unordered_map<PillarLocation, PillarVoxelArray> pillars_;
-  std::vector<VoxelLocation> redundant_neighbor_offsets_;
-  std::vector<VoxelLocation> isolated_neighbor_offsets_;
+  // Two-ring 3D neighborhood (fixed geometry): ring 1 = 6 face neighbors at
+  // distance 1; ring 2 = 12 edge neighbors at distance sqrt(2). Ring 1 is
+  // always probed first, ring 2 only when the threshold is not yet met
+  std::vector<VoxelLocation> ring1_offsets_;
+  std::vector<VoxelLocation> ring2_offsets_;
 
   std::vector<int8_t> point_labels_;
   PointCloudXYZI::Ptr point_cloud_ptr_;
@@ -371,7 +372,7 @@ public:
   void UpdateHistory();
   void pillarDetection();
   size_t removeFlaggedPoints(const PointCloudXYZI::Ptr &body_cloud, const PointCloudXYZI::Ptr &world_cloud,
-                             std::vector<bool> &skip_flags);
+                             std::vector<uint8_t> &skip_flags);
   // Unified pillar map output: redundant (purple), isolated (blue) and new
   // (red, priority on overlap) points in one RGB cloud
   void PublishPillarMapCloud(const ros::Publisher &pub);
@@ -386,16 +387,21 @@ public:
 
 private:
   void setVoxelPointLabels(PillarVoxel* voxel, int8_t label);
-  void initHorizontalNeighborOffsets();
+  void initNeighborOffsets();
   PillarLocation GetPillarLocation(const VoxelLocation &position) const;
   void updatePillarFlag(const PillarLocation &pillar_key, PillarVoxelArray &pillar_voxels);
+  // Scan one neighbor ring (offsets of a 3D window around current_pos): count
+  // occupied voxels, gating dz=0 neighbors with the height-consistency test.
+  // Returns true as soon as adjacent_count reaches threshold (early exit)
+  bool scanNeighborRing(const VoxelLocation &current_pos, const std::vector<VoxelLocation> &offsets,
+                        int threshold, double current_vp_z, double height_threshold, int &adjacent_count);
+  bool hasAdjacentVoxel(const VoxelLocation &current_pos, int threshold, double current_vp_z);
   // History-window occupancy oracle: was (pillar, z) occupied in any of the
   // last history_frame_num frames?
   bool seenInHistory(const PillarLocation &pillar, int64_t z_key) const;
   // True when any z layer strictly between low_key and high_key was occupied
   // within the history window (vertical gap is a transient sampling hole)
   bool gapSeenInHistory(const PillarLocation &pillar, int64_t low_key, int64_t high_key) const;
-  bool hasAdjacentVoxel(const VoxelLocation &current_pos, int threshold, const std::vector<VoxelLocation> &neighbor_offsets, double current_vp_z);
   // Clustering confirmation for candidate new points: candidates must form a
   // cluster of >= new_point_cluster_min_num points to stay flagged. Scattered
   // candidates (quantization hops of static surfaces near voxel boundaries)
@@ -441,7 +447,9 @@ public:
   std::vector<M3D> body_cov_list_;
   std::vector<pointWithVar> pv_list_;
   std::vector<PointToPlane> ptpl_list_;
-  std::vector<bool> skip_list_;
+  // NOT vector<bool>: its bit-packed proxy writes are non-atomic read-modify-
+  // write on the whole word, which races with the parallel skip passes
+  std::vector<uint8_t> skip_list_;
 
   // Skip point statistics
   int current_skip_count_ = 0;
