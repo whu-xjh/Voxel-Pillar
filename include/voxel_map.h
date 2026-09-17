@@ -327,6 +327,8 @@ typedef struct PillarMapConfig
   bool keep_isolated_;       // true=apply keep_num_per_voxel to isolated voxels, false=skip all
   int adjacent_isolated_threshold_;
   int neighbor_ring_num_;        // max ring probed by hasAdjacentVoxel: 1 = ring 1 only (6 face neighbors at distance 1), 2 = + ring 2 (12 edge neighbors, all neighbors <= sqrt(2)) (default: 1)
+  bool dyn_bridge_en_;           // cross-frame dynamic-point bridge buffer: intermittently detected targets stay visible (default: false)
+  int dyn_bridge_max_age_;       // frames a buffer voxel stays published after its last detection (default: 3)
   int min_num_;                  // redundant voxel needs point_count_ > this, isolated voxel needs < this (default: 5)
   double height_consistency_ratio_;  // ratio of voxel_size for the height-consistency gate on dz=0 neighbors (default: 0.25)
   bool new_point_detect_en_;     // mark points whose pillar voxel was unseen in the last n frames (default: false)
@@ -340,7 +342,8 @@ typedef struct PillarMapConfig
 
   PillarMapConfig() : pillar_map_en_(false), voxel_size_(1.0), adjacent_redundant_threshold_(3),
                        keep_num_per_voxel_(0), keep_redundant_(true), keep_isolated_(false),
-                       adjacent_isolated_threshold_(3), neighbor_ring_num_(1), min_num_(5),
+                       adjacent_isolated_threshold_(3), neighbor_ring_num_(1),
+                       dyn_bridge_en_(false), dyn_bridge_max_age_(3), min_num_(5),
                        height_consistency_ratio_(0.25), new_point_detect_en_(false), history_frame_num_(10),
                        keep_new_point_(true), adjacent_new_point_threshold_(0),
                        new_point_cluster_en_(false), new_point_cluster_min_num_(5),
@@ -394,6 +397,20 @@ public:
   // accumulate the history window)
   size_t history_frame_count_ = 0;
 
+  // --- Dynamic-point bridge buffer (M-Detector umap-style) ---
+  // Confirmed new-point voxels persist across frames so intermittently
+  // detected targets stay visible: buffer components containing a voxel
+  // confirmed THIS frame re-publish their stale neighbors (display-only,
+  // red); voxels stale beyond dyn_bridge_max_age_ frames are dropped.
+  // Survives ClearPillarMapVoxels()
+  struct DynVoxelEntry
+  {
+    std::vector<Eigen::Vector3d> points;  // world-frame points stored at last detection
+    int last_frame = 0;
+  };
+  std::unordered_map<PillarMapKey, DynVoxelEntry> dyn_buffer_;
+  int dyn_bridge_frame_ = 0;  // frame stamp of the current detection pass
+
   void init(const PillarMapConfig &config, double voxel_size);
   void BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud);
   void DetectNewPoints();
@@ -430,6 +447,12 @@ private:
   // True when any z layer strictly between low_key and high_key was occupied
   // within the history window (vertical gap is a transient sampling hole)
   bool gapSeenInHistory(const PillarLocation &pillar, int64_t low_key, int64_t high_key) const;
+  // Cross-frame bridge: insert this frame's confirmed voxels into dyn_buffer_,
+  // advance the frame stamp, prune voxels stale beyond dyn_bridge_max_age_
+  void dyn_bridge_insert();
+  // Collect the stored points of stale-but-live buffer components (components
+  // containing a voxel confirmed this frame) for display-only publication
+  std::vector<Eigen::Vector3d> dyn_bridge_collect();
   // Clustering confirmation for candidate new points: candidates must form a
   // cluster of >= new_point_cluster_min_num points to stay flagged. Scattered
   // candidates (quantization hops of static surfaces near voxel boundaries)

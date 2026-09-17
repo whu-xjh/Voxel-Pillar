@@ -135,8 +135,8 @@ behavior — no distance filter, no valid check, no check_and_update:
   3. `UpdateHistory()`: Advance the n-frame occupancy window by one frame (insert current frame's keys, evict beyond n, erase zero-count keys) — runs every frame regardless of `new_point_detect_en`, feeding both new-point detection and the history-aware redundant/isolated checks (voxel_map.cpp)
   4. `pillarDetection()`: Three sequential steps — initial per-pillar flags (history-aware: redundant needs no above voxel seen in the window; isolated gaps must have no intermediate layer seen in the window) → ring-based 3D adjacency check (ring 1: 6 face neighbors at 1 voxel; ring 2: 12 edge neighbors at √2, probed only if ring 1 is insufficient; dz=0 neighbors height-gated) → point label assignment; early-exits when Step 1 flags nothing
   5. `DefineSkipPoints()`: Apply skip filter to the main point cloud (newest-n-per-voxel retention via `applyVoxelRetention()`)
-  6. `PublishPillarMapCloud()`: Publish `/cloud_pillarmap` — one RGB cloud carrying redundant (purple), isolated (blue) and new (red, priority on overlap) points (skips assembly when no subscribers)
-  7. `ClearPillarMapVoxels()`: Per-frame structure and flags cleared after each frame (the n-frame history window survives)
+  6. `PublishPillarMapCloud()`: Publish `/cloud_pillarmap` — one RGB cloud carrying redundant (purple), isolated (blue) and new (red, priority on overlap) points (skips assembly when no subscribers). With `dyn_bridge_en`, appends the stale-but-live points of the cross-frame dynamic buffer (M-Detector umap-style: buffer components containing a this-frame voxel re-publish their stale neighbors) so intermittently detected targets stay visible — display-only, never re-entering the skip pipeline
+  7. `ClearPillarMapVoxels()`: Per-frame structure and flags cleared after each frame (the n-frame history window and the dynamic-point bridge buffer survive)
 
 **Configuration Parameters** (loaded by `loadPillarMapConfig`, voxel_map.cpp):
 - `pillar_map_en`: Enable/disable entire system (default: false)
@@ -152,6 +152,8 @@ behavior — no distance filter, no valid check, no check_and_update:
 - `keep_new_point`: Apply retention (true) or skip all (false) for new points, same semantics as `keep_redundant`/`keep_isolated` (default: true)
 - `adjacent_new_point_threshold`: Candidate new voxel confirmed only if occupied ring neighbors < this (0 = check off; default: 0)
 - `neighbor_ring_num`: Max ring probed by the adjacency check — 1 = ring 1 only (6 face neighbors at distance 1 voxel), 2 = ring 1 + ring 2 (12 edge neighbors, all neighbors ≤ √2 voxels) (default: 1)
+- `dyn_bridge_en`: Cross-frame dynamic-point bridge — confirmed new-point voxels enter a buffer that survives `ClearPillarMapVoxels`; buffer components containing a voxel confirmed this frame re-publish their stale neighbors (red, display-only) so intermittently detected targets stay visible; stale voxels age out after `dyn_bridge_max_age` frames. Requires `new_point_detect_en: true` (the bridge is fed by detection) (default: false)
+- `dyn_bridge_max_age`: Frames a buffer voxel stays published after its last detection (default: 3)
 - `new_point_cluster_en`: Cluster candidate new points (Euclidean, tolerance = `voxel_size`); scattered singletons are downgraded to normal (default: false)
 - `new_point_cluster_min_num`: Min points per cluster to confirm as new (default: 5)
 - `new_point_flat_filter_en`: Reject clusters fitting in a thin slab along any coordinate axis (default: false)

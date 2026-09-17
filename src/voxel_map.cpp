@@ -91,6 +91,8 @@ void loadPillarMapConfig(ros::NodeHandle &nh, PillarMapConfig &config)
   nh.param<bool>("pillar_map/keep_isolated", config.keep_isolated_, false);
   nh.param<int>("pillar_map/adjacent_isolated_threshold", config.adjacent_isolated_threshold_, 3);
   nh.param<int>("pillar_map/neighbor_ring_num", config.neighbor_ring_num_, 1);
+  nh.param<bool>("pillar_map/dyn_bridge_en", config.dyn_bridge_en_, false);
+  nh.param<int>("pillar_map/dyn_bridge_max_age", config.dyn_bridge_max_age_, 3);
   nh.param<double>("pillar_map/height_consistency_ratio", config.height_consistency_ratio_, 0.25);
   nh.param<int>("pillar_map/min_num", config.min_num_, 5);  // redundant voxel needs > this many points, isolated needs < this
   nh.param<bool>("pillar_map/new_point_detect_en", config.new_point_detect_en_, false);
@@ -1737,6 +1739,14 @@ void PillarMap::DetectNewPoints()
   // candidates that fail to form a cluster are downgraded to normal before
   // anything downstream (publishing, keep_new_point) sees them
   if (config_.new_point_cluster_en_) confirmClusteredNewPoints();
+
+  // Cross-frame dynamic-point bridge: confirmed voxels enter dyn_buffer_ so
+  // their components keep being published on frames where detection is
+  // missed. The frame stamp advances and aged voxels are pruned EVERY frame
+  // (even with zero detections) so stale targets expire correctly.
+  // NOTE: placed after the new_point_detect_en_ gate — the bridge is fed by
+  // detection, so new_point_detect_en must be on for it to do anything
+  if (config_.dyn_bridge_en_) dyn_bridge_insert();
 }
 
 // Advance the n-frame occupancy window by one frame: collect this frame's
@@ -1746,6 +1756,107 @@ void PillarMap::DetectNewPoints()
 // the same history. Must run AFTER DetectNewPoints() (whose check must see
 // the window WITHOUT the current frame) and BEFORE pillarDetection() (whose
 // vertical-continuity checks may include it)
+// Cross-frame dynamic-point bridge (M-Detector umap-style): confirmed voxels
+// enter dyn_buffer_ so their components keep being published on frames where
+// detection is missed. The frame stamp advances and aged voxels are pruned
+// every frame (even with zero detections) so stale targets expire correctly
+void PillarMap::dyn_bridge_insert()
+{
+  dyn_bridge_frame_ = static_cast<int>(history_frame_count_);
+
+  for (auto &pillar_entry : pillars_)
+  {
+    for (auto &voxel_entry : pillar_entry.second)
+    {
+      if (!voxel_entry.second.is_new_voxel_) continue;
+      auto &entry = dyn_buffer_[PillarMapKey(pillar_entry.first, voxel_entry.first)];
+      entry.points.clear();  // re-confirmed voxel: replace with this frame's points
+      for (const size_t idx : voxel_entry.second.point_indices_)
+      {
+        const auto &pt = point_cloud_ptr_->points[idx];
+        entry.points.emplace_back(pt.x, pt.y, pt.z);
+      }
+      entry.last_frame = dyn_bridge_frame_;
+    }
+  }
+
+  for (auto it = dyn_buffer_.begin(); it != dyn_buffer_.end();)
+  {
+    if (dyn_bridge_frame_ - it->second.last_frame > config_.dyn_bridge_max_age_)
+      it = dyn_buffer_.erase(it);
+    else
+      ++it;
+  }
+}
+
+// Collect the stored points of stale-but-live buffer components: components
+// containing a voxel confirmed THIS frame re-publish their stale neighbors
+// (display-only red points; never re-enter the skip pipeline). Returns the
+// world-frame points to append to /cloud_pillarmap
+std::vector<Eigen::Vector3d> PillarMap::dyn_bridge_collect()
+{
+  std::vector<Eigen::Vector3d> out;
+  if (dyn_buffer_.empty()) return out;
+
+  // index the buffer, then label connected components over 26-adjacency
+  std::unordered_map<PillarMapKey, size_t> key_to_idx;
+  std::vector<const PillarMapKey *> keys;
+  keys.reserve(dyn_buffer_.size());
+  for (const auto &entry : dyn_buffer_)
+  {
+    key_to_idx.emplace(entry.first, keys.size());
+    keys.push_back(&entry.first);
+  }
+
+  std::vector<int> comp_id(keys.size(), -1);
+  int num_comp = 0;
+  std::vector<size_t> stack;
+  for (size_t s = 0; s < keys.size(); ++s)
+  {
+    if (comp_id[s] >= 0) continue;
+    comp_id[s] = num_comp;
+    stack.push_back(s);
+    while (!stack.empty())
+    {
+      const size_t cur = stack.back();
+      stack.pop_back();
+      const PillarMapKey &ck = *keys[cur];
+      for (int dx = -1; dx <= 1; ++dx)
+      {
+        for (int dy = -1; dy <= 1; ++dy)
+        {
+          for (int dz = -1; dz <= 1; ++dz)
+          {
+            if (!dx && !dy && !dz) continue;
+            auto it = key_to_idx.find(PillarMapKey(PillarLocation(ck.pillar.axis1 + dx, ck.pillar.axis2 + dy), ck.z + dz));
+            if (it == key_to_idx.end() || comp_id[it->second] >= 0) continue;
+            comp_id[it->second] = num_comp;
+            stack.push_back(it->second);
+          }
+        }
+      }
+    }
+    ++num_comp;
+  }
+
+  // a component is live when any of its voxels was confirmed this frame
+  std::vector<char> comp_live(num_comp, 0);
+  for (size_t i = 0; i < keys.size(); ++i)
+  {
+    if (dyn_buffer_.at(*keys[i]).last_frame == dyn_bridge_frame_) comp_live[comp_id[i]] = 1;
+  }
+
+  // stale points of live components are the bridge output
+  for (size_t i = 0; i < keys.size(); ++i)
+  {
+    if (!comp_live[comp_id[i]]) continue;
+    const auto &entry = dyn_buffer_.at(*keys[i]);
+    if (entry.last_frame == dyn_bridge_frame_) continue;  // fresh: already published
+    for (const auto &p : entry.points) out.push_back(p);
+  }
+  return out;
+}
+
 void PillarMap::UpdateHistory()
 {
   history_frame_count_++;
@@ -2179,6 +2290,24 @@ void PillarMap::PublishPillarMapCloud(const ros::Publisher &pub)
     else if (point_labels_[i] == LABEL_ISOLATED) { p.r = 0;   p.g = 0; p.b = 255; }  // isolated: blue
     else                                         { p.r = 255; p.g = 0; p.b = 255; }  // redundant: purple
     pillar_cloud.points.push_back(p);
+  }
+
+  // Dynamic-point bridge (M-Detector umap-style): stale-but-live buffer
+  // components keep intermittently detected targets visible. Display-only,
+  // red — bridged points never re-enter the skip pipeline
+  if (config_.dyn_bridge_en_)
+  {
+    for (const auto &p : dyn_bridge_collect())
+    {
+      pcl::PointXYZRGB q;
+      q.x = p(0);
+      q.y = p(1);
+      q.z = p(2);
+      q.r = 255;
+      q.g = 0;
+      q.b = 0;
+      pillar_cloud.points.push_back(q);
+    }
   }
 
   if (pillar_cloud.points.empty()) return;
