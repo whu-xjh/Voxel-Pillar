@@ -56,6 +56,13 @@ typedef struct VoxelMapConfig
   bool intensity_fusion_en_;
   bool intensity_gate_en_;
   double intensity_gate_k_;
+  double intensity_fusion_weight_;  // intensity weight in the joint association score (0.5 = equal trust; default: 0.8)
+
+  // Degeneracy-adaptive intensity fusion (requires intensity_fusion_en)
+  bool degeneracy_adaptive_en_;      // engage intensity fusion only in degenerate scenes (default: false)
+  double degeneracy_on_threshold_;   // enter degenerate mode when λ_min/λ_max < this (default: 0.1)
+  double degeneracy_off_threshold_;  // exit hysteresis threshold; must be > on (default: 0.2)
+  int degeneracy_min_frames_;        // consecutive frames to switch state (debounce; default: 2)
 
 } VoxelMapConfig;
 
@@ -331,23 +338,24 @@ typedef struct PillarMapConfig
   int dyn_bridge_max_age_;       // frames a buffer voxel stays published after its last detection (default: 3)
   int min_num_;                  // redundant voxel needs point_count_ > this, isolated voxel needs < this (default: 5)
   double height_consistency_ratio_;  // ratio of voxel_size for the height-consistency gate on dz=0 neighbors (default: 0.25)
-  bool new_point_detect_en_;     // mark points whose pillar voxel was unseen in the last n frames (default: false)
+  bool dyn_detect_en_;     // mark points whose pillar voxel was unseen in the last n frames (default: false)
   int history_frame_num_;        // history reference frame count n; detection starts at frame n+1 (n<=0: no reference kept, every point new)
-  bool keep_new_point_;          // true=apply keep_num_per_voxel retention to new voxels, false=skip all new points
-  int adjacent_new_point_threshold_;  // candidate new voxel confirmed only if occupied same-layer neighbors < this (0=check off)
-  bool new_point_cluster_en_;    // cluster candidate new points, keep only valid clusters (default: false)
-  int new_point_cluster_min_num_;  // min points per cluster to confirm as new (default: 5)
-  bool new_point_flat_filter_en_;  // reject clusters fitting in a thin slab along any axis (default: false)
-  double new_point_flat_band_;     // max per-axis extent for a cluster to count as flat (default: 0.2; <=0: check off)
+  bool keep_dyn_;          // true=apply keep_num_per_voxel retention to new voxels, false=skip all new points
+  int adjacent_dyn_threshold_;  // candidate new voxel confirmed only if occupied same-layer neighbors < this (0=check off)
+  bool dyn_cluster_en_;    // cluster candidate new points, keep only valid clusters (default: false)
+  int dyn_cluster_min_num_;  // min points per cluster to confirm as new (default: 5)
+  bool dyn_flat_filter_en_;  // reject clusters fitting in a thin slab along any axis (default: false)
+  double dyn_flat_band_;     // max per-axis extent for a cluster to count as flat (default: 0.2; <=0: check off)
 
   PillarMapConfig() : pillar_map_en_(false), voxel_size_(1.0), adjacent_redundant_threshold_(3),
                        keep_num_per_voxel_(0), keep_redundant_(true), keep_isolated_(false),
                        adjacent_isolated_threshold_(3), neighbor_ring_num_(1),
-                       dyn_bridge_en_(false), dyn_bridge_max_age_(3), min_num_(5),
-                       height_consistency_ratio_(0.25), new_point_detect_en_(false), history_frame_num_(10),
-                       keep_new_point_(true), adjacent_new_point_threshold_(0),
-                       new_point_cluster_en_(false), new_point_cluster_min_num_(5),
-                       new_point_flat_filter_en_(false), new_point_flat_band_(0.2) {}
+                       dyn_bridge_en_(false), dyn_bridge_max_age_(3),
+                       min_num_(5),
+                       height_consistency_ratio_(0.25), dyn_detect_en_(false), history_frame_num_(10),
+                       keep_dyn_(true), adjacent_dyn_threshold_(0),
+                       dyn_cluster_en_(false), dyn_cluster_min_num_(5),
+                       dyn_flat_filter_en_(false), dyn_flat_band_(0.2) {}
 } PillarMapConfig;
 
 void loadPillarMapConfig(ros::NodeHandle &nh, PillarMapConfig &config);
@@ -389,7 +397,7 @@ public:
   std::unordered_map<PillarMapKey, int> history_counts_;
   // Per-point new flag, index-aligned with point_cloud_ptr_, reset each frame in
   // DetectNewPoints(). Kept separate from point_labels_: a point can be new AND
-  // redundant/isolated; deletion/retention is decided per keep_new_point in
+  // redundant/isolated; deletion/retention is decided per keep_dyn in
   // DefineSkipPoints()
   std::vector<int8_t> point_is_new_;
   // Frames processed since startup; the new-point gate uses it so detection
@@ -410,6 +418,30 @@ public:
   };
   std::unordered_map<PillarMapKey, DynVoxelEntry> dyn_buffer_;
   int dyn_bridge_frame_ = 0;  // frame stamp of the current detection pass
+
+  // Long-term per-voxel evidence (ERASOR-style): dyn_count = frames the voxel
+  // appeared window-absent (dynamic candidate), static_count = frames it was
+  // seen within the window or as supported structure (bottom voxels).
+  // Persists across ClearPillarMapVoxels; the dyn_count > static_count gate
+  // separates real dynamic entries from sampling flicker on static surfaces
+  struct PillarEvidence
+  {
+    int dyn_count = 0;
+    int static_count = 0;
+  };
+  std::unordered_map<PillarMapKey, PillarEvidence> pillar_evidence_;
+
+  // Connected component of the dynamic-point buffer (26-adjacency): all
+  // member voxel points, its stale subset (voxels not confirmed this frame),
+  // the centroid, and its live flag
+  struct DynComponent
+  {
+    std::vector<Eigen::Vector3d> points;         // all member voxel points
+    std::vector<Eigen::Vector3d> stale_points;   // points from voxels not confirmed this frame
+    Eigen::Vector3d centroid = Eigen::Vector3d::Zero();
+    bool live = false;                           // contains a voxel confirmed this frame
+  };
+  std::vector<DynComponent> dyn_comps_;     // this frame's buffer components (detect-time cache)
 
   void init(const PillarMapConfig &config, double voxel_size);
   void BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud);
@@ -437,10 +469,14 @@ private:
   void updatePillarFlag(const PillarLocation &pillar_key, PillarMapArray &pillar_maps);
   // Scan one neighbor ring (offsets of a 3D window around current_pos): count
   // occupied voxels, gating dz=0 neighbors with the height-consistency test.
-  // Returns true as soon as adjacent_count reaches threshold (early exit)
+  // With use_history, slots empty in the current frame still count when the
+  // history window shows recent occupancy there (sampling flicker must not
+  // read as isolation). Returns true as soon as adjacent_count reaches
+  // threshold (early exit)
   bool scanNeighborRing(const VoxelLocation &current_pos, const std::vector<VoxelLocation> &offsets,
-                        int threshold, double current_vp_z, double height_threshold, int &adjacent_count);
-  bool hasAdjacentVoxel(const VoxelLocation &current_pos, int threshold, double current_vp_z);
+                        int threshold, double current_vp_z, double height_threshold, int &adjacent_count,
+                        bool use_history);
+  bool hasAdjacentVoxel(const VoxelLocation &current_pos, int threshold, double current_vp_z, bool use_history);
   // History-window occupancy oracle: was (pillar, z) occupied in any of the
   // last history_frame_num frames?
   bool seenInHistory(const PillarLocation &pillar, int64_t z_key) const;
@@ -450,11 +486,12 @@ private:
   // Cross-frame bridge: insert this frame's confirmed voxels into dyn_buffer_,
   // advance the frame stamp, prune voxels stale beyond dyn_bridge_max_age_
   void dyn_bridge_insert();
-  // Collect the stored points of stale-but-live buffer components (components
-  // containing a voxel confirmed this frame) for display-only publication
-  std::vector<Eigen::Vector3d> dyn_bridge_collect();
+  // Extract connected components (26-adjacency) of the dynamic-point buffer:
+  // each carries all member points, its stale subset, the current-cloud
+  // indices of fresh points, the centroid, and its live flag
+  std::vector<DynComponent> dyn_bridge_components();
   // Clustering confirmation for candidate new points: candidates must form a
-  // cluster of >= new_point_cluster_min_num points to stay flagged. Scattered
+  // cluster of >= dyn_cluster_min_num points to stay flagged. Scattered
   // candidates (quantization hops of static surfaces near voxel boundaries)
   // are downgraded to normal points — neither published nor deleted downstream;
   // surviving voxels re-mark all their points, fully-downgraded ones lose
@@ -473,6 +510,14 @@ public:
   VoxelMapConfig config_setting_;
   int current_frame_id_ = 0;
   ros::Publisher voxel_map_pub_;
+
+  // Degeneracy-adaptive intensity fusion state (updated per frame in
+  // StateEstimation; intensity_fusion_active_ governs the NEXT frame's
+  // residual association)
+  double degeneracy_factor_ = 1.0;       // λ_min/λ_max of the last geometric observation Hessian
+  bool intensity_fusion_active_ = false; // evaluated per frame via the hysteresis state machine
+  int degenerate_streak_ = 0;            // consecutive frames below the ON threshold
+  int normal_streak_ = 0;                // consecutive frames above the OFF threshold
 
   // LRU voxel cache: voxel_map_cache_ front = most recently updated voxel.
   // voxel_map_ maps location -> list iterator for O(1) hit/splice/evict.

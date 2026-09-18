@@ -71,6 +71,11 @@ void loadVoxelConfig(ros::NodeHandle &nh, VoxelMapConfig &voxel_config)
   nh.param<bool>("lio/intensity_fusion_en", voxel_config.intensity_fusion_en_, false);
   nh.param<bool>("lio/intensity_gate_en", voxel_config.intensity_gate_en_, false);
   nh.param<double>("lio/intensity_gate_k", voxel_config.intensity_gate_k_, 3.0);
+  nh.param<double>("lio/intensity_fusion_weight", voxel_config.intensity_fusion_weight_, 0.8);
+  nh.param<bool>("lio/degeneracy_adaptive_en", voxel_config.degeneracy_adaptive_en_, false);
+  nh.param<double>("lio/degeneracy_on_threshold", voxel_config.degeneracy_on_threshold_, 0.1);
+  nh.param<double>("lio/degeneracy_off_threshold", voxel_config.degeneracy_off_threshold_, 0.2);
+  nh.param<int>("lio/degeneracy_min_frames", voxel_config.degeneracy_min_frames_, 2);
   double intensity_ema_alpha = 0.5;
   nh.param<double>("lio/intensity_ema_alpha", intensity_ema_alpha, 0.5);
   // Keep alpha in (0, 1]: 0 would freeze the statistics, >1 diverges
@@ -95,14 +100,14 @@ void loadPillarMapConfig(ros::NodeHandle &nh, PillarMapConfig &config)
   nh.param<int>("pillar_map/dyn_bridge_max_age", config.dyn_bridge_max_age_, 3);
   nh.param<double>("pillar_map/height_consistency_ratio", config.height_consistency_ratio_, 0.25);
   nh.param<int>("pillar_map/min_num", config.min_num_, 5);  // redundant voxel needs > this many points, isolated needs < this
-  nh.param<bool>("pillar_map/new_point_detect_en", config.new_point_detect_en_, false);
+  nh.param<bool>("pillar_map/dyn_detect_en", config.dyn_detect_en_, false);
   nh.param<int>("pillar_map/history_frame_num", config.history_frame_num_, 10);
-  nh.param<bool>("pillar_map/keep_new_point", config.keep_new_point_, true);
-  nh.param<int>("pillar_map/adjacent_new_point_threshold", config.adjacent_new_point_threshold_, 0);
-  nh.param<bool>("pillar_map/new_point_cluster_en", config.new_point_cluster_en_, false);
-  nh.param<int>("pillar_map/new_point_cluster_min_num", config.new_point_cluster_min_num_, 5);
-  nh.param<bool>("pillar_map/new_point_flat_filter_en", config.new_point_flat_filter_en_, false);
-  nh.param<double>("pillar_map/new_point_flat_band", config.new_point_flat_band_, 0.2);
+  nh.param<bool>("pillar_map/keep_dyn", config.keep_dyn_, true);
+  nh.param<int>("pillar_map/adjacent_dyn_threshold", config.adjacent_dyn_threshold_, 0);
+  nh.param<bool>("pillar_map/dyn_cluster_en", config.dyn_cluster_en_, false);
+  nh.param<int>("pillar_map/dyn_cluster_min_num", config.dyn_cluster_min_num_, 5);
+  nh.param<bool>("pillar_map/dyn_flat_filter_en", config.dyn_flat_filter_en_, false);
+  nh.param<double>("pillar_map/dyn_flat_band", config.dyn_flat_band_, 0.2);
 }
 
 namespace
@@ -862,6 +867,15 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
     auto &&HTz = Hsub_T_R_inv * meas_vec;
     // fout_dbg<<"HTz: "<<HTz<<endl;
     H_T_H.block<6, 6>(0, 0) = Hsub_T_R_inv * Hsub;
+    if (config_setting_.degeneracy_adaptive_en_)
+    {
+      // Degeneracy detection: λ_min/λ_max of the geometric observation
+      // information block — near zero means a weakly-constrained direction
+      // (e.g. the along-axis direction in corridors and tunnels)
+      Eigen::SelfAdjointEigenSolver<Eigen::Matrix<double, 6, 6>> es(H_T_H.block<6, 6>(0, 0));
+      if (es.eigenvalues()(5) > 1e-10)  // guard: fully unobservable system
+        degeneracy_factor_ = es.eigenvalues()(0) / es.eigenvalues()(5);
+    }
     // EigenSolver<Matrix<double, 6, 6>> es(H_T_H.block<6,6>(0,0));
     MD(DIM_STATE, DIM_STATE) &&K_1 = (H_T_H.block<DIM_STATE, DIM_STATE>(0, 0) + state_.cov.block<DIM_STATE, DIM_STATE>(0, 0).inverse()).inverse();
     G.block<DIM_STATE, 6>(0, 0) = K_1.block<DIM_STATE, 6>(0, 0) * H_T_H.block<6, 6>(0, 0);
@@ -892,6 +906,25 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
       EKF_stop_flg = true;
     }
     if (EKF_stop_flg) break;
+  }
+
+  // Degeneracy-adaptive intensity fusion: frame-end hysteresis state machine
+  // on the last iteration's degeneracy factor. The resulting
+  // intensity_fusion_active_ governs the NEXT frame's residual association
+  // (one-frame lag; degeneracy is a spatially continuous state)
+  if (config_setting_.degeneracy_adaptive_en_)
+  {
+    if (degeneracy_factor_ < config_setting_.degeneracy_on_threshold_)
+    {
+      degenerate_streak_++;
+      normal_streak_ = 0;
+    }
+    else if (degeneracy_factor_ > config_setting_.degeneracy_off_threshold_)
+    {
+      normal_streak_++;
+      degenerate_streak_ = 0;
+    }
+    intensity_fusion_active_ = degenerate_streak_ >= config_setting_.degeneracy_min_frames_;
   }
 }
 
@@ -1212,12 +1245,22 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
         is_success = true;
 
         double this_prob;
-        if (config_setting_.intensity_fusion_en_)
+        // Adaptive engage: with degeneracy_adaptive_en, fusion engages only
+        // when the previous frame's observation Hessian was degenerate — weak
+        // geometry is exactly where independent intensity evidence pays off
+        const bool fusion_on = config_setting_.intensity_fusion_en_ &&
+                               (!config_setting_.degeneracy_adaptive_en_ || intensity_fusion_active_);
+        if (fusion_on)
         {
-          // Joint score as the product of two independent Gaussian likelihoods
-          double prob_geo = 1.0 / sqrt(sigma_l) * exp(-0.5 * dis_to_plane * dis_to_plane / sigma_l);
-          double prob_int = 1.0 / sqrt(sigma_int_sq) * exp(-0.5 * intensity_diff * intensity_diff / sigma_int_sq);
-          this_prob = prob_geo * prob_int;
+          // Weighted Mahalanobis scoring: squared normalized distances of the
+          // two modalities combined with an explicit trust weight — no 1/√σ
+          // prefactor, so tight planes no longer win by construction and the
+          // weight genuinely expresses per-modality trust
+          double m_geo = dis_to_plane * dis_to_plane / sigma_l;
+          double m_int = intensity_diff * intensity_diff / sigma_int_sq;
+          const double w_i = config_setting_.intensity_fusion_weight_;
+          const double w_g = 1.0 - w_i;
+          this_prob = exp(-(w_g * m_geo + w_i * m_int));
         }
         else
         {
@@ -1582,10 +1625,13 @@ void PillarMap::updatePillarFlag(const PillarLocation &pillar_key, PillarMapArra
 // Scan one neighbor ring around current_pos: count occupied voxels whose
 // virtual point is height-consistent with the query (the gate applies to
 // dz = 0 neighbors only — dz != 0 neighbors are ungated, their layer offset
-// already bounds the height difference). Returns true as soon as
-// adjacent_count reaches threshold (early exit)
+// already bounds the height difference). With use_history, slots empty in the
+// current frame still count when the history window shows recent occupancy
+// there (sampling flicker must not read as isolation). Returns true as soon
+// as adjacent_count reaches threshold (early exit)
 bool PillarMap::scanNeighborRing(const VoxelLocation &current_pos, const std::vector<VoxelLocation> &offsets,
-                                      int threshold, double current_vp_z, double height_threshold, int &adjacent_count)
+                                 int threshold, double current_vp_z, double height_threshold, int &adjacent_count,
+                                 bool use_history)
 {
   for (const auto &voxel_offset : offsets)
   {
@@ -1596,18 +1642,26 @@ bool PillarMap::scanNeighborRing(const VoxelLocation &current_pos, const std::ve
     };
 
     auto pillar_iter = pillars_.find(GetPillarLocation(adjacent_pos));
-    if (pillar_iter == pillars_.end() || pillar_iter->second.empty()) continue;
+    bool counted = false;
+    if (pillar_iter != pillars_.end() && !pillar_iter->second.empty())
+    {
+      // Pillar voxel array is sorted by z key: binary search for the target layer
+      const PillarMapArray &voxels = pillar_iter->second;
+      auto voxel_iter = std::lower_bound(voxels.begin(), voxels.end(), adjacent_pos.z,
+          [](const std::pair<int64_t, PillarMapVoxel> &entry, int64_t z) { return entry.first < z; });
+      if (voxel_iter != voxels.end() && voxel_iter->first == adjacent_pos.z)
+      {
+        counted = !(voxel_offset.z == 0 &&
+                    std::abs(voxel_iter->second.virtual_point_.z() - current_vp_z) > height_threshold);
+      }
+    }
+    if (!counted && use_history &&
+        seenInHistory(GetPillarLocation(adjacent_pos), adjacent_pos.z))
+    {
+      counted = true;  // empty now, but the window shows recent structure there
+    }
 
-    // Pillar voxel array is sorted by z key: binary search for the target layer
-    const PillarMapArray &voxels = pillar_iter->second;
-    auto voxel_iter = std::lower_bound(voxels.begin(), voxels.end(), adjacent_pos.z,
-        [](const std::pair<int64_t, PillarMapVoxel> &entry, int64_t z) { return entry.first < z; });
-    if (voxel_iter == voxels.end() || voxel_iter->first != adjacent_pos.z) continue;
-
-    if (voxel_offset.z == 0 &&
-        std::abs(voxel_iter->second.virtual_point_.z() - current_vp_z) > height_threshold) continue;
-
-    if (++adjacent_count >= threshold) return true;
+    if (counted && ++adjacent_count >= threshold) return true;
   }
   return false;
 }
@@ -1615,7 +1669,7 @@ bool PillarMap::scanNeighborRing(const VoxelLocation &current_pos, const std::ve
 // Ring-ordered 3D neighborhood test: ring 1 = 6 face neighbors at distance
 // exactly 1 voxel, ring 2 = 12 edge neighbors at distance sqrt(2). Ring 1 is
 // probed first; the threshold early-exits inside either ring
-bool PillarMap::hasAdjacentVoxel(const VoxelLocation &current_pos, int threshold, double current_vp_z)
+bool PillarMap::hasAdjacentVoxel(const VoxelLocation &current_pos, int threshold, double current_vp_z, bool use_history)
 {
   if (threshold <= 0) {
     return false;
@@ -1623,11 +1677,11 @@ bool PillarMap::hasAdjacentVoxel(const VoxelLocation &current_pos, int threshold
 
   const double height_threshold = voxel_size_ * config_.height_consistency_ratio_;
   int adjacent_count = 0;
-  if (scanNeighborRing(current_pos, ring1_offsets_, threshold, current_vp_z, height_threshold, adjacent_count)) {
+  if (scanNeighborRing(current_pos, ring1_offsets_, threshold, current_vp_z, height_threshold, adjacent_count, use_history)) {
     return true;
   }
   if (config_.neighbor_ring_num_ >= 2) {
-    return scanNeighborRing(current_pos, ring2_offsets_, threshold, current_vp_z, height_threshold, adjacent_count);
+    return scanNeighborRing(current_pos, ring2_offsets_, threshold, current_vp_z, height_threshold, adjacent_count, use_history);
   }
   return false;
 }
@@ -1694,18 +1748,18 @@ void PillarMap::BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud)
 // history_frame_num_ frames only accumulate the reference window; detection
 // output starts at frame history_frame_num_ + 1. Runs BEFORE UpdateHistory(),
 // so the window consulted here is exactly the last n previous frames.
-// No-op when new_point_detect_en_ is false (the history itself is advanced by
+// No-op when dyn_detect_en_ is false (the history itself is advanced by
 // UpdateHistory() every frame — the redundant/isolated checks consume it too).
 void PillarMap::DetectNewPoints()
 {
-  if (!config_.new_point_detect_en_) return;
+  if (!config_.dyn_detect_en_) return;
 
   const size_t num_points = point_cloud_ptr_ ? point_cloud_ptr_->points.size() : 0;
   point_is_new_.assign(num_points, 0);
 
   const int n = std::max(config_.history_frame_num_, 0);
   const bool detection_on = history_frame_count_ >= static_cast<size_t>(n);
-  const int adjacent_threshold = config_.adjacent_new_point_threshold_;
+  const int adjacent_threshold = config_.adjacent_dyn_threshold_;
 
   // Flag points of voxels absent from the current window (once the window is
   // full). Sparse-neighborhood confirmation: a voxel surrounded by same-layer
@@ -1714,45 +1768,72 @@ void PillarMap::DetectNewPoints()
   // only when that is false; threshold <= 0 keeps every candidate
   for (auto &pillar_entry : pillars_)
   {
+    const int64_t bottom_key = pillar_entry.second.begin()->first;
     for (auto &voxel_entry : pillar_entry.second)
     {
       const PillarMapKey key(pillar_entry.first, voxel_entry.first);
-      if (!detection_on || history_counts_.find(key) != history_counts_.end())
-        continue;  // seen within the window (or still warming up): not new
+      auto &ev = pillar_evidence_[key];
 
-      if (adjacent_threshold > 0)
+      // Bottom voxels are supported from below (likely ground): their
+      // occupancy always counts as structure
+      if (voxel_entry.first == bottom_key)
       {
-        const VoxelLocation voxel_pos = {pillar_entry.first.axis1, pillar_entry.first.axis2, voxel_entry.first};
-        if (hasAdjacentVoxel(voxel_pos, adjacent_threshold, voxel_entry.second.virtual_point_.z()))
-          continue;
+        ev.static_count++;
+        continue;
       }
 
-      voxel_entry.second.is_new_voxel_ = true;
-      for (const size_t idx : voxel_entry.second.point_indices_)
+      // Evidence update runs unconditionally (warm-up, gated voxels — every
+      // occupied voxel contributes): window-absent frames accumulate dynamic
+      // evidence, in-window frames static evidence
+      if (!detection_on || history_counts_.find(key) != history_counts_.end())
       {
-        point_is_new_[idx] = 1;  // indices < num_points by construction in BuildPillarMap
+        ev.static_count++;  // seen within the window: static evidence
+        continue;
+      }
+      ev.dyn_count++;  // window-absent: dynamic evidence (candidate)
+
+      // Confirmation gate: accumulated dynamic evidence must outweigh static
+      if (ev.dyn_count > ev.static_count)
+      {
+        if (adjacent_threshold > 0)
+        {
+          const VoxelLocation voxel_pos = {pillar_entry.first.axis1, pillar_entry.first.axis2, voxel_entry.first};
+          if (hasAdjacentVoxel(voxel_pos, adjacent_threshold, voxel_entry.second.virtual_point_.z(), /*use_history=*/true))
+            continue;
+        }
+
+        voxel_entry.second.is_new_voxel_ = true;
+        for (const size_t idx : voxel_entry.second.point_indices_)
+        {
+          point_is_new_[idx] = 1;  // indices < num_points by construction in BuildPillarMap
+        }
       }
     }
   }
 
   // Clustering confirmation (MDetector-style post-processing): scattered
   // candidates that fail to form a cluster are downgraded to normal before
-  // anything downstream (publishing, keep_new_point) sees them
-  if (config_.new_point_cluster_en_) confirmClusteredNewPoints();
+  // anything downstream (publishing, keep_dyn) sees them
+  if (config_.dyn_cluster_en_) confirmClusteredNewPoints();
 
-  // Cross-frame dynamic-point bridge: confirmed voxels enter dyn_buffer_ so
-  // their components keep being published on frames where detection is
-  // missed. The frame stamp advances and aged voxels are pruned EVERY frame
-  // (even with zero detections) so stale targets expire correctly.
-  // NOTE: placed after the new_point_detect_en_ gate — the bridge is fed by
-  // detection, so new_point_detect_en must be on for it to do anything
-  if (config_.dyn_bridge_en_) dyn_bridge_insert();
+  // Cross-frame dynamic-point bridge: the frame stamp advances FIRST (the
+  // rescue sweep below and the aging/prune inside dyn_bridge_insert both use
+  // it), then confirmed voxels enter dyn_buffer_. Runs every frame when the
+  // bridge is on — even with zero detections — so stale targets expire
+  // correctly. NOTE: placed after the dyn_detect_en_ gate — the bridge
+  // is fed by detection, so dyn_detect_en must be on for it to do
+  // anything
+  if (config_.dyn_bridge_en_)
+  {
+    dyn_bridge_frame_ = static_cast<int>(history_frame_count_);
+    dyn_bridge_insert();
+  }
 }
 
 // Advance the n-frame occupancy window by one frame: collect this frame's
 // occupied voxel keys, insert them, then evict frames beyond the window.
 // Runs every frame whenever the pillar map is enabled — regardless of the
-// new_point_detect_en_ gate — because the redundant/isolated checks consume
+// dyn_detect_en_ gate — because the redundant/isolated checks consume
 // the same history. Must run AFTER DetectNewPoints() (whose check must see
 // the window WITHOUT the current frame) and BEFORE pillarDetection() (whose
 // vertical-continuity checks may include it)
@@ -1762,7 +1843,8 @@ void PillarMap::DetectNewPoints()
 // every frame (even with zero detections) so stale targets expire correctly
 void PillarMap::dyn_bridge_insert()
 {
-  dyn_bridge_frame_ = static_cast<int>(history_frame_count_);
+  // The frame stamp is assigned by the caller (DetectNewPoints) before this
+  // runs, so the rescue sweep sees a consistent stamp for the whole frame
 
   for (auto &pillar_entry : pillars_)
   {
@@ -1787,16 +1869,20 @@ void PillarMap::dyn_bridge_insert()
     else
       ++it;
   }
+
+  // Cache this frame's buffer components for the bridge publish (the state
+  // here is final: inserted, confirmed-marked, and aged)
+  dyn_comps_ = dyn_bridge_components();
 }
 
-// Collect the stored points of stale-but-live buffer components: components
-// containing a voxel confirmed THIS frame re-publish their stale neighbors
-// (display-only red points; never re-enter the skip pipeline). Returns the
-// world-frame points to append to /cloud_pillarmap
-std::vector<Eigen::Vector3d> PillarMap::dyn_bridge_collect()
+// Extract connected components (26-adjacency) of the dynamic-point buffer:
+// each component carries all member points, its stale subset (voxels not
+// confirmed this frame), the current-cloud indices of its fresh points, the
+// point centroid, and its live flag
+std::vector<PillarMap::DynComponent> PillarMap::dyn_bridge_components()
 {
-  std::vector<Eigen::Vector3d> out;
-  if (dyn_buffer_.empty()) return out;
+  std::vector<DynComponent> comps;
+  if (dyn_buffer_.empty()) return comps;
 
   // index the buffer, then label connected components over 26-adjacency
   std::unordered_map<PillarMapKey, size_t> key_to_idx;
@@ -1839,22 +1925,36 @@ std::vector<Eigen::Vector3d> PillarMap::dyn_bridge_collect()
     ++num_comp;
   }
 
-  // a component is live when any of its voxels was confirmed this frame
-  std::vector<char> comp_live(num_comp, 0);
-  for (size_t i = 0; i < keys.size(); ++i)
-  {
-    if (dyn_buffer_.at(*keys[i]).last_frame == dyn_bridge_frame_) comp_live[comp_id[i]] = 1;
-  }
+  std::vector<std::vector<size_t>> comp_keys(num_comp);
+  for (size_t i = 0; i < keys.size(); ++i) comp_keys[comp_id[i]].push_back(i);
+  // NOTE: component centroids average fresh AND stale (up to max_age frames
+  // old) member points, biasing them toward older positions for intermittently
+  // detected fast targets — the association gate absorbs some of this
 
-  // stale points of live components are the bridge output
-  for (size_t i = 0; i < keys.size(); ++i)
+  comps.resize(num_comp);
+  for (int c = 0; c < num_comp; ++c)
   {
-    if (!comp_live[comp_id[i]]) continue;
-    const auto &entry = dyn_buffer_.at(*keys[i]);
-    if (entry.last_frame == dyn_bridge_frame_) continue;  // fresh: already published
-    for (const auto &p : entry.points) out.push_back(p);
+    DynComponent &comp = comps[c];
+    for (const size_t ki : comp_keys[c])
+    {
+      const auto &entry = dyn_buffer_.at(*keys[ki]);
+      for (const auto &p : entry.points)
+      {
+        comp.points.push_back(p);
+        comp.centroid += p;
+      }
+      if (entry.last_frame == dyn_bridge_frame_)
+      {
+        comp.live = true;
+      }
+      else
+      {
+        for (const auto &p : entry.points) comp.stale_points.push_back(p);
+      }
+    }
+    if (!comp.points.empty()) comp.centroid /= static_cast<double>(comp.points.size());
   }
-  return out;
+  return comps;
 }
 
 void PillarMap::UpdateHistory()
@@ -1911,12 +2011,12 @@ bool PillarMap::gapSeenInHistory(const PillarLocation &pillar, int64_t low_key, 
 }
 
 // Clustering confirmation for candidate new points: candidates must form a
-// Euclidean cluster of >= new_point_cluster_min_num points (tolerance = one
+// Euclidean cluster of >= dyn_cluster_min_num points (tolerance = one
 // voxel) to stay flagged. Scattered candidates — quantization hops of static
 // surfaces near voxel boundaries — are downgraded to normal points: they are
 // neither published nor deleted downstream. A connected chain of hop voxels
 // still clusters (inherent to the approach); dense-neighborhood candidates are
-// already suppressed by adjacent_new_point_threshold. Surviving voxels re-mark
+// already suppressed by adjacent_dyn_threshold. Surviving voxels re-mark
 // ALL their points: a voxel absent from the history window holds no static
 // surface, so its cluster-split points are genuine new observations too, and
 // point_is_new_ stays voxel-wise all-or-nothing for DefineSkipPoints retention
@@ -1925,9 +2025,9 @@ void PillarMap::confirmClusteredNewPoints()
   if (!point_cloud_ptr_ || point_is_new_.empty()) return;
 
   // Clamp to >= 2: min 1 would confirm every singleton, making the filter a no-op
-  const int min_cluster = std::max(config_.new_point_cluster_min_num_, 2);
+  const int min_cluster = std::max(config_.dyn_cluster_min_num_, 2);
 
-  // Gather candidate point indices (empty => nothing flagged, e.g. warm-up)
+  // A. Gather candidate point indices (empty => nothing flagged, e.g. warm-up)
   std::vector<size_t> cand_idx;
   cand_idx.reserve(point_is_new_.size() / 5);
   const auto &cloud = *point_cloud_ptr_;
@@ -1937,8 +2037,30 @@ void PillarMap::confirmClusteredNewPoints()
   }
   if (cand_idx.empty()) return;
 
-  // Too few candidates to ever form a cluster: drop them all
-  if (static_cast<int>(cand_idx.size()) < min_cluster)
+  // B. Rescue sweep (dyn_bridge): current points whose voxel sits in the
+  //    bridge buffer within dyn_bridge_max_age_ are target measurements the
+  //    occupancy window blocked (the target re-occupied its own recent
+  //    voxels) — pool them with the candidates for clustering. Iterating the
+  //    current voxels (not the whole cloud) keeps this O(occupied voxels)
+  std::vector<size_t> rescue_idx;
+  if (config_.dyn_bridge_en_ && config_.dyn_bridge_max_age_ > 0 && !dyn_buffer_.empty())
+  {
+    for (const auto &pillar_entry : pillars_)
+    {
+      for (const auto &voxel_entry : pillar_entry.second)
+      {
+        if (voxel_entry.second.is_new_voxel_) continue;  // already a candidate
+        const PillarMapKey key(pillar_entry.first, voxel_entry.first);
+        if (dyn_buffer_.find(key) == dyn_buffer_.end()) continue;  // not a recent-dynamic voxel
+        for (const size_t idx : voxel_entry.second.point_indices_)
+          rescue_idx.push_back(idx);
+      }
+    }
+  }
+
+  // Pool smaller than min_cluster: no cluster can pass — downgrade everything
+  const int pool_size = static_cast<int>(cand_idx.size() + rescue_idx.size());
+  if (pool_size < min_cluster)
   {
     std::fill(point_is_new_.begin(), point_is_new_.end(), 0);
     for (auto &pillar_entry : pillars_)
@@ -1951,36 +2073,44 @@ void PillarMap::confirmClusteredNewPoints()
     return;
   }
 
-  pcl::PointCloud<pcl::PointXYZ>::Ptr cand_cloud(new pcl::PointCloud<pcl::PointXYZ>());
-  cand_cloud->reserve(cand_idx.size());
+  // C. Euclidean clustering over the pooled cloud (candidates first, then
+  // rescued points): tolerance = one voxel, so points of adjacent voxels
+  // connect while isolated hops stay singletons
+  pcl::PointCloud<pcl::PointXYZ>::Ptr pooled(new pcl::PointCloud<pcl::PointXYZ>());
+  pooled->reserve(pool_size);
   for (const size_t idx : cand_idx)
   {
     pcl::PointXYZ p;
     p.x = cloud.points[idx].x;
     p.y = cloud.points[idx].y;
     p.z = cloud.points[idx].z;
-    cand_cloud->points.push_back(p);
+    pooled->points.push_back(p);
+  }
+  for (const size_t idx : rescue_idx)
+  {
+    pcl::PointXYZ p;
+    p.x = cloud.points[idx].x;
+    p.y = cloud.points[idx].y;
+    p.z = cloud.points[idx].z;
+    pooled->points.push_back(p);
   }
 
-  // Euclidean clustering: tolerance = one voxel, so points of adjacent
-  // candidate voxels connect while isolated hops stay singletons. Runs on the
-  // candidates only (typically a few dozen points), not on the full cloud
   std::vector<pcl::PointIndices> cluster_indices;
   pcl::EuclideanClusterExtraction<pcl::PointXYZ> ec;
   ec.setClusterTolerance(voxel_size_);
   ec.setMinClusterSize(min_cluster);
-  ec.setMaxClusterSize(static_cast<int>(cand_idx.size()));
-  ec.setInputCloud(cand_cloud);
+  ec.setMaxClusterSize(pool_size);
+  ec.setInputCloud(pooled);
   ec.extract(cluster_indices);
 
-  // Keep only candidates inside valid clusters; flat clusters (thin slab along
-  // any coordinate axis) are constant-height layers / surface stripes, not
-  // moving objects
-  std::vector<char> confirmed(cand_idx.size(), 0);
+  // D. Confirm: every pooled point inside a valid (non-flat) cluster — both
+  // this frame's candidates and rescued points — is confirmed; pooled points
+  // outside any valid cluster are downgraded
+  std::vector<char> confirmed(cand_idx.size() + rescue_idx.size(), 0);
   for (const auto &cluster : cluster_indices)
   {
-    if (config_.new_point_flat_filter_en_ &&
-        isFlatCluster(*cand_cloud, cluster.indices, config_.new_point_flat_band_))
+    if (config_.dyn_flat_filter_en_ &&
+        isFlatCluster(*pooled, cluster.indices, config_.dyn_flat_band_))
       continue;
     for (const int local_idx : cluster.indices)
     {
@@ -1991,9 +2121,14 @@ void PillarMap::confirmClusteredNewPoints()
   {
     if (!confirmed[k]) point_is_new_[cand_idx[k]] = 0;
   }
+  for (size_t k = 0; k < rescue_idx.size(); ++k)
+  {
+    if (confirmed[cand_idx.size() + k]) point_is_new_[rescue_idx[k]] = 1;
+  }
 
-  // Voxel flags follow their points: voxels without any surviving new point
-  // are downgraded; surviving voxels re-mark all their points (all-or-nothing)
+  // E. Voxel flags follow their points: voxels without any surviving new
+  // point are downgraded; surviving voxels re-mark all their points
+  // (all-or-nothing)
   for (auto &pillar_entry : pillars_)
   {
     for (auto &voxel_entry : pillar_entry.second)
@@ -2075,13 +2210,13 @@ void PillarMap::pillarDetection()
       voxel_loc.z = voxel_iter->first;
 
       if (voxel_iter->second.is_redundant_voxel_) {
-        bool has_adjacent_redundant = hasAdjacentVoxel(voxel_loc, config_.adjacent_redundant_threshold_, voxel_iter->second.virtual_point_.z());
+        bool has_adjacent_redundant = hasAdjacentVoxel(voxel_loc, config_.adjacent_redundant_threshold_, voxel_iter->second.virtual_point_.z(), /*use_history=*/true);
         if (!has_adjacent_redundant) {
           voxel_iter->second.is_redundant_voxel_ = false;
         }
       }
       if (voxel_iter->second.is_isolated_voxel_) {
-        bool has_adjacent_isolated = hasAdjacentVoxel(voxel_loc, config_.adjacent_isolated_threshold_, voxel_iter->second.virtual_point_.z());
+        bool has_adjacent_isolated = hasAdjacentVoxel(voxel_loc, config_.adjacent_isolated_threshold_, voxel_iter->second.virtual_point_.z(), /*use_history=*/true);
         if (has_adjacent_isolated) {
           voxel_iter->second.is_isolated_voxel_ = false;
         }
@@ -2119,7 +2254,7 @@ void VoxelMapManager::applyVoxelRetention(int keep_num, int &flagged_total, int 
       if (voxel_class == 1)
       {
         if (!voxel.is_new_voxel_) continue;
-        if (pillar_map_.config_.keep_new_point_ <= 0) continue;
+        if (pillar_map_.config_.keep_dyn_ <= 0) continue;
       }
       else
       {
@@ -2173,7 +2308,7 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
   int redundant_count = 0;
   int new_count = 0;
   int final_skip_count = 0;
-  const bool new_detect_on = pillar_map_.config_.new_point_detect_en_;
+  const bool new_detect_on = pillar_map_.config_.dyn_detect_en_;
 
   for (size_t i = 0; i < point_num; ++i)
   {
@@ -2203,7 +2338,7 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
   int new_kept = 0;
   if (new_detect_on)
   {
-    if (pillar_map_.config_.keep_new_point_ <= 0 || pillar_map_.config_.keep_num_per_voxel_ <= 0)
+    if (pillar_map_.config_.keep_dyn_ <= 0 || pillar_map_.config_.keep_num_per_voxel_ <= 0)
     {
       // Skip ALL new points
       for (size_t i = 0; i < point_num; ++i)
@@ -2292,21 +2427,25 @@ void PillarMap::PublishPillarMapCloud(const ros::Publisher &pub)
     pillar_cloud.points.push_back(p);
   }
 
-  // Dynamic-point bridge (M-Detector umap-style): stale-but-live buffer
+  // Dynamic-point bridge (M-Detector umap-style): stale points of live buffer
   // components keep intermittently detected targets visible. Display-only,
-  // red — bridged points never re-enter the skip pipeline
+  // red — never re-enter the skip pipeline
   if (config_.dyn_bridge_en_)
   {
-    for (const auto &p : dyn_bridge_collect())
+    for (const auto &comp : dyn_comps_)
     {
-      pcl::PointXYZRGB q;
-      q.x = p(0);
-      q.y = p(1);
-      q.z = p(2);
-      q.r = 255;
-      q.g = 0;
-      q.b = 0;
-      pillar_cloud.points.push_back(q);
+      if (!comp.live) continue;
+      for (const auto &p : comp.stale_points)
+      {
+        pcl::PointXYZRGB q;
+        q.x = p(0);
+        q.y = p(1);
+        q.z = p(2);
+        q.r = 255;
+        q.g = 0;
+        q.b = 0;
+        pillar_cloud.points.push_back(q);
+      }
     }
   }
 

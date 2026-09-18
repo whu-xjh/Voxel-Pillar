@@ -40,7 +40,7 @@ Panels:
   - Class: rviz/Time
     Name: Time
     SyncMode: 0
-    SyncSource: currPoints
+    SyncSource: surround
 Preferences:
   PromptSaveOnExit: true
 Toolbars:
@@ -143,9 +143,9 @@ Visualization Manager:
           Channel Name: intensity
           Class: rviz/PointCloud2
           Color: 239; 41; 41
-          Color Transformer: ""
+          Color Transformer: Intensity
           Decay Time: 0
-          Enabled: false
+          Enabled: true
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -154,13 +154,13 @@ Visualization Manager:
           Queue Size: 10
           Selectable: true
           Size (Pixels): 5
-          Size (m): 0.019999999552965164
+          Size (m): 0.029999999329447746
           Style: Squares
           Topic: /cloud_registered
           Unreliable: false
           Use Fixed Frame: true
-          Use rainbow: true
-          Value: false
+          Use rainbow: false
+          Value: true
       Enabled: true
       Name: mapping
     - Class: rviz/Group
@@ -597,5 +597,5 @@ Window Geometry:
   Views:
     collapsed: false
   Width: 1600
-  X: 419
-  Y: 160
+  X: 349
+  Y: 140

@@ -19,7 +19,7 @@ time_offset:
   imu_time_offset: 0.0
 
 preprocess:
-  point_filter_num: 5
+  point_filter_num: 3
   filter_size_surf: 0.1
   lidar_type: 5  # HesaiXT32
   scan_line: 32
@@ -49,53 +49,62 @@ lio:
   max_iterations: 5
   dept_err: 0.02
   beam_err: 0.05
-  min_eigen_value: 0.0001
+  min_eigen_value: 0.0025
   voxel_size: 0.5
   max_layer: 1 
   max_points_num: 100
   layer_init_num: [5, 5, 5, 5, 5]
 
-  # R-VoxelMap-style plane init refinements
+  capacity: 0  # LRU cache (0 = disable)
+
+  # plane refinements
   plane_refine_en: false
   init_distance_threshold: 0.1
   plane_valid_check_en: true
-  valid_check_max_layer: 0
+  valid_check_max_layer: 1
   valid_check_min_points_size: 10
   valid_check_resolution: 4
   valid_check_p_threshold: 0.5
-
-  capacity: 0  # LRU cache (0 = disable)
+  
+  # intensity fusion
   intensity_fusion_en: false
   intensity_gate_en: false
   intensity_gate_k: 3.0     # Gate threshold in units of intensity sigma
+  intensity_fusion_weight: 0.8  # intensity weight in the joint score (0.5 = equal trust; requires intensity_fusion_en)
   intensity_noise_est_en: true  # Online estimation of intensity measurement noise (init window)
   intensity_ema_alpha: 0.5      # EMA adaptation rate of plane intensity stats, in (0,1]; higher = faster
+
+  degeneracy_adaptive_en: false   # engage intensity fusion only in degenerate scenes (requires intensity_fusion_en)
+  degeneracy_on_threshold: 0.1   # enter degenerate mode when lambda_min/lambda_max < this
+  degeneracy_off_threshold: 0.2  # exit hysteresis threshold; must be > on
+  degeneracy_min_frames: 2       # consecutive frames to switch state (debounce)
 
 # Pillar Voxel Redundant Detection
 pillar_map:
   pillar_map_en: true
+
   voxel_size: 0.25
-  history_frame_num: 3  # history reference frame count n; detection starts at frame n+1 (n<=0: no reference kept, every point new)
+  history_frame_num: 10  # history reference frame count n; detection starts at frame n+1 (n<=0: no reference kept, every point new)
   neighbor_ring_num: 1
   keep_num_per_voxel: 1  # 0=skip all points, n=keep n newest points per voxel
   min_num: 5  # redundant voxel needs > this many points to confirm, isolated voxel needs < this
-  height_consistency_ratio: 0.25  # ratio of voxel_size for height consistency check
+  height_consistency_ratio: 0.5  # ratio of voxel_size for height consistency check
 
-  adjacent_redundant_threshold: 4
+  adjacent_redundant_threshold: 5
   keep_redundant: false
 
-  adjacent_isolated_threshold: 3
+  adjacent_isolated_threshold: 2
   keep_isolated: false
 
-  new_point_detect_en: true  # mark points whose pillar voxel was unseen in the last n frames; publish to /cloud_pillarmap (REQUIRED for dyn_bridge)
-  adjacent_new_point_threshold: 4  # candidate new voxel confirmed only if same-layer occupied neighbors < this (0=check off)
-  keep_new_point: false  # true=apply keep_num_per_voxel retention to new voxels, false=skip all new points
-  new_point_cluster_en: true  # cluster candidate new points; scattered singletons are downgraded to normal
-  new_point_cluster_min_num: 5  # min points per cluster to confirm as new (sparse clouds: start small, 3-5)
-  new_point_flat_filter_en: true  # reject clusters fitting in a thin slab along any coordinate axis (only 3D blobs survive)
-  new_point_flat_band: 0.1  # max per-axis extent to count as flat; keep < narrow-target depth (~0.3m); over-large band silences all output
-  dyn_bridge_en: true  # cross-frame dynamic-point bridge: intermittently detected targets stay visible (red) across detection gaps (requires new_point_detect_en: true)
-  dyn_bridge_max_age: 3  # frames a buffer voxel stays published after its last detection
+  dyn_detect_en: true  # mark points whose pillar voxel was unseen in the last n frames; publish to /cloud_pillarmap (REQUIRED for dyn_bridge)
+  keep_dyn: false  # true=apply keep_num_per_voxel retention to new voxels, false=skip all new points
+  adjacent_dyn_threshold: 5  # candidate new voxel confirmed only if same-layer occupied neighbors < this (0=check off)
+  dyn_cluster_en: true  # cluster candidate new points; scattered singletons are downgraded to normal
+  dyn_cluster_min_num: 10  # min points per cluster to confirm as new (sparse clouds: start small, 3-5)
+  dyn_flat_filter_en: false  # reject clusters fitting in a thin slab along any coordinate axis (only 3D blobs survive)
+  dyn_flat_band: 0.1  # max per-axis extent to count as flat; keep < narrow-target depth (~0.3m); over-large band silences all output
+  dyn_bridge_en: true  # cross-frame dynamic-point bridge: intermittently detected targets stay visible (red) across detection gaps (requires dyn_detect_en: true)
+  dyn_bridge_max_age: 5  # frames a buffer voxel stays published after its last detection
 
 local_map:
   map_sliding_en: false
