@@ -343,9 +343,8 @@ typedef struct PillarMapConfig
   bool pillar_map_en_;
   double voxel_size_;
   int adjacent_redundant_threshold_;
-  int keep_num_per_voxel_;   // 0=skip all, n=keep n newest points per redundant voxel
-  bool keep_redundant_;      // true=apply keep_num_per_voxel to redundant voxels, false=skip all
-  bool keep_isolated_;       // true=apply keep_num_per_voxel to isolated voxels, false=skip all
+  bool delete_redundant_;    // true=delete redundant points before they enter the voxel map, false=keep them (default: false)
+  bool delete_isolated_;     // true=delete isolated points before they enter the voxel map, false=keep them (default: false)
   int adjacent_isolated_threshold_;
   int neighbor_ring_num_;        // max ring probed by hasAdjacentVoxel: 1 = ring 1 only (6 face neighbors at distance 1), 2 = + ring 2 (12 edge neighbors, all neighbors <= sqrt(2)) (default: 1)
   bool dyn_bridge_display_;      // display-only bridge: re-publish stale points of intermittently detected targets, red (default: false; needs dyn_buffer_max_age_ > 0; the buffer stores points only when this is on)
@@ -354,7 +353,7 @@ typedef struct PillarMapConfig
   double height_consistency_ratio_;  // ratio of voxel_size for the height-consistency gate on dz=0 neighbors (default: 0.25)
   bool dyn_detect_en_;     // mark points whose pillar voxel was unseen in the last n frames (default: false)
   int pillar_buffer_;            // n-frame pillar occupancy window; detection starts at frame n+1 (n<=0: no reference kept, every point new)
-  bool keep_dyn_;          // true=apply keep_num_per_voxel retention to new voxels, false=skip all new points
+  bool delete_dyn_;        // true=delete new points before they enter the voxel map, false=keep them (default: false)
   int adjacent_dyn_threshold_;  // candidate new voxel confirmed only if occupied same-layer neighbors < this (0=check off)
   bool dyn_cluster_en_;    // cluster candidate new points, keep only valid clusters (default: false)
   int dyn_cluster_min_num_;  // min points per cluster to confirm as new (default: 5)
@@ -363,12 +362,12 @@ typedef struct PillarMapConfig
   double dyn_flat_band_;     // max per-axis extent for a cluster to count as flat (default: 0.2; <=0: check off)
 
   PillarMapConfig() : pillar_map_en_(false), voxel_size_(1.0), adjacent_redundant_threshold_(3),
-                       keep_num_per_voxel_(0), keep_redundant_(true), keep_isolated_(false),
+                       delete_redundant_(false), delete_isolated_(false),
                        adjacent_isolated_threshold_(3), neighbor_ring_num_(1),
                        dyn_bridge_display_(false), dyn_buffer_max_age_(3),
                        min_num_(5),
                        height_consistency_ratio_(0.25), dyn_detect_en_(false), pillar_buffer_(10),
-                       keep_dyn_(true), adjacent_dyn_threshold_(0),
+                       delete_dyn_(false), adjacent_dyn_threshold_(0),
                        dyn_cluster_en_(false), dyn_cluster_min_num_(5), dyn_cluster_expansion_(false),
                        dyn_flat_filter_en_(false), dyn_flat_band_(0.2) {}
 } PillarMapConfig;
@@ -412,7 +411,7 @@ public:
   std::unordered_map<PillarMapKey, int> history_counts_;
   // Per-point new flag, index-aligned with point_cloud_ptr_, reset each frame in
   // DetectNewPoints(). Kept separate from point_labels_: a point can be new AND
-  // redundant/isolated; deletion/retention is decided per keep_dyn in
+  // redundant/isolated; deletion is decided per delete_dyn in
   // DefineSkipPoints()
   std::vector<int8_t> point_is_new_;
   // Frames processed since startup; the new-point gate uses it so detection
@@ -617,12 +616,6 @@ private:
   // would degenerate into evicting the entry right after inserting it).
   // Returns the number of voxels evicted by this call.
   size_t enforceCapacity();
-
-  // Shared retention pass for DefineSkipPoints: keep the newest keep_num points
-  // per flagged voxel (point_indices_ tail), mark the rest in skip_list_.
-  // voxel_class: 0 = redundant/isolated voxels, 1 = new-point voxels only
-  void applyVoxelRetention(int keep_num, int &flagged_total, int &flagged_kept, int &final_skip_count,
-                           int voxel_class = 0);
 
   void GetUpdatePlane(const VoxelOctoTree *current_octo, const int pub_max_voxel_layer, std::vector<VoxelPlane> &plane_list);
 

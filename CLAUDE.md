@@ -153,7 +153,7 @@ behavior — no distance filter, no valid check, no check_and_update:
   2. `DetectNewPoints()`: Per-voxel evidence gate first (ERASOR-style dual counters persisting in `pillar_evidence_`): occupied frames inside the history window accumulate static evidence; window-absent frames (after warm-up) accumulate dyn evidence; a candidate counts as dynamic only when its accumulated dyn evidence outweighs static (`dyn_count > static_count`) — this separates real dynamic entries from sampling flicker on static surfaces. Bottom voxels of each pillar always count as structure and are excluded (supported from below, likely ground) — known blind spot: for columns with no ground return (overhangs, bridge decks), the bottom voxel IS the structure, so first-contact observations there are never detected as new. Passing voxels still need fewer occupied ring neighbors than `adjacent_dyn_threshold` (0=off; ring counting is history-aware — see item 4; dz=0 ring neighbors are height-gated) to be flagged into `point_is_new_`/`is_new_voxel_`. Candidates are then clustered with rescue points from `dyn_buffer_` (see `dyn_cluster_expansion` below) and flat-filtered before the flags are final; the first n frames only accumulate history (output starts at frame n+1); no-op unless `dyn_detect_en` (voxel_map.cpp)
   3. `UpdateHistory()`: Advance the n-frame occupancy window by one frame (insert current frame's keys, evict beyond n, erase zero-count keys) — runs every frame regardless of `dyn_detect_en`, feeding both new-point detection and the history-aware redundant/isolated checks (voxel_map.cpp)
   4. `pillarDetection()`: Three sequential steps — initial per-pillar flags (history-aware: redundant needs no above voxel seen in the window; isolated gaps must have no intermediate layer seen in the window) → ring-based 3D adjacency check (history-aware: ring slots empty now but occupied within the window count as neighbors; ring 1: 6 face neighbors at 1 voxel; ring 2: 12 edge neighbors at √2, probed only if ring 1 is insufficient; dz=0 neighbors height-gated) → point label assignment; early-exits when Step 1 flags nothing
-  5. `DefineSkipPoints()`: Apply skip filter to the main point cloud (newest-n-per-voxel retention via `applyVoxelRetention()`)
+  5. `DefineSkipPoints()`: Apply skip filter to the main point cloud (per-category `delete_redundant`/`delete_isolated`/`delete_dyn` switches)
   6. `PublishPillarMapCloud()`: Publish `/cloud_pillarmap` — one RGB cloud carrying redundant (purple), isolated (blue) and new (red, priority on overlap) points (skips assembly when no subscribers). With `dyn_bridge_display`, appends the stale-but-live points of the cross-frame dynamic buffer (M-Detector umap-style: buffer components containing a this-frame voxel re-publish their stale neighbors) so intermittently detected targets stay visible — display-only, never re-entering the skip pipeline
   7. `ClearPillarMapVoxels()`: Per-frame structure and flags cleared after each frame (the n-frame history window and the dynamic-point buffer survive)
 
@@ -163,12 +163,12 @@ behavior — no distance filter, no valid check, no check_and_update:
 - `adjacent_redundant_threshold`: Minimum adjacent occupied voxels (same z-layer, height-consistent) to confirm a redundant voxel (0 = disable redundant detection)
 - `adjacent_isolated_threshold`: Minimum adjacent voxels to CANCEL isolation (caution: 0 skips the check entirely — opposite semantics to the redundant threshold)
 - `neighbor_type` (removed): the old 4/8-neighborhood selector was replaced by a fixed two-ring 3D neighborhood — ring 1 = 6 face neighbors at distance 1 voxel, ring 2 = 12 edge neighbors at distance √2 (probed in order, threshold early-exits)
-- `keep_num_per_voxel`: 0=skip all flagged points, n=keep the n newest points per flagged voxel (default: 0)
-- `keep_redundant` / `keep_isolated`: apply retention (true) or skip all (false), per category
+- `delete_redundant`: true = delete redundant points before they enter the voxel map, false = keep them (default: false)
+- `delete_isolated`: true = delete isolated points before they enter the voxel map, false = keep them (default: false)
 - `height_consistency_ratio`: adjacent voxels count as neighbors only if virtual-point heights differ by ≤ ratio × voxel_size (default: 0.25)
 - `dyn_detect_en`: Mark points entering pillar voxels unseen in the last n frames and publish them on `/cloud_pillarmap` (default: false)
 - `pillar_buffer`: History reference frame count n; new-point detection starts at frame n+1, and the window feeds the redundant/isolated temporal evidence AND the history-aware ring-adjacency counting (n<=0: no reference kept, every point new; default: 10)
-- `keep_dyn`: Apply retention (true) or skip all (false) for new points, same semantics as `keep_redundant`/`keep_isolated` (default: true)
+- `delete_dyn`: true = delete new points before they enter the voxel map, false = keep them (default: false); a point carrying several flags is deleted when ANY of its categories says delete
 - `adjacent_dyn_threshold`: Candidate new voxel confirmed only if occupied ring neighbors < this (0 = check off; default: 0)
 - `neighbor_ring_num`: Max ring probed by the adjacency check — 1 = ring 1 only (6 face neighbors at distance 1 voxel), 2 = ring 1 + ring 2 (12 edge neighbors, all neighbors ≤ √2 voxels) (default: 1)
 - `dyn_buffer_max_age`: `dyn_buffer_` freshness window — buffer voxels are pruned once stale beyond this many frames, and it is also the rescue-sweep pooling horizon (the sweep runs before the current frame's prune, so entries up to max_age+1 frames old can still be pooled) (0 = buffer off entirely; `dyn_bridge_display` needs > 0) (default: 3)
@@ -301,12 +301,11 @@ Uncomment and add to `<node>` tag:
 - `pillar_map/adjacent_redundant_threshold`: Minimum adjacent redundant voxels
 - `pillar_map/adjacent_isolated_threshold`: Minimum adjacent voxels for isolation
 - `pillar_map/neighbor_type` (removed): superseded by the fixed two-ring neighborhood (see above)
-- `pillar_map/keep_num_per_voxel`: 0=skip all flagged points, n=keep n newest per voxel
-- `pillar_map/keep_redundant` / `pillar_map/keep_isolated`: retention toggles per category
+- `pillar_map/delete_redundant` / `pillar_map/delete_isolated` / `pillar_map/delete_dyn`: per-category deletion switches (true = delete before the voxel map; default: false)
 - `pillar_map/height_consistency_ratio`: Height tolerance as ratio of voxel_size (default: 0.25)
 - `pillar_map/dyn_detect_en`: Mark points entering unseen voxels and publish on `/cloud_pillarmap` (default: false)
 - `pillar_map/pillar_buffer`: History reference frame count n; feeds new-point detection and the redundant/isolated temporal evidence (default: 10)
-- `pillar_map/keep_dyn`: Retention (true) or skip-all (false) for new points (default: true)
+- `pillar_map/delete_dyn`: Deletion switch for new points (true = delete before the voxel map; default: false)
 - `pillar_map/adjacent_dyn_threshold`: New-voxel confirmation neighbor cap (0 = off; default: 0)
 - `pillar_map/dyn_cluster_en`: Cluster-confirmation for new points (default: false)
 - `pillar_map/dyn_cluster_min_num`: Min points per new-point cluster (default: 5)
@@ -427,7 +426,7 @@ struct Point {
 - `PointToPlane` (voxel_map.h:61-75): Point-to-plane correspondence for optimization
 - `PillarMapConfig` (voxel_map.h): Pillar voxel system configuration
   - Controls redundant point detection pipeline behavior
-  - Includes adjacency filtering, retention and threshold parameters
+  - Includes adjacency filtering, per-category deletion switches and threshold parameters
 - `pointWithVar` (common_lib.h): Point with variance. Its `is_redundant`/`is_isolated`
   bool fields are legacy — the pillar system now tracks per-point state in
   `PillarMap::point_labels_` instead
@@ -461,16 +460,16 @@ struct Point {
 The pillar voxel system operates independently of the main voxel map:
 1. **Input**: Downsampled world point cloud (`feats_down_world`)
 2. **Pillar Organization**: Points grouped by (x,y) pillar, vertical voxels by z; per-pillar voxel arrays sorted by z; each voxel keeps point indices and a running-average virtual point
-3. **New Point Detection** (`DetectNewPoints()`, no-op unless `dyn_detect_en`): points whose pillar voxel key (PillarLocation + z layer) is absent from the n-frame history window get `point_is_new_[i] = 1`, provided the voxel also has fewer occupied ring neighbors than `adjacent_dyn_threshold` (0 = off); the first n frames only accumulate the window (output starts at frame n+1); runs BEFORE `UpdateHistory()` so the window is the last n previous frames; independent of `point_labels_` — deletion/retention goes through `DefineSkipPoints()` per `keep_dyn`. With `dyn_cluster_en`, a final clustering pass (`confirmClusteredNewPoints`, M-detector-style) requires candidates to form a Euclidean cluster of >= `dyn_cluster_min_num` points (tolerance = `voxel_size`) — scattered quantization-hop false positives are downgraded to normal points; with `dyn_flat_filter_en`, clusters fitting in a thin slab along any coordinate axis (per-axis extent < `dyn_flat_band`, e.g. constant-height layers) are rejected as well — with the filter on only 3D blobs survive
+3. **New Point Detection** (`DetectNewPoints()`, no-op unless `dyn_detect_en`): points whose pillar voxel key (PillarLocation + z layer) is absent from the n-frame history window get `point_is_new_[i] = 1`, provided the voxel also has fewer occupied ring neighbors than `adjacent_dyn_threshold` (0 = off); the first n frames only accumulate the window (output starts at frame n+1); runs BEFORE `UpdateHistory()` so the window is the last n previous frames; independent of `point_labels_` — deletion goes through `DefineSkipPoints()` per `delete_dyn`. With `dyn_cluster_en`, a final clustering pass (`confirmClusteredNewPoints`, M-detector-style) requires candidates to form a Euclidean cluster of >= `dyn_cluster_min_num` points (tolerance = `voxel_size`) — scattered quantization-hop false positives are downgraded to normal points; with `dyn_flat_filter_en`, clusters fitting in a thin slab along any coordinate axis (per-axis extent < `dyn_flat_band`, e.g. constant-height layers) are rejected as well — with the filter on only 3D blobs survive
 4. **History Update** (`UpdateHistory()`, every frame when the pillar map is on): the current frame's occupied voxel keys join the n-frame window (oldest evicted, zero-count keys erased); shared by new-point detection and the redundant/isolated vertical-continuity checks
 5. **Detection** (`pillarDetection()`, three steps, history-aware):
    - Step 1: per-pillar flags — the bottom voxel without a close voxel above (< 2·voxel_size) in the current frame OR the window is a redundant candidate (confirmed only if it holds > `min_num` points); a voxel with ≥ 2·voxel_size gaps to both vertical neighbors is an isolated candidate (confirmed only if it holds < `min_num` points AND no intermediate z layer was seen in the window — transient sampling holes don't count as gaps); early-exit when nothing is flagged
    - Step 2: ring-based 3D adjacency check — redundant candidates need ≥ `adjacent_redundant_threshold` occupied ring neighbors (ring 1: 6 face neighbors at distance 1 voxel; ring 2: 12 edge neighbors at distance √2, probed only if `neighbor_ring_num` ≥ 2 and ring 1 is insufficient); isolated candidates with ≥ `adjacent_isolated_threshold` such neighbors are cancelled; ring counting is history-aware (a slot empty now but occupied within the window counts); dz=0 neighbors require height consistency (≤ `height_consistency_ratio`·voxel_size), dz≠0 neighbors are ungated
    - Step 3: assign per-point labels (LABEL_REDUNDANT / LABEL_ISOLATED)
 6. **Skip Point Definition** (`DefineSkipPoints()`):
-   - Isolated points: subject to `keep_isolated`/`keep_num_per_voxel` retention
-   - Redundant points: subject to `keep_redundant`/`keep_num_per_voxel` retention (newest-n-per-voxel via `applyVoxelRetention()`)
-   - New points: subject to `keep_dyn`/`keep_num_per_voxel` retention (via `applyVoxelRetention()` with `voxel_class = 1`); skipped points are deleted by `removeFlaggedPoints()` like the others
+   - Isolated points: deleted when `delete_isolated` is true, kept otherwise
+   - Redundant points: deleted when `delete_redundant` is true, kept otherwise
+   - New points: deleted when `delete_dyn` is true, kept otherwise; skipped points are deleted by `removeFlaggedPoints()` like the others
 7. **Output**: `/cloud_pillarmap` — one RGB cloud (new=red / isolated=blue / redundant=purple; only assembled and published when subscribers exist)
 8. **Cleanup**: Per-frame pillar voxels and `point_is_new_` cleared after each frame; the n-frame history window (`history_frames_`/`history_counts_`), the dynamic-point buffer (`dyn_buffer_`), and the long-term evidence map (`pillar_evidence_`) are the only pillar states that persist
 
@@ -486,6 +485,6 @@ The pillar voxel system operates independently of the main voxel map:
 - Per-point state lives in `PillarMap::point_labels_` (LABEL_NORMAL/REDUNDANT/ISOLATED), reset each frame in `BuildPillarMap()`
 - New-point state lives in `PillarMap::point_is_new_` (separate from `point_labels_` — a point can be new AND redundant/isolated), reset each frame in `DetectNewPoints()`; `PublishPillarMapCloud` must run before `ClearPillarMapVoxels`/`removeFlaggedPoints` (its indices refer to the pre-compaction cloud)
 - `UpdateHistory()` advances the n-frame window every frame whenever the pillar map is on — independent of `dyn_detect_en` — because `pillarDetection()` consumes it via `seenInHistory`/`gapSeenInHistory`; call order per frame: `DetectNewPoints` (window = last n previous frames) → `UpdateHistory` (window += current frame) → `pillarDetection` (window includes current frame; harmless there since current-frame evidence is checked separately)
-- With `keep_dyn` enabled, `DefineSkipPoints()` applies the same skip/retention scheme to new voxels (`applyVoxelRetention` with `voxel_class = 1`); a voxel flagged both new and redundant/isolated is handled by the new-point pass (class-0 retention ignores `is_new_voxel_`)
+- `DefineSkipPoints()` is a binary per-category decision: each flag category (`delete_redundant`/`delete_isolated`/`delete_dyn`) independently deletes or keeps its points — a voxel flagged both new and redundant/isolated is deleted when ANY of its categories says delete (the newest-n-per-voxel retention scheme was removed along with `keep_num_per_voxel`)
 - The n-frame history (`history_frames_`/`history_counts_`) is the only pillar state that survives `ClearPillarMapVoxels()`, and it advances every frame regardless of topic subscribers
 - Publishing skips cloud assembly and serialization when a topic has no subscribers

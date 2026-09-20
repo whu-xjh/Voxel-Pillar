@@ -90,18 +90,17 @@ pillar_map:
   voxel_size: 0.25
   pillar_buffer: 10  # n-frame pillar occupancy window; new-point detection starts at frame n+1 (n<=0: no reference kept, every point new)
   neighbor_ring_num: 1
-  keep_num_per_voxel: 1  # 0=skip all points, n=keep n newest points per voxel
   min_num: 5  # redundant voxel needs > this many points to confirm, isolated voxel needs < this
   height_consistency_ratio: 0.5  # ratio of voxel_size for height consistency check
 
   adjacent_redundant_threshold: 6
-  keep_redundant: false
+  delete_redundant: true  # true=delete redundant points before they enter the voxel map, false=keep them
 
   adjacent_isolated_threshold: 2
-  keep_isolated: false
+  delete_isolated: true  # true=delete isolated points before they enter the voxel map, false=keep them
 
   dyn_detect_en: true  # mark points whose pillar voxel was unseen in the last n frames; publish to /cloud_pillarmap (REQUIRED for the dyn buffer: dyn_cluster_expansion / dyn_bridge_display)
-  keep_dyn: false  # true=apply keep_num_per_voxel retention to new voxels, false=skip all new points
+  delete_dyn: true  # true=delete new points before they enter the voxel map, false=keep them
   adjacent_dyn_threshold: 5  # candidate new voxel confirmed only if same-layer occupied neighbors < this (0=check off)
   dyn_cluster_en: true  # cluster candidate new points; scattered singletons are downgraded to normal
   dyn_cluster_min_num: 10  # min points per cluster to confirm as new (sparse clouds: start small, 3-5)

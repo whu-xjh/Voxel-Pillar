@@ -45,10 +45,10 @@ imu:
   imu_int_frame: 30
 
   # standard setting
-  acc_cov: 0.1
-  gyr_cov: 0.1
-  b_acc_cov: 0.0001
-  b_gyr_cov: 0.0001
+  # acc_cov: 0.1
+  # gyr_cov: 0.1
+  # b_acc_cov: 0.0001
+  # b_gyr_cov: 0.0001
 
   # Long_Corridor
   # acc_cov: 0.2
@@ -63,10 +63,10 @@ imu:
   # b_gyr_cov: 0.0001
 
   # Final_Challenge, Urban_Challenge
-  # acc_cov: 0.2
-  # gyr_cov: 0.05
-  # b_acc_cov: 0.00005
-  # b_gyr_cov: 0.00005
+  acc_cov: 0.2
+  gyr_cov: 0.05
+  b_acc_cov: 0.00005
+  b_gyr_cov: 0.00005
 
   # cave04
   # acc_cov: 1.0
@@ -85,28 +85,28 @@ lio:
   max_points_num: 100 
   layer_init_num: [5, 5, 5, 5, 5]
   sigma_num: 3
-  capacity: 0  # LRU cache (0 = disable)
+  capacity: 0                       # LRU cache (0 = disable)
   intensity_fusion_en: true
-  intensity_gate_en: false  # Intensity-based association gate (reject material-inconsistent matches)
-  intensity_gate_k: 3.0     # Gate threshold in units of intensity sigma
-  intensity_noise_est_en: false  # Online estimation of intensity measurement noise (init window)
-  intensity_ema_alpha: 0.5      # EMA adaptation rate of plane intensity stats, in (0,1]; higher = faster
+  intensity_gate_en: false          # Intensity-based association gate (reject material-inconsistent matches)
+  intensity_gate_k: 3.0             # Gate threshold in units of intensity sigma
+  intensity_noise_est_en: false     # Online estimation of intensity measurement noise (init window)
+  intensity_ema_alpha: 0.5          # EMA adaptation rate of plane intensity stats, in (0,1]; higher = faster
   intensity_angle_comp_en: false
-  intensity_angle_exp: 1.0      # Lambertian exponent k (<=0 also disables)
-  intensity_angle_cos_floor: 0.2  # cos clip floor vs grazing-angle blow-up
-  intensity_angle_debug_en: false # dump matched (intensity, gain) pairs for validation
+  intensity_angle_exp: 1.0          # Lambertian exponent k (<=0 also disables)
+  intensity_angle_cos_floor: 0.2    # cos clip floor vs grazing-angle blow-up
+  intensity_angle_debug_en: false   # dump matched (intensity, gain) pairs for validation
 
-  degeneracy_adaptive_en: true   # engage intensity fusion only in degenerate scenes (requires intensity_fusion_en)
-  degeneracy_on_threshold: 0.1   # enter degenerate mode when lambda_min/lambda_max < this
-  degeneracy_off_threshold: 0.3  # exit hysteresis threshold; must be > on
-  degeneracy_min_frames: 5       # consecutive frames to switch state (debounce) 
+  degeneracy_adaptive_en: false     # engage intensity fusion only in degenerate scenes (requires intensity_fusion_en)
+  degeneracy_on_threshold: 0.1      # enter degenerate mode when lambda_min/lambda_max < this
+  degeneracy_off_threshold: 0.3     # exit hysteresis threshold; must be > on
+  degeneracy_min_frames: 5          # consecutive frames to switch state (debounce) 
 
- # R-VoxelMap-style plane init refinements
-  plane_refine_en: true
+  # R-VoxelMap-style plane init refinements
+  plane_refine_en: false
   init_distance_threshold: 0.1      # init_plane: drop points farther than this from the first PCA fit (m)
   plane_valid_check_en: true        # coplanar-disjoint-surface guard (2D grid DFS clustering)
   valid_check_max_layer: 1          # run the guard only on voxels at/above this layer
-  valid_check_min_points_size: 10   # min retained points to run the guard
+  valid_check_min_points_size: 20   # min retained points to run the guard
   valid_check_resolution: 4         # projection grid resolution factor
   valid_check_p_threshold: 0.8      # largest-cluster point-ratio threshold
 
@@ -114,27 +114,26 @@ lio:
 pillar_map:
   pillar_map_en: false
   voxel_size: 0.5
-  pillar_buffer: 3  # n-frame pillar occupancy window; new-point detection starts at frame n+1 (n<=0: no reference kept, every point new)
+  pillar_buffer: 1                  # n-frame pillar occupancy window; new-point detection starts at frame n+1 (n<=0: no reference kept, every point new)
   neighbor_ring_num: 1
-  keep_num_per_voxel: 5  # 0=skip all points, n=keep n newest points per voxel
-  min_num: 5  # redundant voxel needs > this many points to confirm, isolated voxel needs < this
-  height_consistency_ratio: 0.25  # ratio of voxel_size for height consistency check
+  min_num: 5                        # redundant voxel needs > this many points to confirm, isolated voxel needs < this
+  height_consistency_ratio: 0.25    # ratio of voxel_size for height consistency check
 
-  adjacent_redundant_threshold: 4
-  keep_redundant: false
+  adjacent_redundant_threshold: 5
+  delete_redundant: true            # true=delete redundant points before they enter the voxel map, false=keep them
 
   adjacent_isolated_threshold: 3
-  keep_isolated: false
+  delete_isolated: true             # true=delete isolated points before they enter the voxel map, false=keep them
 
-  dyn_detect_en: false  # mark points whose pillar voxel was unseen in the last n frames; publish to /cloud_pillarmap
-  adjacent_dyn_threshold: 3  # candidate new voxel confirmed only if same-layer occupied neighbors < this (0=check off)
-  keep_dyn: false  # true=apply keep_num_per_voxel retention to new voxels, false=skip all new points
-  dyn_cluster_en: true  # cluster candidate new points; scattered singletons are downgraded to normal
-  dyn_cluster_min_num: 5  # min points per cluster to confirm as new (sparse clouds: start small, 3-5)
-  dyn_flat_filter_en: true  # reject clusters fitting in a thin slab along any coordinate axis (only 3D blobs survive)
-  dyn_flat_band: 0.1  # max per-axis extent to count as flat; keep < narrow-target depth (~0.3m); over-large band silences all output
-  dyn_buffer_max_age: 3  # dyn-buffer voxel freshness window: buffer aging + rescue-pooling horizon (0 = buffer off; dyn_bridge_display needs > 0)
-  dyn_bridge_display: false  # display-only bridge: re-publish stale points of intermittently detected targets, red (needs dyn_buffer_max_age > 0)
+  dyn_detect_en: false              # mark points whose pillar voxel was unseen in the last n frames; publish to /cloud_pillarmap
+  adjacent_dyn_threshold: 3         # candidate new voxel confirmed only if same-layer occupied neighbors < this (0=check off)
+  delete_dyn: true                  # true=delete new points before they enter the voxel map, false=keep them
+  dyn_cluster_en: true              # cluster candidate new points; scattered singletons are downgraded to normal
+  dyn_cluster_min_num: 5            # min points per cluster to confirm as new (sparse clouds: start small, 3-5)
+  dyn_flat_filter_en: true          # reject clusters fitting in a thin slab along any coordinate axis (only 3D blobs survive)
+  dyn_flat_band: 0.1                # max per-axis extent to count as flat; keep < narrow-target depth (~0.3m); over-large band silences all output
+  dyn_buffer_max_age: 3             # dyn-buffer voxel freshness window: buffer aging + rescue-pooling horizon (0 = buffer off; dyn_bridge_display needs > 0)
+  dyn_bridge_display: false         # display-only bridge: re-publish stale points of intermittently detected targets, red (needs dyn_buffer_max_age > 0)
   
 local_map:
   map_sliding_en: false

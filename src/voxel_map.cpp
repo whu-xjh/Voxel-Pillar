@@ -95,9 +95,8 @@ void loadPillarMapConfig(ros::NodeHandle &nh, PillarMapConfig &config)
   nh.param<bool>("pillar_map/pillar_map_en", config.pillar_map_en_, false);
   nh.param<double>("pillar_map/voxel_size", config.voxel_size_, 1.0);
   nh.param<int>("pillar_map/adjacent_redundant_threshold", config.adjacent_redundant_threshold_, 3);
-  nh.param<int>("pillar_map/keep_num_per_voxel", config.keep_num_per_voxel_, 0);
-  nh.param<bool>("pillar_map/keep_redundant", config.keep_redundant_, true);
-  nh.param<bool>("pillar_map/keep_isolated", config.keep_isolated_, false);
+  nh.param<bool>("pillar_map/delete_redundant", config.delete_redundant_, false);
+  nh.param<bool>("pillar_map/delete_isolated", config.delete_isolated_, false);
   nh.param<int>("pillar_map/adjacent_isolated_threshold", config.adjacent_isolated_threshold_, 3);
   nh.param<int>("pillar_map/neighbor_ring_num", config.neighbor_ring_num_, 1);
   nh.param<bool>("pillar_map/dyn_bridge_display", config.dyn_bridge_display_, false);
@@ -106,7 +105,7 @@ void loadPillarMapConfig(ros::NodeHandle &nh, PillarMapConfig &config)
   nh.param<int>("pillar_map/min_num", config.min_num_, 5);  // redundant voxel needs > this many points, isolated needs < this
   nh.param<bool>("pillar_map/dyn_detect_en", config.dyn_detect_en_, false);
   nh.param<int>("pillar_map/pillar_buffer", config.pillar_buffer_, 10);
-  nh.param<bool>("pillar_map/keep_dyn", config.keep_dyn_, true);
+  nh.param<bool>("pillar_map/delete_dyn", config.delete_dyn_, false);
   nh.param<int>("pillar_map/adjacent_dyn_threshold", config.adjacent_dyn_threshold_, 0);
   nh.param<bool>("pillar_map/dyn_cluster_en", config.dyn_cluster_en_, false);
   nh.param<int>("pillar_map/dyn_cluster_min_num", config.dyn_cluster_min_num_, 5);
@@ -1914,7 +1913,7 @@ void PillarMap::DetectNewPoints()
 
   // Clustering confirmation (MDetector-style post-processing): scattered
   // candidates that fail to form a cluster are downgraded to normal before
-  // anything downstream (publishing, keep_dyn) sees them
+  // anything downstream (publishing, delete_dyn) sees them
   if (config_.dyn_cluster_en_) confirmClusteredNewPoints();
 
   // Cross-frame dynamic-point buffer: the frame stamp advances FIRST (the
@@ -2347,63 +2346,12 @@ void PillarMap::pillarDetection()
   }
 }
 
-// Shared retention pass: keep the newest keep_num points per flagged voxel
-// (the tail of point_indices_, which follows scan order), mark the rest in skip_list_.
-// voxel_class selects the flagged set: 0 = redundant/isolated voxels (legacy
-// behavior), 1 = new-point voxels only
-void VoxelMapManager::applyVoxelRetention(int keep_num, int &flagged_total, int &flagged_kept, int &final_skip_count,
-                                          int voxel_class)
-{
-  for (const auto &pillar_entry : pillar_map_.pillars_)
-  {
-    for (const auto &voxel_entry : pillar_entry.second)
-    {
-      const PillarMapVoxel &voxel = voxel_entry.second;
-
-      // Select the flagged set and check its keep flag
-      if (voxel_class == 1)
-      {
-        if (!voxel.is_new_voxel_) continue;
-        if (pillar_map_.config_.keep_dyn_ <= 0) continue;
-      }
-      else
-      {
-        if (!voxel.is_redundant_voxel_ && !voxel.is_isolated_voxel_) continue;
-        if (voxel.is_redundant_voxel_ && pillar_map_.config_.keep_redundant_ <= 0) continue;
-        if (voxel.is_isolated_voxel_ && pillar_map_.config_.keep_isolated_ <= 0) continue;
-      }
-
-      const std::vector<size_t> &point_indices = voxel.point_indices_;
-      const int voxel_point_num = static_cast<int>(point_indices.size());
-
-      if (voxel_point_num == 0)
-        continue;
-
-      flagged_total += voxel_point_num;
-
-      // If voxel has <= keep_num points, keep all
-      if (voxel_point_num <= keep_num)
-      {
-        flagged_kept += voxel_point_num;
-        continue;
-      }
-
-      // Skip old points, keep newest 'keep_num' points (at the end of vector)
-      int num_to_skip = voxel_point_num - keep_num;
-      for (int i = 0; i < num_to_skip; ++i)
-      {
-        size_t point_idx = point_indices[i];
-        if (!skip_list_[point_idx])
-        {
-          skip_list_[point_idx] = true;
-          final_skip_count++;
-        }
-      }
-      flagged_kept += keep_num;
-    }
-  }
-}
-
+// Mark flagged points for deletion in skip_list_ (consumed by
+// removeFlaggedPoints): binary per-category switches — delete_redundant /
+// delete_isolated / delete_dyn; a point carrying several flags is deleted
+// when ANY of its categories says delete. Kept flagged points enter the voxel
+// map as usual; /cloud_pillarmap coloring is unaffected (it reads the labels
+// before this filter)
 void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_world)
 {
   const size_t point_num = feats_down_world->points.size();
@@ -2414,91 +2362,48 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
     return;
   }
 
+  const PillarMapConfig &cfg = pillar_map_.config_;
   int isolated_count = 0;
   int redundant_count = 0;
   int new_count = 0;
   int final_skip_count = 0;
-  const bool new_detect_on = pillar_map_.config_.dyn_detect_en_;
+  const bool new_detect_on = cfg.dyn_detect_en_;
 
+  // Binary per-category deletion: each flagged category has its own delete
+  // switch; a point carrying several flags is deleted when ANY of them says
+  // delete (e.g. delete_dyn off + delete_redundant on still removes a point
+  // that is both new and redundant)
   for (size_t i = 0; i < point_num; ++i)
   {
-    int8_t label = pillar_map_.GetPointLabel(i);
-
+    const int8_t label = pillar_map_.GetPointLabel(i);
+    bool del = false;
     if (label == LABEL_ISOLATED)
     {
-      if (pillar_map_.config_.keep_isolated_ <= 0 || pillar_map_.config_.keep_num_per_voxel_ <= 0)
-      {
-        skip_list_[i] = true;
-        final_skip_count++;
-      }
       isolated_count++;
+      del = cfg.delete_isolated_;
     }
     else if (label == LABEL_REDUNDANT)
     {
       redundant_count++;
+      del = cfg.delete_redundant_;
     }
 
-    if (new_detect_on && pillar_map_.GetPointIsNew(i)) new_count++;
-  }
-
-  // New points: same retention scheme as redundant/isolated. A voxel flagged
-  // both new and redundant/isolated is handled by this pass (the redundant/
-  // isolated retention below ignores is_new_voxel_)
-  int new_total = 0;
-  int new_kept = 0;
-  if (new_detect_on)
-  {
-    if (pillar_map_.config_.keep_dyn_ <= 0 || pillar_map_.config_.keep_num_per_voxel_ <= 0)
+    if (new_detect_on && pillar_map_.GetPointIsNew(i))
     {
-      // Skip ALL new points
-      for (size_t i = 0; i < point_num; ++i)
-      {
-        if (pillar_map_.GetPointIsNew(i))
-        {
-          new_total++;
-          if (!skip_list_[i])
-          {
-            skip_list_[i] = true;
-            final_skip_count++;
-          }
-        }
-      }
+      new_count++;
+      del = del || cfg.delete_dyn_;
     }
-    else
+
+    if (del)
     {
-      // Keep newest n points per new voxel
-      applyVoxelRetention(pillar_map_.config_.keep_num_per_voxel_, new_total, new_kept, final_skip_count, 1);
+      skip_list_[i] = true;
+      final_skip_count++;
     }
   }
 
-  // Redundant points: skip all, or keep newest n per voxel
-  int redundant_total = 0;
-  int redundant_kept = 0;
-  if (pillar_map_.config_.keep_redundant_ <= 0 || pillar_map_.config_.keep_num_per_voxel_ <= 0)
-  {
-    // Skip ALL redundant points
-    for (size_t i = 0; i < point_num; ++i)
-    {
-      if (pillar_map_.GetPointLabel(i) == LABEL_REDUNDANT)
-      {
-        redundant_total++;
-        if (!skip_list_[i])
-        {
-          skip_list_[i] = true;
-          final_skip_count++;
-        }
-      }
-    }
-  }
-  else
-  {
-    // Keep newest n points per redundant/isolated voxel
-    applyVoxelRetention(pillar_map_.config_.keep_num_per_voxel_, redundant_total, redundant_kept, final_skip_count, 0);
-  }
-
-  ROS_DEBUG("[DefineSkipPoints]: Isolated: %d, Redundant: %d (kept %d/%d), New: %d (kept %d/%d), Skip_total: %d/%zu (%.1f%%)",
-            isolated_count, redundant_count, redundant_kept, redundant_total, new_count, new_kept, new_total,
-            final_skip_count, point_num, 100.0 * final_skip_count / point_num);
+  ROS_DEBUG("[DefineSkipPoints]: Isolated: %d, Redundant: %d, New: %d, Skip_total: %d/%zu (%.1f%%)",
+            isolated_count, redundant_count, new_count, final_skip_count, point_num,
+            100.0 * final_skip_count / point_num);
 
   // Update statistics
   current_skip_count_ = final_skip_count;
