@@ -80,6 +80,10 @@ void loadVoxelConfig(ros::NodeHandle &nh, VoxelMapConfig &voxel_config)
   nh.param<double>("lio/intensity_ema_alpha", intensity_ema_alpha, 0.5);
   // Keep alpha in (0, 1]: 0 would freeze the statistics, >1 diverges
   VoxelPlane::intensity_ema_alpha_ = std::min(std::max(intensity_ema_alpha, 1e-3), 1.0);
+  nh.param<bool>("lio/intensity_angle_comp_en", voxel_config.intensity_angle_comp_en_, false);
+  nh.param<double>("lio/intensity_angle_exp", voxel_config.intensity_angle_exp_, 1.0);
+  nh.param<double>("lio/intensity_angle_cos_floor", voxel_config.intensity_angle_cos_floor_, 0.2);
+  nh.param<bool>("lio/intensity_angle_debug_en", voxel_config.intensity_angle_debug_en_, false);
 
   nh.param<bool>("local_map/map_sliding_en", voxel_config.map_sliding_en_, false);
   nh.param<int>("local_map/half_map_size", voxel_config.half_map_size_, 100);
@@ -96,22 +100,57 @@ void loadPillarMapConfig(ros::NodeHandle &nh, PillarMapConfig &config)
   nh.param<bool>("pillar_map/keep_isolated", config.keep_isolated_, false);
   nh.param<int>("pillar_map/adjacent_isolated_threshold", config.adjacent_isolated_threshold_, 3);
   nh.param<int>("pillar_map/neighbor_ring_num", config.neighbor_ring_num_, 1);
-  nh.param<bool>("pillar_map/dyn_bridge_en", config.dyn_bridge_en_, false);
-  nh.param<int>("pillar_map/dyn_bridge_max_age", config.dyn_bridge_max_age_, 3);
+  nh.param<bool>("pillar_map/dyn_bridge_display", config.dyn_bridge_display_, false);
+  nh.param<int>("pillar_map/dyn_buffer_max_age", config.dyn_buffer_max_age_, 3);
   nh.param<double>("pillar_map/height_consistency_ratio", config.height_consistency_ratio_, 0.25);
   nh.param<int>("pillar_map/min_num", config.min_num_, 5);  // redundant voxel needs > this many points, isolated needs < this
   nh.param<bool>("pillar_map/dyn_detect_en", config.dyn_detect_en_, false);
-  nh.param<int>("pillar_map/history_frame_num", config.history_frame_num_, 10);
+  nh.param<int>("pillar_map/pillar_buffer", config.pillar_buffer_, 10);
   nh.param<bool>("pillar_map/keep_dyn", config.keep_dyn_, true);
   nh.param<int>("pillar_map/adjacent_dyn_threshold", config.adjacent_dyn_threshold_, 0);
   nh.param<bool>("pillar_map/dyn_cluster_en", config.dyn_cluster_en_, false);
   nh.param<int>("pillar_map/dyn_cluster_min_num", config.dyn_cluster_min_num_, 5);
+  nh.param<bool>("pillar_map/dyn_cluster_expansion", config.dyn_cluster_expansion_, false);
   nh.param<bool>("pillar_map/dyn_flat_filter_en", config.dyn_flat_filter_en_, false);
   nh.param<double>("pillar_map/dyn_flat_band", config.dyn_flat_band_, 0.2);
+
+  if (config.dyn_bridge_display_ && config.dyn_buffer_max_age_ <= 0)
+    ROS_WARN("[pillar_map] dyn_bridge_display needs dyn_buffer_max_age > 0 (buffer off) — display will be a no-op");
 }
 
 namespace
 {
+// Rotation snapshot consumed by the map-side incidence-angle gain (init_plane
+// batch stats and the UpdateOctoTree EMA): refreshed at the BuildVoxelMap /
+// UpdateVoxelMap entry from the manager state (frame 1: gravity-aligned init;
+// afterwards the previous frame's optimized pose — matching when each path
+// actually runs). The residual side (build_single_residual) passes the live
+// iteration rotation instead. Map-side paths run only on the sequential
+// per-frame pipeline, so no synchronization is needed
+Eigen::Matrix3d g_intensity_rot = Eigen::Matrix3d::Identity();
+
+// Incidence-angle gain of the intensity channel: gain = max(|cosθ|, floor)^k
+// with θ the angle between the laser beam and the plane normal. Corrected
+// intensity = raw / gain, corrected variance = raw variance / gain² — plane
+// statistics then express material (normal-incidence reflectivity) instead of
+// viewing geometry (Intensity-SLAM-style cosine compensation). Deliberately
+// free of the comp switch: callers gate on intensity_angle_comp_en_ so the
+// debug dump can record the raw geometric gain with compensation disabled.
+// Returns 1.0 (no-op) when the exponent is <= 0, the normal is unset
+// (non-plane voxel), or the body-frame beam direction is degenerate
+double intensityIncGain(const Eigen::Vector3d &point_b, const Eigen::Vector3d &normal_w,
+                        const Eigen::Matrix3d &rot_w, const VoxelMapConfig &config)
+{
+  const double k = config.intensity_angle_exp_;
+  if (k <= 0.0) return 1.0;
+  if (normal_w.squaredNorm() < 0.5) return 1.0;  // normal not set (non-plane voxel)
+  const double norm_b = point_b.norm();
+  if (norm_b < 1e-6) return 1.0;                 // beam direction unavailable
+  const Eigen::Vector3d n_b = rot_w.transpose() * normal_w;
+  const double cos_inc = std::fabs(n_b.dot(point_b) / norm_b);
+  return std::pow(std::max(cos_inc, config.intensity_angle_cos_floor_), k);
+}
+
 // Plain PCA over a point set: centroid, covariance, eigen decomposition
 // (ascending eigenvalues, col(0) = min-eigenvalue direction). Shared by the
 // multi-pass plane fitting in init_plane
@@ -222,18 +261,28 @@ void VoxelOctoTree::init_plane(std::vector<pointWithVar> &points, VoxelPlane *pl
   // UpdateOctoTree, so overwriting from the recent temp_points_ window would
   // discard the accumulated history. No hard std floor here: the measurement
   // noise term (intensity_meas_var_) is added at the use sites instead.
+  // Points are folded in as incidence-angle-corrected reflectivity (raw / gain)
+  // so the statistics match the EMA and residual-side semantics; the fitted
+  // normal comes from the local pcaFit result (ascending eigenvalues → col(0))
   if (!points.empty() && !plane->intensity_init_)
   {
+    const bool batch_comp = config_ptr_->intensity_angle_comp_en_;
+    Eigen::Matrix3f::Index fit_min_idx = 0;
+    evals.minCoeff(&fit_min_idx);
+    const Eigen::Vector3d fit_normal = evecs.col(fit_min_idx);
+
     double intensity_sum = 0.0;
     for (auto pv : points)
     {
-      intensity_sum += static_cast<double>(pv.intensity);
+      const double gain = batch_comp ? intensityIncGain(pv.point_b, fit_normal, g_intensity_rot, *config_ptr_) : 1.0;
+      intensity_sum += static_cast<double>(pv.intensity) / gain;
     }
     double intensity_mean = intensity_sum / static_cast<double>(plane->points_size_);
     double intensity_variance = 0.0;
     for (auto pv : points)
     {
-      double diff = static_cast<double>(pv.intensity) - intensity_mean;
+      const double gain = batch_comp ? intensityIncGain(pv.point_b, fit_normal, g_intensity_rot, *config_ptr_) : 1.0;
+      double diff = static_cast<double>(pv.intensity) / gain - intensity_mean;
       intensity_variance += diff * diff;
     }
     plane->mean_intensity_ = intensity_mean;
@@ -588,9 +637,15 @@ void VoxelOctoTree::UpdateOctoTree(const pointWithVar &pv)
       // EMA update for intensity statistics (always runs, even when update_enable_=false).
       // No hard std floor: the measurement noise term added at the use sites
       // (intensity_meas_var_) keeps the effective variance from collapsing.
+      // The folded value is the incidence-angle-corrected reflectivity
+      // (raw / gain, gain = 1 when compensation is off) so the plane statistics
+      // stay viewing-geometry-invariant and consistent with init_plane / residuals
       {
         const double alpha = VoxelPlane::intensity_ema_alpha_;
-        double val = static_cast<double>(pv.intensity);
+        const double gain = config_ptr_->intensity_angle_comp_en_
+                                ? intensityIncGain(pv.point_b, plane_ptr_->normal_, g_intensity_rot, *config_ptr_)
+                                : 1.0;
+        double val = static_cast<double>(pv.intensity) / gain;
         double delta = val - plane_ptr_->mean_intensity_;
         plane_ptr_->mean_intensity_ += alpha * delta;
         double variance = (1.0 - alpha) * plane_ptr_->intensity_std_ * plane_ptr_->intensity_std_ + alpha * delta * delta;
@@ -646,9 +701,14 @@ void VoxelOctoTree::UpdateOctoTree(const pointWithVar &pv)
         // EMA update for intensity statistics (always runs).
         // No hard std floor: the measurement noise term added at the use sites
         // (intensity_meas_var_) keeps the effective variance from collapsing.
+        // Incidence-angle-corrected reflectivity, same as the plane branch;
+        // non-plane voxels have an unset normal → gain 1
         {
           const double alpha = VoxelPlane::intensity_ema_alpha_;
-          double val = static_cast<double>(pv.intensity);
+          const double gain = config_ptr_->intensity_angle_comp_en_
+                                  ? intensityIncGain(pv.point_b, plane_ptr_->normal_, g_intensity_rot, *config_ptr_)
+                                  : 1.0;
+          double val = static_cast<double>(pv.intensity) / gain;
           double delta = val - plane_ptr_->mean_intensity_;
           plane_ptr_->mean_intensity_ += alpha * delta;
           double variance = (1.0 - alpha) * plane_ptr_->intensity_std_ * plane_ptr_->intensity_std_ + alpha * delta * delta;
@@ -908,6 +968,20 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
     if (EKF_stop_flg) break;
   }
 
+  // Incidence-angle validation dump: per-frame matched (raw intensity, geometric
+  // gain) pairs from the last iteration. Scatter intensity vs gain to decide
+  // whether to enable compensation: slope ≈ 0 → the sensor intensity is already
+  // angle-calibrated (keep comp off); slope ≈ I·k → Lambertian, enable comp.
+  // Written after the iteration loop so earlier iterations don't duplicate rows
+  if (config_setting_.intensity_angle_debug_en_ && !angle_dbg_gain_.empty())
+  {
+    std::ofstream fout(DEBUG_FILE_DIR("intensity_angle.txt"), std::ios::app);
+    for (size_t i = 0; i < angle_dbg_gain_.size(); ++i)
+    {
+      fout << angle_dbg_intensity_[i] << " " << angle_dbg_gain_[i] << "\n";
+    }
+  }
+
   // Degeneracy-adaptive intensity fusion: frame-end hysteresis state machine
   // on the last iteration's degeneracy factor. The resulting
   // intensity_fusion_active_ governs the NEXT frame's residual association
@@ -957,6 +1031,7 @@ void VoxelMapManager::BuildVoxelMap()
   int max_layer = config_setting_.max_layer_; // Maximum number of layers
   int max_points_num = config_setting_.max_points_num_; // Maximum points per voxel
   std::vector<int> layer_init_num = config_setting_.layer_init_num_; // Initial point threshold for each layer subdivision
+  g_intensity_rot = state_.rot_end; // refresh the map-side incidence-angle rotation snapshot
 
   // 2. Data preparation phase
   // Optimization: pre-allocate input_points capacity to avoid runtime reallocation
@@ -969,6 +1044,7 @@ void VoxelMapManager::BuildVoxelMap()
     pv.point_w << feats_down_world_->points[i].x, feats_down_world_->points[i].y, feats_down_world_->points[i].z;
     pv.intensity = feats_down_world_->points[i].intensity;  // Extract point intensity
     V3D point_this(feats_down_body_->points[i].x, feats_down_body_->points[i].y, feats_down_body_->points[i].z);
+    pv.point_b = point_this; // beam direction in the sensor frame, consumed by the incidence-angle gain
     M3D var;
     // Compute point covariance matrix in sensor coordinate system
     calcBodyCov(point_this, config_setting_.dept_err_, config_setting_.beam_err_, var);
@@ -1035,6 +1111,7 @@ void VoxelMapManager::UpdateVoxelMap(const std::vector<pointWithVar> &input_poin
   int max_layer = config_setting_.max_layer_;
   int max_points_num = config_setting_.max_points_num_;
   std::vector<int> layer_init_num = config_setting_.layer_init_num_;
+  g_intensity_rot = state_.rot_end; // refresh the map-side incidence-angle rotation snapshot
 
   uint plsize = input_points.size();
   for (uint i = 0; i < plsize; i++)
@@ -1106,6 +1183,11 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
   double sigma_num = config_setting_.sigma_num_;
   // std::mutex mylock;
   ptpl_list.clear();
+  if (config_setting_.intensity_angle_debug_en_)
+  {
+    angle_dbg_intensity_.clear();
+    angle_dbg_gain_.clear();
+  }
   std::vector<PointToPlane> all_ptpl_list(pv_list.size());
   // NOT vector<bool>: per-index proxy writes inside the parallel loop below
   // would be non-atomic word-level RMW races
@@ -1193,7 +1275,15 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
   }
   for (size_t i = 0; i < useful_ptpl.size(); i++)
   {
-    if (useful_ptpl[i]) { ptpl_list.push_back(all_ptpl_list[i]); }
+    if (useful_ptpl[i])
+    {
+      ptpl_list.push_back(all_ptpl_list[i]);
+      if (config_setting_.intensity_angle_debug_en_)
+      {
+        angle_dbg_intensity_.push_back(all_ptpl_list[i].intensity_);
+        angle_dbg_gain_.push_back(all_ptpl_list[i].intensity_gain_);
+      }
+    }
   }
 }
 
@@ -1229,8 +1319,18 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
         // strictly positive: every candidate plane is scored with the same 2D
         // likelihood form and none falls back to geometry-only scoring while
         // fusion/gate are enabled.
-        double intensity_diff = static_cast<double>(pv.intensity) - plane.mean_intensity_;
-        double sigma_int_sq = std::max(plane.intensity_std_ * plane.intensity_std_ + VoxelPlane::intensity_meas_var_, 1e-3);
+        // Query-side incidence-angle correction: the query intensity enters as
+        // normal-incidence-equivalent reflectivity (raw / gain) to match the
+        // plane statistics' semantics; the variance (plane spread + raw-space
+        // measurement noise) is scaled by 1/gain² accordingly. Uses the live
+        // iteration rotation, unlike the map-side snapshot. Skipped entirely
+        // when neither compensation nor the validation dump needs it
+        const bool angle_needed = config_setting_.intensity_angle_comp_en_ || config_setting_.intensity_angle_debug_en_;
+        const double raw_gain = angle_needed ? intensityIncGain(pv.point_b, plane.normal_, state_.rot_end, config_setting_) : 1.0;
+        const double intensity_gain = config_setting_.intensity_angle_comp_en_ ? raw_gain : 1.0;
+        double intensity_diff = static_cast<double>(pv.intensity) / intensity_gain - plane.mean_intensity_;
+        double sigma_int_sq = std::max(plane.intensity_std_ * plane.intensity_std_ + VoxelPlane::intensity_meas_var_, 1e-3) /
+                              (intensity_gain * intensity_gain);
 
         // Intensity gate: reject associations whose intensity profile is inconsistent
         // with the plane (e.g. dynamic objects in front of static surfaces). Requires
@@ -1276,6 +1376,7 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
           single_ptpl.point_b_ = pv.point_b;
           single_ptpl.point_w_ = pv.point_w;
           single_ptpl.intensity_ = pv.intensity;  // Pass intensity information
+          single_ptpl.intensity_gain_ = raw_gain; // geometric gain, for the validation dump
           single_ptpl.plane_var_ = plane.plane_var_;
           single_ptpl.normal_ = plane.normal_;
           single_ptpl.center_ = plane.center_;
@@ -1564,7 +1665,7 @@ void PillarMap::updatePillarFlag(const PillarLocation &pillar_key, PillarMapArra
 {
   // Step 1: Bottom voxel redundant check. Point-count gate: only dense voxels
   // (> config_.min_num_ points) are confirmed redundant. History: the layer
-  // directly above (bottom_z + 1) seen in any of the last history_frame_num
+  // directly above (bottom_z + 1) seen in any of the last pillar_buffer
   // frames means the missing close-above is a transient sampling hole
   PillarMapVoxel* bottom_voxel = &pillar_maps.begin()->second;
   bool has_close_above = std::next(pillar_maps.begin()) != pillar_maps.end()
@@ -1741,12 +1842,12 @@ void PillarMap::BuildPillarMap(const PointCloudXYZI::Ptr &input_cloud)
 }
 
 // New point detection: a point whose pillar voxel was not occupied in any of
-// the last history_frame_num_ frames is flagged new. Runs right after
+// the last pillar_buffer_ frames is flagged new. Runs right after
 // BuildPillarMap — point_is_new_ is independent of point_labels_ (a point can
 // be new AND redundant/isolated), so ordering vs. pillarDetection() does not
 // matter, only vs. ClearPillarMapVoxels() (this must run first). The first
-// history_frame_num_ frames only accumulate the reference window; detection
-// output starts at frame history_frame_num_ + 1. Runs BEFORE UpdateHistory(),
+// pillar_buffer_ frames only accumulate the reference window; detection
+// output starts at frame pillar_buffer_ + 1. Runs BEFORE UpdateHistory(),
 // so the window consulted here is exactly the last n previous frames.
 // No-op when dyn_detect_en_ is false (the history itself is advanced by
 // UpdateHistory() every frame — the redundant/isolated checks consume it too).
@@ -1757,7 +1858,7 @@ void PillarMap::DetectNewPoints()
   const size_t num_points = point_cloud_ptr_ ? point_cloud_ptr_->points.size() : 0;
   point_is_new_.assign(num_points, 0);
 
-  const int n = std::max(config_.history_frame_num_, 0);
+  const int n = std::max(config_.pillar_buffer_, 0);
   const bool detection_on = history_frame_count_ >= static_cast<size_t>(n);
   const int adjacent_threshold = config_.adjacent_dyn_threshold_;
 
@@ -1816,14 +1917,15 @@ void PillarMap::DetectNewPoints()
   // anything downstream (publishing, keep_dyn) sees them
   if (config_.dyn_cluster_en_) confirmClusteredNewPoints();
 
-  // Cross-frame dynamic-point bridge: the frame stamp advances FIRST (the
-  // rescue sweep below and the aging/prune inside dyn_bridge_insert both use
-  // it), then confirmed voxels enter dyn_buffer_. Runs every frame when the
-  // bridge is on — even with zero detections — so stale targets expire
-  // correctly. NOTE: placed after the dyn_detect_en_ gate — the bridge
-  // is fed by detection, so dyn_detect_en must be on for it to do
-  // anything
-  if (config_.dyn_bridge_en_)
+  // Cross-frame dynamic-point buffer: the frame stamp advances FIRST (the
+  // aging/prune inside dyn_bridge_insert and the last_frame stamp assigned to
+  // re-confirmed voxels both use it), then confirmed voxels enter dyn_buffer_.
+  // Runs every frame whenever the buffer has a consumer (expansion rescue or
+  // display bridge) — even with zero detections — so stale voxels expire
+  // correctly. NOTE: placed after the dyn_detect_en_ gate — the buffer is fed
+  // by detection, so dyn_detect_en must be on for it to do anything
+  if (config_.dyn_buffer_max_age_ > 0 &&
+      (config_.dyn_bridge_display_ || (config_.dyn_cluster_en_ && config_.dyn_cluster_expansion_)))
   {
     dyn_bridge_frame_ = static_cast<int>(history_frame_count_);
     dyn_bridge_insert();
@@ -1837,10 +1939,11 @@ void PillarMap::DetectNewPoints()
 // the same history. Must run AFTER DetectNewPoints() (whose check must see
 // the window WITHOUT the current frame) and BEFORE pillarDetection() (whose
 // vertical-continuity checks may include it)
-// Cross-frame dynamic-point bridge (M-Detector umap-style): confirmed voxels
-// enter dyn_buffer_ so their components keep being published on frames where
+// Cross-frame dynamic-point buffer (M-Detector umap-style): confirmed voxels
+// enter dyn_buffer_, feeding the clustering rescue sweep (key membership) and,
+// when dyn_bridge_display_ is on, the stale-point re-publish on frames where
 // detection is missed. The frame stamp advances and aged voxels are pruned
-// every frame (even with zero detections) so stale targets expire correctly
+// every frame (even with zero detections) so stale voxels expire correctly
 void PillarMap::dyn_bridge_insert()
 {
   // The frame stamp is assigned by the caller (DetectNewPoints) before this
@@ -1852,11 +1955,16 @@ void PillarMap::dyn_bridge_insert()
     {
       if (!voxel_entry.second.is_new_voxel_) continue;
       auto &entry = dyn_buffer_[PillarMapKey(pillar_entry.first, voxel_entry.first)];
-      entry.points.clear();  // re-confirmed voxel: replace with this frame's points
-      for (const size_t idx : voxel_entry.second.point_indices_)
+      if (config_.dyn_bridge_display_)
       {
-        const auto &pt = point_cloud_ptr_->points[idx];
-        entry.points.emplace_back(pt.x, pt.y, pt.z);
+        // Points are only needed for the stale-point re-publish; the rescue
+        // sweep consumes key membership, so skip the copy when display is off
+        entry.points.clear();  // re-confirmed voxel: replace with this frame's points
+        for (const size_t idx : voxel_entry.second.point_indices_)
+        {
+          const auto &pt = point_cloud_ptr_->points[idx];
+          entry.points.emplace_back(pt.x, pt.y, pt.z);
+        }
       }
       entry.last_frame = dyn_bridge_frame_;
     }
@@ -1864,15 +1972,16 @@ void PillarMap::dyn_bridge_insert()
 
   for (auto it = dyn_buffer_.begin(); it != dyn_buffer_.end();)
   {
-    if (dyn_bridge_frame_ - it->second.last_frame > config_.dyn_bridge_max_age_)
+    if (dyn_bridge_frame_ - it->second.last_frame > config_.dyn_buffer_max_age_)
       it = dyn_buffer_.erase(it);
     else
       ++it;
   }
 
   // Cache this frame's buffer components for the bridge publish (the state
-  // here is final: inserted, confirmed-marked, and aged)
-  dyn_comps_ = dyn_bridge_components();
+  // here is final: inserted, confirmed-marked, and aged). Display-only —
+  // the rescue sweep reads the buffer directly and skips this
+  if (config_.dyn_bridge_display_) dyn_comps_ = dyn_bridge_components();
 }
 
 // Extract connected components (26-adjacency) of the dynamic-point buffer:
@@ -1977,7 +2086,7 @@ void PillarMap::UpdateHistory()
     history_counts_[key]++;
   }
 
-  const int n = std::max(config_.history_frame_num_, 0);
+  const int n = std::max(config_.pillar_buffer_, 0);
   while (history_frames_.size() > static_cast<size_t>(n))
   {
     for (const PillarMapKey &key : history_frames_.front())
@@ -1990,7 +2099,7 @@ void PillarMap::UpdateHistory()
 }
 
 // History-window occupancy oracle shared by the redundant/isolated checks:
-// was the (pillar, z) voxel occupied in any of the last history_frame_num
+// was the (pillar, z) voxel occupied in any of the last pillar_buffer
 // frames?
 bool PillarMap::seenInHistory(const PillarLocation &pillar, int64_t z_key) const
 {
@@ -2037,13 +2146,14 @@ void PillarMap::confirmClusteredNewPoints()
   }
   if (cand_idx.empty()) return;
 
-  // B. Rescue sweep (dyn_bridge): current points whose voxel sits in the
-  //    bridge buffer within dyn_bridge_max_age_ are target measurements the
-  //    occupancy window blocked (the target re-occupied its own recent
-  //    voxels) — pool them with the candidates for clustering. Iterating the
-  //    current voxels (not the whole cloud) keeps this O(occupied voxels)
+  // B. Rescue sweep (dyn_cluster_expansion): current points whose voxel sits
+  //    in the dynamic-point buffer within dyn_buffer_max_age_ are target
+  //    measurements the occupancy window blocked (the target re-occupied its
+  //    own recent voxels) — pool them with the candidates for clustering.
+  //    Iterating the current voxels (not the whole cloud) keeps this
+  //    O(occupied voxels)
   std::vector<size_t> rescue_idx;
-  if (config_.dyn_bridge_en_ && config_.dyn_bridge_max_age_ > 0 && !dyn_buffer_.empty())
+  if (config_.dyn_cluster_expansion_ && config_.dyn_buffer_max_age_ > 0 && !dyn_buffer_.empty())
   {
     for (const auto &pillar_entry : pillars_)
     {
@@ -2430,7 +2540,7 @@ void PillarMap::PublishPillarMapCloud(const ros::Publisher &pub)
   // Dynamic-point bridge (M-Detector umap-style): stale points of live buffer
   // components keep intermittently detected targets visible. Display-only,
   // red — never re-enter the skip pipeline
-  if (config_.dyn_bridge_en_)
+  if (config_.dyn_bridge_display_)
   {
     for (const auto &comp : dyn_comps_)
     {

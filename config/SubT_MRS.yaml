@@ -45,7 +45,7 @@ imu:
   imu_int_frame: 30
 
   # standard setting
-  acc_cov: 0.2
+  acc_cov: 0.1
   gyr_cov: 0.1
   b_acc_cov: 0.0001
   b_gyr_cov: 0.0001
@@ -81,22 +81,26 @@ lio:
   beam_err: 0.05
   min_eigen_value: 0.0025
   voxel_size: 0.5
-  max_layer: 2
+  max_layer: 1
   max_points_num: 100 
   layer_init_num: [5, 5, 5, 5, 5]
   sigma_num: 3
   capacity: 0  # LRU cache (0 = disable)
-  intensity_fusion_en: false
+  intensity_fusion_en: true
   intensity_gate_en: false  # Intensity-based association gate (reject material-inconsistent matches)
   intensity_gate_k: 3.0     # Gate threshold in units of intensity sigma
-  intensity_noise_est_en: true  # Online estimation of intensity measurement noise (init window)
+  intensity_noise_est_en: false  # Online estimation of intensity measurement noise (init window)
   intensity_ema_alpha: 0.5      # EMA adaptation rate of plane intensity stats, in (0,1]; higher = faster
+  intensity_angle_comp_en: false
+  intensity_angle_exp: 1.0      # Lambertian exponent k (<=0 also disables)
+  intensity_angle_cos_floor: 0.2  # cos clip floor vs grazing-angle blow-up
+  intensity_angle_debug_en: false # dump matched (intensity, gain) pairs for validation
 
   degeneracy_adaptive_en: true   # engage intensity fusion only in degenerate scenes (requires intensity_fusion_en)
   degeneracy_on_threshold: 0.1   # enter degenerate mode when lambda_min/lambda_max < this
-  degeneracy_off_threshold: 0.2  # exit hysteresis threshold; must be > on
-  degeneracy_min_frames: 2       # consecutive frames to switch state (debounce) 
-  
+  degeneracy_off_threshold: 0.3  # exit hysteresis threshold; must be > on
+  degeneracy_min_frames: 5       # consecutive frames to switch state (debounce) 
+
  # R-VoxelMap-style plane init refinements
   plane_refine_en: true
   init_distance_threshold: 0.1      # init_plane: drop points farther than this from the first PCA fit (m)
@@ -104,13 +108,13 @@ lio:
   valid_check_max_layer: 1          # run the guard only on voxels at/above this layer
   valid_check_min_points_size: 10   # min retained points to run the guard
   valid_check_resolution: 4         # projection grid resolution factor
-  valid_check_p_threshold: 0.5      # largest-cluster point-ratio threshold
+  valid_check_p_threshold: 0.8      # largest-cluster point-ratio threshold
 
 # Pillar Voxel Redundant Detection
 pillar_map:
   pillar_map_en: false
   voxel_size: 0.5
-  history_frame_num: 3  # history reference frame count n; detection starts at frame n+1 (n<=0: no reference kept, every point new)
+  pillar_buffer: 3  # n-frame pillar occupancy window; new-point detection starts at frame n+1 (n<=0: no reference kept, every point new)
   neighbor_ring_num: 1
   keep_num_per_voxel: 5  # 0=skip all points, n=keep n newest points per voxel
   min_num: 5  # redundant voxel needs > this many points to confirm, isolated voxel needs < this
@@ -129,8 +133,8 @@ pillar_map:
   dyn_cluster_min_num: 5  # min points per cluster to confirm as new (sparse clouds: start small, 3-5)
   dyn_flat_filter_en: true  # reject clusters fitting in a thin slab along any coordinate axis (only 3D blobs survive)
   dyn_flat_band: 0.1  # max per-axis extent to count as flat; keep < narrow-target depth (~0.3m); over-large band silences all output
-  dyn_bridge_en: false  # cross-frame dynamic-point bridge: intermittently detected targets stay visible (red) across detection gaps (requires dyn_detect_en: true)
-  dyn_bridge_max_age: 3  # frames a buffer voxel stays published after its last detection
+  dyn_buffer_max_age: 3  # dyn-buffer voxel freshness window: buffer aging + rescue-pooling horizon (0 = buffer off; dyn_bridge_display needs > 0)
+  dyn_bridge_display: false  # display-only bridge: re-publish stale points of intermittently detected targets, red (needs dyn_buffer_max_age > 0)
   
 local_map:
   map_sliding_en: false

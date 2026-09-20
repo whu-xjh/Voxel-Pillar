@@ -67,12 +67,16 @@ lio:
   valid_check_p_threshold: 0.5
   
   # intensity fusion
-  intensity_fusion_en: false
+  intensity_fusion_en: true
   intensity_gate_en: false
   intensity_gate_k: 3.0     # Gate threshold in units of intensity sigma
   intensity_fusion_weight: 0.8  # intensity weight in the joint score (0.5 = equal trust; requires intensity_fusion_en)
-  intensity_noise_est_en: true  # Online estimation of intensity measurement noise (init window)
+  intensity_noise_est_en: false  # Online estimation of intensity measurement noise (init window)
   intensity_ema_alpha: 0.5      # EMA adaptation rate of plane intensity stats, in (0,1]; higher = faster
+  intensity_angle_comp_en: true
+  intensity_angle_exp: 1.0      # Lambertian exponent k (<=0 also disables)
+  intensity_angle_cos_floor: 0.2  # cos clip floor vs grazing-angle blow-up
+  intensity_angle_debug_en: false # dump matched (intensity, gain) pairs for validation
 
   degeneracy_adaptive_en: false   # engage intensity fusion only in degenerate scenes (requires intensity_fusion_en)
   degeneracy_on_threshold: 0.1   # enter degenerate mode when lambda_min/lambda_max < this
@@ -84,27 +88,28 @@ pillar_map:
   pillar_map_en: true
 
   voxel_size: 0.25
-  history_frame_num: 10  # history reference frame count n; detection starts at frame n+1 (n<=0: no reference kept, every point new)
+  pillar_buffer: 10  # n-frame pillar occupancy window; new-point detection starts at frame n+1 (n<=0: no reference kept, every point new)
   neighbor_ring_num: 1
   keep_num_per_voxel: 1  # 0=skip all points, n=keep n newest points per voxel
   min_num: 5  # redundant voxel needs > this many points to confirm, isolated voxel needs < this
   height_consistency_ratio: 0.5  # ratio of voxel_size for height consistency check
 
-  adjacent_redundant_threshold: 5
+  adjacent_redundant_threshold: 6
   keep_redundant: false
 
   adjacent_isolated_threshold: 2
   keep_isolated: false
 
-  dyn_detect_en: true  # mark points whose pillar voxel was unseen in the last n frames; publish to /cloud_pillarmap (REQUIRED for dyn_bridge)
+  dyn_detect_en: true  # mark points whose pillar voxel was unseen in the last n frames; publish to /cloud_pillarmap (REQUIRED for the dyn buffer: dyn_cluster_expansion / dyn_bridge_display)
   keep_dyn: false  # true=apply keep_num_per_voxel retention to new voxels, false=skip all new points
   adjacent_dyn_threshold: 5  # candidate new voxel confirmed only if same-layer occupied neighbors < this (0=check off)
   dyn_cluster_en: true  # cluster candidate new points; scattered singletons are downgraded to normal
   dyn_cluster_min_num: 10  # min points per cluster to confirm as new (sparse clouds: start small, 3-5)
+  dyn_cluster_expansion: true  # rescue sweep: pool current-frame points sitting in recent dyn-buffer voxels into the cluster (needs dyn_cluster_en + dyn_buffer_max_age > 0)
   dyn_flat_filter_en: false  # reject clusters fitting in a thin slab along any coordinate axis (only 3D blobs survive)
   dyn_flat_band: 0.1  # max per-axis extent to count as flat; keep < narrow-target depth (~0.3m); over-large band silences all output
-  dyn_bridge_en: true  # cross-frame dynamic-point bridge: intermittently detected targets stay visible (red) across detection gaps (requires dyn_detect_en: true)
-  dyn_bridge_max_age: 5  # frames a buffer voxel stays published after its last detection
+  dyn_buffer_max_age: 5  # dyn-buffer voxel freshness window: buffer aging + rescue-pooling horizon (0 = buffer off; dyn_bridge_display needs > 0)
+  dyn_bridge_display: true  # display-only bridge: re-publish stale points of intermittently detected targets, red (needs dyn_buffer_max_age > 0)
 
 local_map:
   map_sliding_en: false

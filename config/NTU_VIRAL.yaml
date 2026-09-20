@@ -54,7 +54,7 @@ lio:
 pillar_map:
   pillar_map_en: true
   voxel_size: 0.5
-  history_frame_num: 5  # history reference frame count n; detection starts at frame n+1 (n<=0: no reference kept, every point new)
+  pillar_buffer: 5  # n-frame pillar occupancy window; new-point detection starts at frame n+1 (n<=0: no reference kept, every point new)
   neighbor_ring_num: 1
   keep_num_per_voxel: 1  # 0=skip all points, n=keep n newest points per voxel
   min_num: 5  # redundant voxel needs > this many points to confirm, isolated voxel needs < this

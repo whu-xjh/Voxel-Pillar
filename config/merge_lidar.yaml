@@ -65,10 +65,10 @@ lio:
 pillar_map:
   pillar_map_en: false
   voxel_size: 0.5
-  history_frame_num: 5  # history reference frame count n; detection starts at frame n+1 (n<=0: no reference kept, every point new)
+  pillar_buffer: 5  # n-frame pillar occupancy window; new-point detection starts at frame n+1 (n<=0: no reference kept, every point new)
   neighbor_ring_num: 1
-  dyn_bridge_en: false  # cross-frame dynamic-point bridge: intermittently detected targets stay visible (red) across detection gaps (requires dyn_detect_en: true)
-  dyn_bridge_max_age: 3  # frames a buffer voxel stays published after its last detection
+  dyn_buffer_max_age: 3  # dyn-buffer voxel freshness window: buffer aging + rescue-pooling horizon (0 = buffer off; dyn_bridge_display needs > 0)
+  dyn_bridge_display: false  # display-only bridge: re-publish stale points of intermittently detected targets, red (needs dyn_buffer_max_age > 0)
   keep_num_per_voxel: 1  # 0=skip all points, n=keep n newest points per voxel
   min_num: 5  # redundant voxel needs > this many points to confirm, isolated voxel needs < this
   height_consistency_ratio: 0.25  # ratio of voxel_size for height consistency check

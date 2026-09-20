@@ -64,6 +64,16 @@ typedef struct VoxelMapConfig
   double degeneracy_off_threshold_;  // exit hysteresis threshold; must be > on (default: 0.2)
   int degeneracy_min_frames_;        // consecutive frames to switch state (debounce; default: 2)
 
+  // Incidence-angle compensation for the intensity channel (Intensity-SLAM-style):
+  // gain = max(|cosθ|, floor)^k with θ the angle between the laser beam and the
+  // matched plane normal; corrected intensity = raw / gain, variance / gain².
+  // Plane intensity statistics then express material (normal-incidence
+  // reflectivity) instead of viewing geometry. Bit-identical behavior when off
+  bool intensity_angle_comp_en_;      // master switch (default: false)
+  double intensity_angle_exp_;        // Lambertian exponent k (default: 1.0; <= 0 also disables)
+  double intensity_angle_cos_floor_;  // cosθ clip floor against grazing-angle blow-up (default: 0.2)
+  bool intensity_angle_debug_en_;     // dump matched (intensity, gain) pairs to Log/intensity_angle.txt (default: false)
+
 } VoxelMapConfig;
 
 typedef struct PointToPlane
@@ -80,6 +90,10 @@ typedef struct PointToPlane
   bool is_valid_;
   float dis_to_plane_;
   float intensity_;
+  // Geometric incidence-angle gain (max(|cosθ|, floor)^k) of the matched
+  // association, recorded for the intensity_angle_debug_en_ validation dump
+  // regardless of whether compensation is enabled
+  float intensity_gain_ = 1.0f;
 } PointToPlane;
 
 typedef struct VoxelPlane
@@ -297,7 +311,7 @@ struct PillarMapVoxel
   size_t point_count_ = 0;            // Number of accumulated points for running average
   bool is_redundant_voxel_ = false;
   bool is_isolated_voxel_ = false;
-  bool is_new_voxel_ = false;          // set by DetectNewPoints: voxel unseen in the last history_frame_num frames
+  bool is_new_voxel_ = false;          // set by DetectNewPoints: voxel unseen in the last pillar_buffer frames
 
   PillarMapVoxel(double z = 0.0) : center_z_(z)
   {
@@ -334,27 +348,28 @@ typedef struct PillarMapConfig
   bool keep_isolated_;       // true=apply keep_num_per_voxel to isolated voxels, false=skip all
   int adjacent_isolated_threshold_;
   int neighbor_ring_num_;        // max ring probed by hasAdjacentVoxel: 1 = ring 1 only (6 face neighbors at distance 1), 2 = + ring 2 (12 edge neighbors, all neighbors <= sqrt(2)) (default: 1)
-  bool dyn_bridge_en_;           // cross-frame dynamic-point bridge buffer: intermittently detected targets stay visible (default: false)
-  int dyn_bridge_max_age_;       // frames a buffer voxel stays published after its last detection (default: 3)
+  bool dyn_bridge_display_;      // display-only bridge: re-publish stale points of intermittently detected targets, red (default: false; needs dyn_buffer_max_age_ > 0; the buffer stores points only when this is on)
+  int dyn_buffer_max_age_;       // dyn_buffer_ freshness window: buffer aging/prune AND the rescue-sweep pooling horizon (default: 3; <=0: buffer off)
   int min_num_;                  // redundant voxel needs point_count_ > this, isolated voxel needs < this (default: 5)
   double height_consistency_ratio_;  // ratio of voxel_size for the height-consistency gate on dz=0 neighbors (default: 0.25)
   bool dyn_detect_en_;     // mark points whose pillar voxel was unseen in the last n frames (default: false)
-  int history_frame_num_;        // history reference frame count n; detection starts at frame n+1 (n<=0: no reference kept, every point new)
+  int pillar_buffer_;            // n-frame pillar occupancy window; detection starts at frame n+1 (n<=0: no reference kept, every point new)
   bool keep_dyn_;          // true=apply keep_num_per_voxel retention to new voxels, false=skip all new points
   int adjacent_dyn_threshold_;  // candidate new voxel confirmed only if occupied same-layer neighbors < this (0=check off)
   bool dyn_cluster_en_;    // cluster candidate new points, keep only valid clusters (default: false)
   int dyn_cluster_min_num_;  // min points per cluster to confirm as new (default: 5)
+  bool dyn_cluster_expansion_;  // rescue sweep: pool current-frame points sitting in recent dyn_buffer_ voxels into the cluster (default: false; needs dyn_cluster_en_ + dyn_buffer_max_age_ > 0)
   bool dyn_flat_filter_en_;  // reject clusters fitting in a thin slab along any axis (default: false)
   double dyn_flat_band_;     // max per-axis extent for a cluster to count as flat (default: 0.2; <=0: check off)
 
   PillarMapConfig() : pillar_map_en_(false), voxel_size_(1.0), adjacent_redundant_threshold_(3),
                        keep_num_per_voxel_(0), keep_redundant_(true), keep_isolated_(false),
                        adjacent_isolated_threshold_(3), neighbor_ring_num_(1),
-                       dyn_bridge_en_(false), dyn_bridge_max_age_(3),
+                       dyn_bridge_display_(false), dyn_buffer_max_age_(3),
                        min_num_(5),
-                       height_consistency_ratio_(0.25), dyn_detect_en_(false), history_frame_num_(10),
+                       height_consistency_ratio_(0.25), dyn_detect_en_(false), pillar_buffer_(10),
                        keep_dyn_(true), adjacent_dyn_threshold_(0),
-                       dyn_cluster_en_(false), dyn_cluster_min_num_(5),
+                       dyn_cluster_en_(false), dyn_cluster_min_num_(5), dyn_cluster_expansion_(false),
                        dyn_flat_filter_en_(false), dyn_flat_band_(0.2) {}
 } PillarMapConfig;
 
@@ -387,7 +402,7 @@ public:
   size_t voxel_label_count_ = 0;
 
   // --- Pillar map history (n-frame occupancy reference window) ---
-  // Occupied voxel keys per frame, newest at back; at most history_frame_num_
+  // Occupied voxel keys per frame, newest at back; at most pillar_buffer_
   // frames retained. Maintained by UpdateHistory() every frame; deliberately
   // survives ClearPillarMapVoxels(). Consumed by new-point detection AND the
   // redundant/isolated vertical-continuity checks
@@ -401,19 +416,21 @@ public:
   // DefineSkipPoints()
   std::vector<int8_t> point_is_new_;
   // Frames processed since startup; the new-point gate uses it so detection
-  // output starts at frame history_frame_num_ + 1 (earlier frames only
+  // output starts at frame pillar_buffer_ + 1 (earlier frames only
   // accumulate the history window)
   size_t history_frame_count_ = 0;
 
-  // --- Dynamic-point bridge buffer (M-Detector umap-style) ---
-  // Confirmed new-point voxels persist across frames so intermittently
-  // detected targets stay visible: buffer components containing a voxel
-  // confirmed THIS frame re-publish their stale neighbors (display-only,
-  // red); voxels stale beyond dyn_bridge_max_age_ frames are dropped.
+  // --- Dynamic-point buffer (M-Detector umap-style) ---
+  // Confirmed new-point voxels persist across frames; maintained only when a
+  // consumer exists (dyn_cluster_expansion_ rescue sweep or dyn_bridge_display_
+  // bridge). Voxels stale beyond dyn_buffer_max_age_ frames are dropped.
   // Survives ClearPillarMapVoxels()
   struct DynVoxelEntry
   {
-    std::vector<Eigen::Vector3d> points;  // world-frame points stored at last detection
+    // world-frame points stored at last detection — populated ONLY when
+    // dyn_bridge_display_ is on (the stale-point re-publish needs the
+    // coordinates; the rescue sweep consumes key membership only)
+    std::vector<Eigen::Vector3d> points;
     int last_frame = 0;
   };
   std::unordered_map<PillarMapKey, DynVoxelEntry> dyn_buffer_;
@@ -478,13 +495,13 @@ private:
                         bool use_history);
   bool hasAdjacentVoxel(const VoxelLocation &current_pos, int threshold, double current_vp_z, bool use_history);
   // History-window occupancy oracle: was (pillar, z) occupied in any of the
-  // last history_frame_num frames?
+  // last pillar_buffer frames?
   bool seenInHistory(const PillarLocation &pillar, int64_t z_key) const;
   // True when any z layer strictly between low_key and high_key was occupied
   // within the history window (vertical gap is a transient sampling hole)
   bool gapSeenInHistory(const PillarLocation &pillar, int64_t low_key, int64_t high_key) const;
   // Cross-frame bridge: insert this frame's confirmed voxels into dyn_buffer_,
-  // advance the frame stamp, prune voxels stale beyond dyn_bridge_max_age_
+  // advance the frame stamp, prune voxels stale beyond dyn_buffer_max_age_
   void dyn_bridge_insert();
   // Extract connected components (26-adjacency) of the dynamic-point buffer:
   // each carries all member points, its stale subset, the current-cloud
@@ -551,6 +568,12 @@ public:
   int current_skip_count_ = 0;
   int total_skip_count_ = 0;
   int total_point_count_ = 0;
+
+  // Incidence-angle validation dump (intensity_angle_debug_en_): per-frame
+  // matched (raw intensity, geometric gain) pairs, filled in the sequential
+  // consolidation pass of BuildResidualListOMP, written out by StateEstimation
+  std::vector<float> angle_dbg_intensity_;
+  std::vector<float> angle_dbg_gain_;
 
   PillarMap pillar_map_;
 

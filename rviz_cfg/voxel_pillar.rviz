@@ -437,13 +437,13 @@ Visualization Manager:
       Queue Size: 100
       Value: false
     - Class: rviz/MarkerArray
-      Enabled: true
+      Enabled: false
       Marker Topic: /fsm_node/visualization/exp_traj
       Name: MarkerArray
       Namespaces:
         {}
       Queue Size: 100
-      Value: true
+      Value: false
     - Class: rviz/MarkerArray
       Enabled: false
       Marker Topic: /fsm_node/visualization/exp_sfcs
@@ -596,5 +596,5 @@ Window Geometry:
   Views:
     collapsed: false
   Width: 1600
-  X: 2837
-  Y: 206
+  X: 443
+  Y: 95
