@@ -106,12 +106,9 @@ void loadPillarMapConfig(ros::NodeHandle &nh, PillarMapConfig &config)
   nh.param<bool>("pillar_map/dyn_detect_en", config.dyn_detect_en_, false);
   nh.param<int>("pillar_map/pillar_buffer", config.pillar_buffer_, 10);
   nh.param<bool>("pillar_map/delete_dyn", config.delete_dyn_, false);
-  nh.param<int>("pillar_map/adjacent_dyn_threshold", config.adjacent_dyn_threshold_, 0);
   nh.param<bool>("pillar_map/dyn_cluster_en", config.dyn_cluster_en_, false);
   nh.param<int>("pillar_map/dyn_cluster_min_num", config.dyn_cluster_min_num_, 5);
   nh.param<bool>("pillar_map/dyn_cluster_expansion", config.dyn_cluster_expansion_, false);
-  nh.param<bool>("pillar_map/dyn_flat_filter_en", config.dyn_flat_filter_en_, false);
-  nh.param<double>("pillar_map/dyn_flat_band", config.dyn_flat_band_, 0.2);
 
   if (config.dyn_bridge_display_ && config.dyn_buffer_max_age_ <= 0)
     ROS_WARN("[pillar_map] dyn_bridge_display needs dyn_buffer_max_age > 0 (buffer off) — display will be a no-op");
@@ -1624,27 +1621,22 @@ void PillarMap::initNeighborOffsets()
     offsets.push_back(voxel_offset);
   };
 
-  // Ring 1: 6 face neighbors at distance exactly 1 voxel
+  // Horizontal-only neighborhood: vertical continuity is already judged in
+  // updatePillarFlag (close-above for redundant, gap checks for isolated), so
+  // the adjacency test needs same-layer neighbors only
+  // Ring 1: 4 horizontal face neighbors at distance exactly 1 voxel
   addOffset(ring1_offsets_, -1, 0, 0);
   addOffset(ring1_offsets_, 1, 0, 0);
   addOffset(ring1_offsets_, 0, -1, 0);
   addOffset(ring1_offsets_, 0, 1, 0);
-  addOffset(ring1_offsets_, 0, 0, -1);
-  addOffset(ring1_offsets_, 0, 0, 1);
 
-  // Ring 2: 12 edge neighbors at distance sqrt(2) voxels
+  // Ring 2: 4 horizontal diagonal neighbors at distance sqrt(2) voxels
+  // (ring 1 + ring 2 together cover the horizontal 8-neighborhood; ring 2
+  // must not repeat ring 1's slots — adjacent_count accumulates across rings)
   addOffset(ring2_offsets_, -1, -1, 0);
   addOffset(ring2_offsets_, -1, 1, 0);
   addOffset(ring2_offsets_, 1, -1, 0);
   addOffset(ring2_offsets_, 1, 1, 0);
-  addOffset(ring2_offsets_, -1, 0, -1);
-  addOffset(ring2_offsets_, -1, 0, 1);
-  addOffset(ring2_offsets_, 1, 0, -1);
-  addOffset(ring2_offsets_, 1, 0, 1);
-  addOffset(ring2_offsets_, 0, -1, -1);
-  addOffset(ring2_offsets_, 0, -1, 1);
-  addOffset(ring2_offsets_, 0, 1, -1);
-  addOffset(ring2_offsets_, 0, 1, 1);
 }
 
 void PillarMap::setVoxelPointLabels(PillarMapVoxel* voxel, int8_t label)
@@ -1723,12 +1715,11 @@ void PillarMap::updatePillarFlag(const PillarLocation &pillar_key, PillarMapArra
 }
 
 // Scan one neighbor ring around current_pos: count occupied voxels whose
-// virtual point is height-consistent with the query (the gate applies to
-// dz = 0 neighbors only — dz != 0 neighbors are ungated, their layer offset
-// already bounds the height difference). With use_history, slots empty in the
-// current frame still count when the history window shows recent occupancy
-// there (sampling flicker must not read as isolation). Returns true as soon
-// as adjacent_count reaches threshold (early exit)
+// virtual point is height-consistent with the query (all offsets are same-layer,
+// so every neighbor passes through the height gate). With use_history, slots
+// empty in the current frame still count when the history window shows recent
+// occupancy there (sampling flicker must not read as isolation). Returns true
+// as soon as adjacent_count reaches threshold (early exit)
 bool PillarMap::scanNeighborRing(const VoxelLocation &current_pos, const std::vector<VoxelLocation> &offsets,
                                  int threshold, double current_vp_z, double height_threshold, int &adjacent_count,
                                  bool use_history)
@@ -1751,8 +1742,7 @@ bool PillarMap::scanNeighborRing(const VoxelLocation &current_pos, const std::ve
           [](const std::pair<int64_t, PillarMapVoxel> &entry, int64_t z) { return entry.first < z; });
       if (voxel_iter != voxels.end() && voxel_iter->first == adjacent_pos.z)
       {
-        counted = !(voxel_offset.z == 0 &&
-                    std::abs(voxel_iter->second.virtual_point_.z() - current_vp_z) > height_threshold);
+        counted = std::abs(voxel_iter->second.virtual_point_.z() - current_vp_z) <= height_threshold;
       }
     }
     if (!counted && use_history &&
@@ -1766,9 +1756,11 @@ bool PillarMap::scanNeighborRing(const VoxelLocation &current_pos, const std::ve
   return false;
 }
 
-// Ring-ordered 3D neighborhood test: ring 1 = 6 face neighbors at distance
-// exactly 1 voxel, ring 2 = 12 edge neighbors at distance sqrt(2). Ring 1 is
-// probed first; the threshold early-exits inside either ring
+// Ring-ordered horizontal neighborhood test: ring 1 = 4 face neighbors at
+// distance exactly 1 voxel, ring 2 = 4 diagonal neighbors at distance sqrt(2)
+// (ring 1 + ring 2 = horizontal 8-neighborhood; vertical continuity is judged
+// separately in updatePillarFlag). Ring 1 is probed first; the threshold
+// early-exits inside either ring
 bool PillarMap::hasAdjacentVoxel(const VoxelLocation &current_pos, int threshold, double current_vp_z, bool use_history)
 {
   if (threshold <= 0) {
@@ -1859,13 +1851,10 @@ void PillarMap::DetectNewPoints()
 
   const int n = std::max(config_.pillar_buffer_, 0);
   const bool detection_on = history_frame_count_ >= static_cast<size_t>(n);
-  const int adjacent_threshold = config_.adjacent_dyn_threshold_;
 
   // Flag points of voxels absent from the current window (once the window is
-  // full). Sparse-neighborhood confirmation: a voxel surrounded by same-layer
-  // occupied neighbors is existing surface, not newly seen — hasAdjacentVoxel
-  // answers ">= threshold consistent neighbors", so the candidate is confirmed
-  // only when that is false; threshold <= 0 keeps every candidate
+  // full). Confirmation is the evidence gate alone: a voxel whose accumulated
+  // dynamic evidence outweighs its static evidence is genuine new occupancy
   for (auto &pillar_entry : pillars_)
   {
     const int64_t bottom_key = pillar_entry.second.begin()->first;
@@ -1882,7 +1871,7 @@ void PillarMap::DetectNewPoints()
         continue;
       }
 
-      // Evidence update runs unconditionally (warm-up, gated voxels — every
+      // Evidence update runs unconditionally (warm-up included — every
       // occupied voxel contributes): window-absent frames accumulate dynamic
       // evidence, in-window frames static evidence
       if (!detection_on || history_counts_.find(key) != history_counts_.end())
@@ -1895,13 +1884,6 @@ void PillarMap::DetectNewPoints()
       // Confirmation gate: accumulated dynamic evidence must outweigh static
       if (ev.dyn_count > ev.static_count)
       {
-        if (adjacent_threshold > 0)
-        {
-          const VoxelLocation voxel_pos = {pillar_entry.first.axis1, pillar_entry.first.axis2, voxel_entry.first};
-          if (hasAdjacentVoxel(voxel_pos, adjacent_threshold, voxel_entry.second.virtual_point_.z(), /*use_history=*/true))
-            continue;
-        }
-
         voxel_entry.second.is_new_voxel_ = true;
         for (const size_t idx : voxel_entry.second.point_indices_)
         {
@@ -2123,8 +2105,7 @@ bool PillarMap::gapSeenInHistory(const PillarLocation &pillar, int64_t low_key, 
 // voxel) to stay flagged. Scattered candidates — quantization hops of static
 // surfaces near voxel boundaries — are downgraded to normal points: they are
 // neither published nor deleted downstream. A connected chain of hop voxels
-// still clusters (inherent to the approach); dense-neighborhood candidates are
-// already suppressed by adjacent_dyn_threshold. Surviving voxels re-mark
+// still clusters (inherent to the approach). Surviving voxels re-mark
 // ALL their points: a voxel absent from the history window holds no static
 // surface, so its cluster-split points are genuine new observations too, and
 // point_is_new_ stays voxel-wise all-or-nothing for DefineSkipPoints retention
@@ -2212,15 +2193,12 @@ void PillarMap::confirmClusteredNewPoints()
   ec.setInputCloud(pooled);
   ec.extract(cluster_indices);
 
-  // D. Confirm: every pooled point inside a valid (non-flat) cluster — both
-  // this frame's candidates and rescued points — is confirmed; pooled points
-  // outside any valid cluster are downgraded
+  // D. Confirm: every pooled point inside a valid cluster — both this frame's
+  // candidates and rescued points — is confirmed; pooled points outside any
+  // valid cluster are downgraded
   std::vector<char> confirmed(cand_idx.size() + rescue_idx.size(), 0);
   for (const auto &cluster : cluster_indices)
   {
-    if (config_.dyn_flat_filter_en_ &&
-        isFlatCluster(*pooled, cluster.indices, config_.dyn_flat_band_))
-      continue;
     for (const int local_idx : cluster.indices)
     {
       confirmed[local_idx] = 1;
@@ -2261,28 +2239,6 @@ void PillarMap::confirmClusteredNewPoints()
       }
     }
   }
-}
-
-// True when the cluster fits in a thin slab along any coordinate axis (per-axis
-// extent < band): constant-height layers, ground stripes, axis-aligned wall
-// slivers — not moving-object blobs. band <= 0 never triggers (check off)
-bool PillarMap::isFlatCluster(const pcl::PointCloud<pcl::PointXYZ> &cloud,
-                                   const std::vector<int> &indices, double band)
-{
-  if (indices.empty()) return false;
-
-  const auto &first = cloud.points[indices.front()];
-  float x_min = first.x, x_max = first.x;
-  float y_min = first.y, y_max = first.y;
-  float z_min = first.z, z_max = first.z;
-  for (const int idx : indices)
-  {
-    const auto &p = cloud.points[idx];
-    x_min = std::min(x_min, p.x); x_max = std::max(x_max, p.x);
-    y_min = std::min(y_min, p.y); y_max = std::max(y_max, p.y);
-    z_min = std::min(z_min, p.z); z_max = std::max(z_max, p.z);
-  }
-  return (x_max - x_min < band) || (y_max - y_min < band) || (z_max - z_min < band);
 }
 
 void PillarMap::pillarDetection()

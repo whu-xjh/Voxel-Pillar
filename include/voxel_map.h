@@ -346,20 +346,17 @@ typedef struct PillarMapConfig
   bool delete_redundant_;    // true=delete redundant points before they enter the voxel map, false=keep them (default: false)
   bool delete_isolated_;     // true=delete isolated points before they enter the voxel map, false=keep them (default: false)
   int adjacent_isolated_threshold_;
-  int neighbor_ring_num_;        // max ring probed by hasAdjacentVoxel: 1 = ring 1 only (6 face neighbors at distance 1), 2 = + ring 2 (12 edge neighbors, all neighbors <= sqrt(2)) (default: 1)
+  int neighbor_ring_num_;        // max ring probed by hasAdjacentVoxel (horizontal-only): 1 = ring 1 only (4 face neighbors at distance 1), 2 = + ring 2 (4 diagonals at sqrt(2); together the horizontal 8-neighborhood) (default: 1)
   bool dyn_bridge_display_;      // display-only bridge: re-publish stale points of intermittently detected targets, red (default: false; needs dyn_buffer_max_age_ > 0; the buffer stores points only when this is on)
   int dyn_buffer_max_age_;       // dyn_buffer_ freshness window: buffer aging/prune AND the rescue-sweep pooling horizon (default: 3; <=0: buffer off)
   int min_num_;                  // redundant voxel needs point_count_ > this, isolated voxel needs < this (default: 5)
-  double height_consistency_ratio_;  // ratio of voxel_size for the height-consistency gate on dz=0 neighbors (default: 0.25)
+  double height_consistency_ratio_;  // ratio of voxel_size for the height-consistency gate on neighbors (all horizontal, same-layer) (default: 0.25)
   bool dyn_detect_en_;     // mark points whose pillar voxel was unseen in the last n frames (default: false)
   int pillar_buffer_;            // n-frame pillar occupancy window; detection starts at frame n+1 (n<=0: no reference kept, every point new)
   bool delete_dyn_;        // true=delete new points before they enter the voxel map, false=keep them (default: false)
-  int adjacent_dyn_threshold_;  // candidate new voxel confirmed only if occupied same-layer neighbors < this (0=check off)
   bool dyn_cluster_en_;    // cluster candidate new points, keep only valid clusters (default: false)
   int dyn_cluster_min_num_;  // min points per cluster to confirm as new (default: 5)
   bool dyn_cluster_expansion_;  // rescue sweep: pool current-frame points sitting in recent dyn_buffer_ voxels into the cluster (default: false; needs dyn_cluster_en_ + dyn_buffer_max_age_ > 0)
-  bool dyn_flat_filter_en_;  // reject clusters fitting in a thin slab along any axis (default: false)
-  double dyn_flat_band_;     // max per-axis extent for a cluster to count as flat (default: 0.2; <=0: check off)
 
   PillarMapConfig() : pillar_map_en_(false), voxel_size_(1.0), adjacent_redundant_threshold_(3),
                        delete_redundant_(false), delete_isolated_(false),
@@ -367,9 +364,8 @@ typedef struct PillarMapConfig
                        dyn_bridge_display_(false), dyn_buffer_max_age_(3),
                        min_num_(5),
                        height_consistency_ratio_(0.25), dyn_detect_en_(false), pillar_buffer_(10),
-                       delete_dyn_(false), adjacent_dyn_threshold_(0),
-                       dyn_cluster_en_(false), dyn_cluster_min_num_(5), dyn_cluster_expansion_(false),
-                       dyn_flat_filter_en_(false), dyn_flat_band_(0.2) {}
+                       delete_dyn_(false),
+                       dyn_cluster_en_(false), dyn_cluster_min_num_(5), dyn_cluster_expansion_(false) {}
 } PillarMapConfig;
 
 void loadPillarMapConfig(ros::NodeHandle &nh, PillarMapConfig &config);
@@ -387,9 +383,11 @@ public:
   PillarMapConfig config_;
   double voxel_size_;
   std::unordered_map<PillarLocation, PillarMapArray> pillars_;
-  // Two-ring 3D neighborhood (fixed geometry): ring 1 = 6 face neighbors at
-  // distance 1; ring 2 = 12 edge neighbors at distance sqrt(2). Ring 1 is
-  // always probed first, ring 2 only when the threshold is not yet met
+  // Two-ring horizontal neighborhood (fixed geometry): ring 1 = 4 face
+  // neighbors at distance 1; ring 2 = 4 horizontal diagonals at distance
+  // sqrt(2) — together the horizontal 8-neighborhood. Vertical continuity is
+  // judged in updatePillarFlag, so all offsets are same-layer (dz = 0).
+  // Ring 1 is always probed first, ring 2 only when the threshold is not yet met
   std::vector<VoxelLocation> ring1_offsets_;
   std::vector<VoxelLocation> ring2_offsets_;
 
@@ -483,8 +481,8 @@ private:
   void initNeighborOffsets();
   PillarLocation GetPillarLocation(const VoxelLocation &position) const;
   void updatePillarFlag(const PillarLocation &pillar_key, PillarMapArray &pillar_maps);
-  // Scan one neighbor ring (offsets of a 3D window around current_pos): count
-  // occupied voxels, gating dz=0 neighbors with the height-consistency test.
+  // Scan one neighbor ring (same-layer offsets around current_pos): count
+  // occupied voxels, gating every neighbor with the height-consistency test.
   // With use_history, slots empty in the current frame still count when the
   // history window shows recent occupancy there (sampling flicker must not
   // read as isolation). Returns true as soon as adjacent_count reaches
@@ -513,11 +511,6 @@ private:
   // surviving voxels re-mark all their points, fully-downgraded ones lose
   // is_new_voxel_
   void confirmClusteredNewPoints();
-  // True when the cluster fits in a thin slab along any coordinate axis
-  // (per-axis extent < band): constant-height layers, ground stripes,
-  // axis-aligned wall slivers — not moving-object blobs
-  bool isFlatCluster(const pcl::PointCloud<pcl::PointXYZ> &cloud,
-                     const std::vector<int> &indices, double band);
 };
 
 class VoxelMapManager

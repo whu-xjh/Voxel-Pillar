@@ -69,7 +69,6 @@ pillar_map:
   neighbor_ring_num: 1
   dyn_buffer_max_age: 3  # dyn-buffer voxel freshness window: buffer aging + rescue-pooling horizon (0 = buffer off; dyn_bridge_display needs > 0)
   dyn_bridge_display: false  # display-only bridge: re-publish stale points of intermittently detected targets, red (needs dyn_buffer_max_age > 0)
-  keep_num_per_voxel: 1  # 0=skip all points, n=keep n newest points per voxel
   min_num: 5  # redundant voxel needs > this many points to confirm, isolated voxel needs < this
   height_consistency_ratio: 0.25  # ratio of voxel_size for height consistency check
 
@@ -77,15 +76,10 @@ pillar_map:
   keep_redundant: false
 
   adjacent_isolated_threshold: 3
-  keep_isolated: false
 
   dyn_detect_en: false  # mark points whose pillar voxel was unseen in the last n frames; publish to /cloud_pillarmap
-  adjacent_dyn_threshold: 3  # candidate new voxel confirmed only if same-layer occupied neighbors < this (0=check off)
-  keep_dyn: false  # true=apply keep_num_per_voxel retention to new voxels, false=skip all new points
   dyn_cluster_en: true  # cluster candidate new points; scattered singletons are downgraded to normal
   dyn_cluster_min_num: 3  # min points per cluster to confirm as new (sparse clouds: start small, 3-5)
-  dyn_flat_filter_en: true  # reject clusters fitting in a thin slab along any coordinate axis (only 3D blobs survive)
-  dyn_flat_band: 0.1  # max per-axis extent to count as flat; keep < narrow-target depth (~0.3m); over-large band silences all output
 local_map:
   map_sliding_en: false
   half_map_size: 1000
