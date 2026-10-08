@@ -6,9 +6,7 @@ common:
 
 extrin_calib:
   # LiDAR to IMU extrinsic
-  # Cave: extrinsic_T: [0.080, 0.029, 0.030]
-  # Corridor: extrinsic_R: [0.999954875339377, 0.0, 0.009499857104811, 0.0, 1.0, 0.0, -0.009499857104811, 0.0, 0.999954875339377]
-
+  
   # Cave
   # extrinsic_T: [0.080, 0.029, 0.030]
   # extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
