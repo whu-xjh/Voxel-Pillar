@@ -9,13 +9,13 @@ extrin_calib:
   # Cave: extrinsic_T: [0.080, 0.029, 0.030]
   # Corridor: extrinsic_R: [0.999954875339377, 0.0, 0.009499857104811, 0.0, 1.0, 0.0, -0.009499857104811, 0.0, 0.999954875339377]
 
-  # Laurel_Cavern, cave
-  extrinsic_T: [0.080, 0.029, 0.030]
-  extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+  # Cave
+  # extrinsic_T: [0.080, 0.029, 0.030]
+  # extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
 
   # Final_Challenge, Urban_Challenge
-  # extrinsic_T: [0.0, 0.0, 0.0]
-  # extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
+  extrinsic_T: [0.0, 0.0, 0.0]
+  extrinsic_R: [1, 0, 0, 0, 1, 0, 0, 0, 1]
 
   # Corridor01
   # extrinsic_T: [0.080, 0.029, 0.030]
@@ -25,7 +25,7 @@ extrin_calib:
   # extrinsic_T: [0.0, 0.0, 0.0]
   # extrinsic_R: [0.999954875339377, 0.0000000, 0.009499857104811, 0.0000000, 1.0000000, 0.0000000, -0.009499857104811, 0.0000000, 0.999954875339377]
 
-  # Floor
+  # Multi_Floor
   # extrinsic_T: [0.080, 0.029, 0.030]
   # extrinsic_R: [0.999945562, 0.009074807,  0.005149763, -0.009060897, 0.999955255, -0.002718066, -0.005174199, 0.002671256,  0.999983046]
 
@@ -51,8 +51,8 @@ imu:
   b_gyr_cov: 0.0001
 
   # Long_Corridor
-  # acc_cov: 0.2
-  # gyr_cov: 1.0
+  # acc_cov: 0.1
+  # gyr_cov: 0.1
   # b_acc_cov: 0.0001
   # b_gyr_cov: 0.0001
 
@@ -85,8 +85,9 @@ lio:
   max_points_num: 100 
   layer_init_num: [5, 5, 5, 5, 5]
   sigma_num: 3
-  capacity: 0                       # LRU cache (0 = disable)
-  intensity_fusion_en: true
+  capacity: 0                       # LRU cache (<=1 = disable)
+  intensity_fusion_en: false
+  intensity_fusion_weight: 0.5      # intensity trust weight in the joint association score exp(-(w_g*m_geo + w_i*m_int)); 0.5 = equal trust
   intensity_gate_en: false          # Intensity-based association gate (reject material-inconsistent matches)
   intensity_gate_k: 3.0             # Gate threshold in units of intensity sigma
   intensity_noise_est_en: false     # Online estimation of intensity measurement noise (init window)
@@ -96,22 +97,22 @@ lio:
   intensity_angle_cos_floor: 0.2    # cos clip floor vs grazing-angle blow-up
   intensity_angle_debug_en: false   # dump matched (intensity, gain) pairs for validation
   degeneracy_adaptive_en: true      # engage intensity fusion only in degenerate scenes (requires intensity_fusion_en)
-  degeneracy_on_threshold: 0.1      # enter degenerate mode when lambda_min/lambda_max < this
-  degeneracy_off_threshold: 0.3     # exit hysteresis threshold; must be > on
-  degeneracy_min_frames: 5          # consecutive frames to switch state (debounce) 
+  degeneracy_on_threshold: 0.005      # enter degenerate mode when lambda_min/lambda_max < this
+  degeneracy_off_threshold: 0.1     # exit hysteresis threshold; must be > on
+  degeneracy_min_frames: 3          # consecutive frames to switch state (debounce) 
 
   # R-VoxelMap-style plane init refinements
-  plane_refine_en: true
+  plane_refine_en: false
   init_distance_threshold: 0.1      # init_plane: drop points farther than this from the first PCA fit (m)
   plane_valid_check_en: true        # coplanar-disjoint-surface guard (2D grid DFS clustering)
-  valid_check_max_layer: 0          # run the guard only on voxels at/above this layer
+  valid_check_max_layer: 0          # run the guard only on layers with index <= this (0 = root voxel only)
   valid_check_min_points_size: 10   # min retained points to run the guard
   valid_check_resolution: 4         # projection grid resolution factor
   valid_check_p_threshold: 0.6      # largest-cluster point-ratio threshold
 
 # Pillar Voxel Redundant Detection
 pillar_map:
-  pillar_map_en: true
+  pillar_map_en: false
   voxel_size: 0.5
   pillar_buffer: 1                  # n-frame pillar occupancy window; new-point detection starts at frame n+1 (n<=0: no reference kept, every point new)
   neighbor_ring_num: 1
@@ -121,13 +122,14 @@ pillar_map:
   adjacent_redundant_threshold: 4
   delete_redundant: false            # true=delete redundant points before they enter the voxel map, false=keep them
 
-  adjacent_isolated_threshold: 2
+  adjacent_isolated_threshold: 3
   delete_isolated: true             # true=delete isolated points before they enter the voxel map, false=keep them
 
   dyn_detect_en: false              # mark points whose pillar voxel was unseen in the last n frames; publish to /cloud_pillarmap
   delete_dyn: true                  # true=delete new points before they enter the voxel map, false=keep them
   dyn_cluster_en: true              # cluster candidate new points; scattered singletons are downgraded to normal
   dyn_cluster_min_num: 5            # min points per cluster to confirm as new (sparse clouds: start small, 3-5)
+  dyn_cluster_expansion: false      # rescue sweep pooling recent dyn-buffer voxels into the cluster (requires dyn_detect_en + dyn_cluster_en + dyn_buffer_max_age > 0)
   dyn_buffer_max_age: 3             # dyn-buffer voxel freshness window: buffer aging + rescue-pooling horizon (0 = buffer off; dyn_bridge_display needs > 0)
   dyn_bridge_display: false         # display-only bridge: re-publish stale points of intermittently detected targets, red (needs dyn_buffer_max_age > 0)
   

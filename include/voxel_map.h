@@ -52,7 +52,7 @@ typedef struct VoxelMapConfig
   bool map_sliding_en_;
   int half_map_size_;
 
-  int capacity_;
+  int capacity_ = 100000;  // in-struct default; lio/capacity key missing -> 0 (LRU off, <=1 = disabled)
   bool intensity_fusion_en_;
   bool intensity_gate_en_;
   double intensity_gate_k_;
@@ -103,8 +103,9 @@ typedef struct VoxelPlane
   Eigen::Vector3d y_normal_;
   Eigen::Vector3d x_normal_;
   Eigen::Matrix3d covariance_;
-  // Incremental sufficient statistics (Σp·pᵀ over stored points), maintained
-  // by init_plane and check_and_update for O(1) insertion trials
+  // Incremental sufficient statistics (Σp·pᵀ over stored points) for the O(1)
+  // insertion trial in check_and_update; maintained by init_plane and
+  // check_and_update only while plane_refine_en_ is on
   Eigen::Matrix3d sum_ppt_;
   Eigen::Matrix<double, 6, 6> plane_var_;
   float radius_ = 0;
@@ -130,9 +131,11 @@ typedef struct VoxelPlane
   // (maturity condition for the intensity gate)
   int intensity_obs_count_ = 0;
   // Squared per-point intensity measurement noise (sigma_meas^2), estimated online
-  // during the init window (frame-to-frame differencing on static data).
-  // Added at use sites so the effective variance never collapses to zero
-  // (replaces the former hard std floor of 1e-3). Conservative default until ready.
+  // during the init window (frame-to-frame differencing on static data) when
+  // intensity_noise_est_en is on. Zero default: with the estimation off (or
+  // failed) the noise term contributes nothing. Added at use sites so the
+  // effective variance never collapses to zero (the 1e-3 floor there keeps it
+  // strictly positive)
   static double intensity_meas_var_;
   // EMA alpha for intensity statistics update (higher = faster adaptation).
   // Configurable via lio/intensity_ema_alpha, clamped to (0, 1]

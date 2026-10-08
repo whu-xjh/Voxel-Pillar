@@ -7,9 +7,10 @@
 // Sequential id generator for voxel planes (file-local, was a header static)
 static int voxel_plane_id = 0;
 
-// Squared intensity measurement noise; overwritten by the online estimator
-// (LIVMapper::estimateIntensityNoise) during the init window
-double VoxelPlane::intensity_meas_var_ = 1.0;
+// Squared intensity measurement noise. Zero default: the noise term is not
+// modeled unless the online estimator (LIVMapper::estimateIntensityNoise)
+// runs and succeeds; it also resets to 0 when the estimation fails
+double VoxelPlane::intensity_meas_var_ = 0.0;
 
 // EMA alpha for intensity statistics; overwritten from lio/intensity_ema_alpha
 double VoxelPlane::intensity_ema_alpha_ = 0.5;
@@ -67,7 +68,7 @@ void loadVoxelConfig(ros::NodeHandle &nh, VoxelMapConfig &voxel_config)
   nh.param<double>("lio/valid_check_p_threshold", voxel_config.valid_check_p_threshold_, 0.8);
   if (voxel_config.valid_check_resolution_ < 1) voxel_config.valid_check_resolution_ = 1;  // 0 would degenerate the projection grid
   nh.param<int>("lio/max_iterations", voxel_config.max_iterations_, 5);
-  nh.param<int>("lio/capacity", voxel_config.capacity_, 100000);
+  nh.param<int>("lio/capacity", voxel_config.capacity_, 0);  // key missing -> LRU disabled (<=1 = off), matching the unbounded baseline map
   nh.param<bool>("lio/intensity_fusion_en", voxel_config.intensity_fusion_en_, false);
   nh.param<bool>("lio/intensity_gate_en", voxel_config.intensity_gate_en_, false);
   nh.param<double>("lio/intensity_gate_k", voxel_config.intensity_gate_k_, 3.0);
@@ -242,8 +243,22 @@ void VoxelOctoTree::init_plane(std::vector<pointWithVar> &points, VoxelPlane *pl
   }
   else
   {
-    // Original behavior: single PCA over all points
-    pcaFit(points, center, cov, evecs, evals);
+    // Original behavior, bit-identical to FAST-LIVO2: plain accumulation with
+    // division (no reciprocal multiply), decomposed by the general EigenSolver
+    // — pcaFit (reciprocal multiply + SelfAdjointEigenSolver) stays exclusive
+    // to the refine branch
+    center.setZero();
+    cov.setZero();
+    for (const auto &pv : points)
+    {
+      cov += pv.point_w * pv.point_w.transpose();
+      center += pv.point_w;
+    }
+    center = center / plane->points_size_;
+    cov = cov / plane->points_size_ - center * center.transpose();
+    Eigen::EigenSolver<Eigen::Matrix3d> es(cov);
+    evecs = es.eigenvectors().real();
+    evals = es.eigenvalues().real();
   }
 
   // 6. Write the final fit back; the eigen decomposition and plane_var
@@ -259,7 +274,9 @@ void VoxelOctoTree::init_plane(std::vector<pointWithVar> &points, VoxelPlane *pl
   // noise term (intensity_meas_var_) is added at the use sites instead.
   // Points are folded in as incidence-angle-corrected reflectivity (raw / gain)
   // so the statistics match the EMA and residual-side semantics; the fitted
-  // normal comes from the local pcaFit result (ascending eigenvalues → col(0))
+  // normal is the min-eigenvalue eigenvector, found by value (minCoeff) so it
+  // is independent of the solver's column ordering (refine pcaFit or baseline
+  // EigenSolver)
   if (!points.empty() && !plane->intensity_init_)
   {
     const bool batch_comp = config_ptr_->intensity_angle_comp_en_;
@@ -293,20 +310,24 @@ void VoxelOctoTree::init_plane(std::vector<pointWithVar> &points, VoxelPlane *pl
   // - λ2 (mid): variance in second principal direction
   // - λ3 (min): variance in third principal direction
 
-  // Original code using EigenSolver (general matrix, produces complex results)
-  // Eigen::EigenSolver<Eigen::Matrix3d> es(plane->covariance_);
-  // Eigen::Matrix3cd evecs = es.eigenvectors();
-  // Eigen::Vector3cd evals = es.eigenvalues();
-  // Eigen::Vector3d evalsReal;
-  // evalsReal = evals.real();
-
-  // Optimized: SelfAdjointEigenSolver for symmetric covariance matrix
-  // - Faster (3-5x speedup for 3x3 matrices)
-  // - Guarantees real eigenvalues/vectors (no complex conversion needed)
-  // - Better numerical stability for symmetric matrices
-  Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> saes(plane->covariance_);
-  Eigen::Matrix3d evecsReal = saes.eigenvectors();
-  Eigen::Vector3d evalsReal = saes.eigenvalues();
+  // Eigen decomposition of the covariance. The refine branch keeps the
+  // optimized SelfAdjointEigenSolver (faster, guaranteed-real for symmetric
+  // matrices); refine-off reuses the general EigenSolver result from the else
+  // branch above — same matrix bit-for-bit, so the plain path matches the
+  // FAST-LIVO2 baseline exactly
+  Eigen::Matrix3d evecsReal;
+  Eigen::Vector3d evalsReal;
+  if (config_ptr_->plane_refine_en_)
+  {
+    Eigen::SelfAdjointEigenSolver<Eigen::Matrix3d> saes(plane->covariance_);
+    evecsReal = saes.eigenvectors();
+    evalsReal = saes.eigenvalues();
+  }
+  else
+  {
+    evecsReal = evecs;
+    evalsReal = evals;
+  }
 
   // Find indices of min, mid, max eigenvalues
   Eigen::Matrix3f::Index evalsMin, evalsMax;
@@ -387,15 +408,18 @@ void VoxelOctoTree::init_plane(std::vector<pointWithVar> &points, VoxelPlane *pl
       plane->is_init_ = true;
     }
 
-    // Incremental statistics for check_and_update (reset after every refit so
-    // the cached mean/sum_ppt/cov match the stored points exactly)
-    plane->sum_ppt_.setZero();
-    for (const auto &pv : points)
+    // Incremental sufficient statistics for check_and_update (rebuilt after
+    // every refit so the cached mean/sum_ppt/cov match the stored points
+    // exactly). The sole consumer is the refine-only rank-1 trial, so skip
+    // the O(n) rebuild when plane_refine_en_ is off
+    if (config_ptr_->plane_refine_en_)
     {
-      plane->sum_ppt_ += pv.point_w * pv.point_w.transpose();
+      plane->sum_ppt_.setZero();
+      for (const auto &pv : points)
+      {
+        plane->sum_ppt_ += pv.point_w * pv.point_w.transpose();
+      }
     }
-    plane->points_size_ = points.size();
-    plane->cov_need_update_ = false;
   }
   else
   {
@@ -413,7 +437,7 @@ bool VoxelOctoTree::check_and_update(const pointWithVar &pv)
 {
   VoxelPlane *plane = plane_ptr_;
   const int curr_points_num = plane->points_size_;
-  if (curr_points_num < 3) return true;  // too few points to judge planarity: accept
+  if (curr_points_num < 5) return true;  // too few points to judge planarity: accept
 
   const Eigen::Vector3d p_vec(pv.point_w[0], pv.point_w[1], pv.point_w[2]);
   const Eigen::Vector3d new_mean = (plane->center_ * curr_points_num + p_vec) / (curr_points_num + 1);
@@ -531,7 +555,7 @@ void VoxelOctoTree::init_octo_tree()
     {
       octo_state_ = 0;  // Current voxel is plane, set as leaf node
       // Release memory when the retained (post-filter) point count reaches max
-      if (temp_points_.size() >= max_points_num_)
+      if (temp_points_.size() > max_points_num_)
       {
         update_enable_ = false;
         std::vector<pointWithVar>().swap(temp_points_);
@@ -598,7 +622,7 @@ void VoxelOctoTree::cut_octo_tree()
         if (leaves_[i]->plane_ptr_->is_plane_)
         {
           leaves_[i]->octo_state_ = 0;
-          if (leaves_[i]->temp_points_.size() >= leaves_[i]->max_points_num_)
+          if (leaves_[i]->temp_points_.size() > leaves_[i]->max_points_num_)
           {
             leaves_[i]->update_enable_ = false;
             std::vector<pointWithVar>().swap(leaves_[i]->temp_points_);
@@ -721,7 +745,7 @@ void VoxelOctoTree::UpdateOctoTree(const pointWithVar &pv)
             init_plane(temp_points_, plane_ptr_);
             new_points_ = 0;
           }
-          if (temp_points_.size() >= max_points_num_)
+          if (temp_points_.size() > max_points_num_)
           {
             update_enable_ = false;
             std::vector<pointWithVar>().swap(temp_points_);
@@ -984,6 +1008,7 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
   // (one-frame lag; degeneracy is a spatially continuous state)
   if (config_setting_.degeneracy_adaptive_en_)
   {
+    // cout << degeneracy_factor_ << endl;
     if (degeneracy_factor_ < config_setting_.degeneracy_on_threshold_)
     {
       degenerate_streak_++;
@@ -1059,13 +1084,15 @@ void VoxelMapManager::BuildVoxelMap()
   {
     const pointWithVar p_v = input_points[i];
 
-    // Compute voxel coordinates using std::floor for consistent boundary handling
-    int64_t loc_xyz[3];
+    // Compute voxel coordinates exactly as FAST-LIVO2: float quotient with
+    // fractional part kept, -1 shift for negatives, then truncate toward zero
+    float loc_xyz[3];
     for (int j = 0; j < 3; j++)
     {
-      loc_xyz[j] = static_cast<int64_t>(std::floor(p_v.point_w[j] / voxel_size));
+      loc_xyz[j] = p_v.point_w[j] / voxel_size;
+      if (loc_xyz[j] < 0) { loc_xyz[j] -= 1.0; }
     }
-    VoxelLocation position(loc_xyz[0], loc_xyz[1], loc_xyz[2]);
+    VoxelLocation position((int64_t)loc_xyz[0], (int64_t)loc_xyz[1], (int64_t)loc_xyz[2]);
     auto iter = voxel_map_.find(position);
     if (iter != voxel_map_.end())
     {
@@ -1113,13 +1140,14 @@ void VoxelMapManager::UpdateVoxelMap(const std::vector<pointWithVar> &input_poin
   for (uint i = 0; i < plsize; i++)
   {
     const pointWithVar p_v = input_points[i];
-    // Compute voxel coordinates using std::floor for consistent boundary handling
-    int64_t loc_xyz[3];
+    // Same baseline voxelization as BuildVoxelMap (float quotient, see above)
+    float loc_xyz[3];
     for (int j = 0; j < 3; j++)
     {
-      loc_xyz[j] = static_cast<int64_t>(std::floor(p_v.point_w[j] / voxel_size));
+      loc_xyz[j] = p_v.point_w[j] / voxel_size;
+      if (loc_xyz[j] < 0) { loc_xyz[j] -= 1.0; }
     }
-    VoxelLocation position(loc_xyz[0], loc_xyz[1], loc_xyz[2]);
+    VoxelLocation position((int64_t)loc_xyz[0], (int64_t)loc_xyz[1], (int64_t)loc_xyz[2]);
     auto iter = voxel_map_.find(position);
     if (iter != voxel_map_.end())
     {
@@ -1212,13 +1240,14 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
       continue;
     }
 
-    // Compute voxel location using std::floor for consistent boundary handling
-    int64_t loc_xyz[3];
+    // Same baseline voxelization as BuildVoxelMap (float quotient, see above)
+    float loc_xyz[3];
     for (int j = 0; j < 3; j++)
     {
-      loc_xyz[j] = static_cast<int64_t>(std::floor(pv.point_w[j] / voxel_size));
+      loc_xyz[j] = pv.point_w[j] / voxel_size;
+      if (loc_xyz[j] < 0) { loc_xyz[j] -= 1.0; }
     }
-    VoxelLocation position(loc_xyz[0], loc_xyz[1], loc_xyz[2]); // Create voxel for current point
+    VoxelLocation position((int64_t)loc_xyz[0], (int64_t)loc_xyz[1], (int64_t)loc_xyz[2]); // Create voxel for current point
 
     // Find corresponding voxel in voxel map
     auto iter = voxel_map_.find(position);
@@ -1235,23 +1264,16 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
       build_single_residual(pv, current_octo, 0, is_success, prob, single_ptpl);
       if (!is_success)
       {
-        // If no valid plane found in current voxel, check adjacent voxels
+        // If no valid plane found in current voxel, check adjacent voxels.
+        // Baseline parity: the fractional float quotient is compared against
+        // the metric voxel_center_ ± quater_length_ exactly as FAST-LIVO2 does
         VoxelLocation near_position = position;
-
-        // Helper: single-axis offset, +1/-1 when the point sits in the outer
-        // half of its voxel along that axis
-        auto calc_offset = [&](double coord, double center, double quater_len) -> int {
-          if (coord > center + quater_len) {
-            return 1;
-          } else if (coord < center - quater_len) {
-            return -1;
-          }
-          return 0;
-        };
-
-        near_position.x += calc_offset(loc_xyz[0], current_octo->voxel_center_[0], current_octo->quater_length_);
-        near_position.y += calc_offset(loc_xyz[1], current_octo->voxel_center_[1], current_octo->quater_length_);
-        near_position.z += calc_offset(loc_xyz[2], current_octo->voxel_center_[2], current_octo->quater_length_);
+        if (loc_xyz[0] > (current_octo->voxel_center_[0] + current_octo->quater_length_)) { near_position.x = near_position.x + 1; }
+        else if (loc_xyz[0] < (current_octo->voxel_center_[0] - current_octo->quater_length_)) { near_position.x = near_position.x - 1; }
+        if (loc_xyz[1] > (current_octo->voxel_center_[1] + current_octo->quater_length_)) { near_position.y = near_position.y + 1; }
+        else if (loc_xyz[1] < (current_octo->voxel_center_[1] - current_octo->quater_length_)) { near_position.y = near_position.y - 1; }
+        if (loc_xyz[2] > (current_octo->voxel_center_[2] + current_octo->quater_length_)) { near_position.z = near_position.z + 1; }
+        else if (loc_xyz[2] < (current_octo->voxel_center_[2] - current_octo->quater_length_)) { near_position.z = near_position.z - 1; }
 
         // Find plane in adjacent voxels, build residual if found
         auto iter_near = voxel_map_.find(near_position);
@@ -1310,8 +1332,9 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
       if (dis_to_plane < sigma_num * sqrt(sigma_l))
       {
         // Effective intensity variance: plane spread + squared measurement noise
-        // (auto-estimated during the init window; 0 if estimation failed, i.e.
-        // intensity noise is not considered). Floored at 1e-3 so it is always
+        // (auto-estimated during the init window when intensity_noise_est_en is
+        // on; 0 when the estimation is off or failed, i.e. noise not considered).
+        // Floored at 1e-3 so it is always
         // strictly positive: every candidate plane is scored with the same 2D
         // likelihood form and none falls back to geometry-only scoring while
         // fusion/gate are enabled.

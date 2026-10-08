@@ -24,7 +24,9 @@ taskset -c 16-31 bash -c 'source /opt/ros/noetic/setup.bash && catkin_make -C /h
 
 **Architecture-specific optimizations** (CMakeLists.txt:21-37):
 - ARM (32/64-bit): `-O3 -mcpu=native -mtune=native` with NEON support for 32-bit
-- x86-64: `-O2` only (no `-march=native`; conservative to avoid compiler crashes)
+- x86-64: `-O3 -march=native -mtune=native -funroll-loops` (identical to the
+  FAST-LIVO2 baseline so builds are bit-comparable; the old `-O2` workaround is
+  obsolete — the compiler-crash root cause was bad RAM, not the flags)
 - Multi-threading: Auto-configured based on CPU core count (`MP_EN`, `MP_PROC_NUM`)
 - Debug builds: `-O0 -g`
 
@@ -77,7 +79,8 @@ taskset -c 16-31 bash -c 'source /opt/ros/noetic/setup.bash && catkin_make -C /h
 
 **Plane Init Pipeline** (R-VoxelMap/SuperLIO-style refinements, `init_plane` in voxel_map.cpp).
 Master switch `lio/plane_refine_en` (default true): false = fully revert to original
-behavior — no distance filter, no valid check, no check_and_update:
+behavior — no distance filter, no valid check, no check_and_update, no sum_ppt_
+incremental-statistics rebuild:
 - Multi-pass fitting: all-point PCA → drop points with point-to-plane distance >
   `lio/init_distance_threshold` (0.1 m, in-place erase releases storage) → re-fit on
   retained points
@@ -88,12 +91,14 @@ behavior — no distance filter, no valid check, no check_and_update:
   must exceed `valid_check_p_threshold` 0.8 of points) survives; the rest are dropped.
   Off-plane outliers cannot be caught by this guard and vice versa — the distance
   filter and the cluster guard are complementary
-- Per-plane incremental statistics (`sum_ppt_`, `points_size_`, `cov_need_update_`):
-  `check_and_update` (called from `UpdateOctoTree` before storing) performs an O(1)
-  rank-1 trial — points whose insertion would push the min eigenvalue past
-  `planner_threshold` are REJECTED (not stored, no refit trigger); accepted points
-  update center/sum_ppt/covariance/normal in place. `plane_var_` refresh is deferred
-  (`cov_need_update_`) to the next refit
+- Per-plane incremental statistics (`sum_ppt_`, `points_size_`; maintained only while
+  `plane_refine_en` is on): `check_and_update` (called from `UpdateOctoTree` before
+  storing) performs an O(1) rank-1 trial — points whose insertion would push the min
+  eigenvalue past `planner_threshold` are REJECTED (not stored, no refit trigger);
+  accepted points update center/sum_ppt/covariance/normal in place. `plane_var_` is
+  deliberately left untouched per acceptance and refreshed exactly at the
+  batch-boundary refit — the same cadence as R-VoxelMap's cov_need_update/
+  update_plane_cov lazy refresh, so no dirty flag is kept
 - Freeze: when the retained point count reaches `max_points_num` the voxel and plane
   freeze (`update_enable_ = false`, `temp_points_` released) — new points no longer
   update anything; only the intensity EMA keeps running
@@ -275,7 +280,8 @@ Uncomment and add to `<node>` tag:
 
 **Voxel Mapping** (lines 32-47):
 - `lio/voxel_size`: Voxel resolution (default: 1.0 meter)
-- `lio/capacity`: LRU cache capacity, <=1 = disabled (default: 100000; all
+- `lio/capacity`: LRU cache capacity, <=1 = disabled (default: 0 = disabled
+  when the key is missing, matching the unbounded FAST-LIVO2 baseline map; all
   shipped configs set 0 = disabled, so voxel count is unbounded unless this or
   `local_map/map_sliding_en` is enabled)
 - `lio/intensity_fusion_en`: Enable intensity-based fusion

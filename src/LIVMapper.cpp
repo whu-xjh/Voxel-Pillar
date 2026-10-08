@@ -281,8 +281,8 @@ static double medianOf(std::vector<float> &v)
 // the same surfaces, so frame-to-frame nearest-neighbor intensity differences
 // reflect pure repeat-measurement noise. For two independent measurements of
 // the same true value var(diff) = 2*sigma^2, hence the sqrt(2) divisor, and
-// the robust MAD-to-sigma factor 1.4826. The result replaces the conservative
-// default of VoxelPlane::intensity_meas_var_ and takes effect immediately in
+// the robust MAD-to-sigma factor 1.4826. The result replaces the zero default
+// of VoxelPlane::intensity_meas_var_ and takes effect immediately in
 // the intensity fusion scoring and association gate.
 void LIVMapper::estimateIntensityNoise()
 {
