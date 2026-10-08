@@ -1,2 +1,7 @@
 Log/*
 build/*
+
+# Local Claude instructions and settings
+CLAUDE.md
+claude.md
+.claude/
