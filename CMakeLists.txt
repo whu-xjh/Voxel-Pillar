@@ -34,7 +34,8 @@ if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm|aarch64|ARM|AARCH64)")
   endif()
   add_definitions(-DARM_ARCH)
 else()
-  set(RELEASE_OPTIMIZATION_FLAGS "-O3 -march=native -mtune=native")
+  # Keep Eigen alignment compatible with the system's prebuilt PCL libraries.
+  set(RELEASE_OPTIMIZATION_FLAGS "-O3")
   add_definitions(-DX86_ARCH)
 endif()
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} ${RELEASE_OPTIMIZATION_FLAGS}")
@@ -122,6 +123,20 @@ add_executable(voxelpillar_mapping src/main.cpp)
 add_executable(merge_lidar src/merge_lidar.cpp)
 
 # Target dependencies
+target_link_libraries(lio
+  ${catkin_LIBRARIES}
+  ${PCL_LIBRARIES}
+)
+
+target_link_libraries(laser_mapping
+  lio
+  pre
+  imu_proc
+  ${catkin_LIBRARIES}
+  ${PCL_LIBRARIES}
+  ${Boost_LIBRARIES}
+)
+
 target_link_libraries(voxelpillar_mapping
   laser_mapping
   lio
