@@ -89,7 +89,7 @@ lio:
   intensity_gate_en: false          # Intensity-based association gate (reject material-inconsistent matches)
   intensity_gate_k: 3.0             # Gate threshold in units of intensity sigma
   intensity_noise_est_en: false     # Online estimation of intensity measurement noise (init window)
-  intensity_ema_alpha: 0.5          # EMA adaptation rate of plane intensity stats, in (0,1]; higher = faster
+  intensity_ema_alpha: 0.05          # EMA adaptation rate of plane intensity stats, in (0,1]; higher = faster
   intensity_angle_comp_en: false
   intensity_angle_exp: 1.0          # Lambertian exponent k (<=0 also disables)
   intensity_angle_cos_floor: 0.2    # cos clip floor vs grazing-angle blow-up
@@ -118,7 +118,7 @@ pillar_map:
   height_consistency_ratio: 0.25    # ratio of voxel_size for height consistency check
 
   adjacent_redundant_threshold: 4
-  delete_redundant: false            # true=delete redundant points before they enter the voxel map, false=keep them
+  delete_redundant: false
 
   adjacent_isolated_threshold: 3
   delete_isolated: true             # true=delete isolated points before they enter the voxel map, false=keep them
