@@ -654,7 +654,20 @@ void VoxelOctoTree::UpdateOctoTree(const pointWithVar &pv)
   {
     if (plane_ptr_->is_plane_) // Current voxel is already a plane, incremental update, periodically update plane parameters
     {
-      // EMA update for intensity statistics (always runs, even when update_enable_=false).
+      // R-VoxelMap check_and_update gate FIRST: reject points whose insertion
+      // would push the min eigenvalue past the planarity threshold (O(1) rank-1
+      // trial). A rejected point returns before touching ANY statistics — the
+      // intensity EMA below must not fold in points the geometry already
+      // rejected. Skipped entirely when plane_refine_en_ is off (original
+      // behavior) and for frozen voxels (update_enable_ = false), whose
+      // intensity EMA keeps running per the freeze contract
+      if (update_enable_)
+      {
+        if (config_ptr_->plane_refine_en_ && !check_and_update(pv)) return;
+      }
+
+      // EMA update for intensity statistics (runs for gate-accepted points and
+      // frozen voxels alike).
       // No hard std floor: the measurement noise term added at the use sites
       // (intensity_meas_var_) keeps the effective variance from collapsing.
       // The folded value is the incidence-angle-corrected reflectivity
@@ -675,11 +688,6 @@ void VoxelOctoTree::UpdateOctoTree(const pointWithVar &pv)
 
       if (update_enable_)
       {
-        // R-VoxelMap check_and_update: reject points whose insertion would
-        // push the min eigenvalue past the planarity threshold (O(1) rank-1
-        // trial; accepted points refresh the incremental plane statistics).
-        // Skipped entirely when plane_refine_en_ is off (original behavior)
-        if (config_ptr_->plane_refine_en_ && !check_and_update(pv)) return;
         new_points_++;
         temp_points_.push_back(pv);
         if (new_points_ > update_size_threshold_)
@@ -1019,7 +1027,22 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
       normal_streak_++;
       degenerate_streak_ = 0;
     }
-    intensity_fusion_active_ = degenerate_streak_ >= config_setting_.degeneracy_min_frames_;
+    else
+    {
+      // Hysteresis band: no evidence in either direction, so both consecutive
+      // runs break — an alternating on-threshold/band sequence must not creep
+      // into the degenerate state
+      degenerate_streak_ = 0;
+      normal_streak_ = 0;
+    }
+    // Latched transitions, both edges debounced by degeneracy_min_frames:
+    // enter after min_frames consecutive degenerate frames, exit after
+    // min_frames consecutive normal frames; band frames hold the state
+    if (!intensity_fusion_active_)
+    {
+      if (degenerate_streak_ >= config_setting_.degeneracy_min_frames_) { intensity_fusion_active_ = true; }
+    }
+    else if (normal_streak_ >= config_setting_.degeneracy_min_frames_) { intensity_fusion_active_ = false; }
   }
 }
 
@@ -1264,16 +1287,21 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
       build_single_residual(pv, current_octo, 0, is_success, prob, single_ptpl);
       if (!is_success)
       {
-        // If no valid plane found in current voxel, check adjacent voxels.
-        // Baseline parity: the fractional float quotient is compared against
-        // the metric voxel_center_ ± quater_length_ exactly as FAST-LIVO2 does
+        // If no valid plane found in current voxel, check the adjacent voxel
+        // sharing the nearest face. Direction test in METERS (point_w vs
+        // voxel_center_ ± quater_length_, both metric at every octree layer):
+        // the baseline's loc_xyz comparison is in voxel-index units and only
+        // numerically coincides with this at voxel_size = 1 for positive
+        // coordinates — at other resolutions, and for negative coordinates
+        // (where the -1.0 floor shift skews the index), it biases the offset
+        // and probes the wrong neighbor
         VoxelLocation near_position = position;
-        if (loc_xyz[0] > (current_octo->voxel_center_[0] + current_octo->quater_length_)) { near_position.x = near_position.x + 1; }
-        else if (loc_xyz[0] < (current_octo->voxel_center_[0] - current_octo->quater_length_)) { near_position.x = near_position.x - 1; }
-        if (loc_xyz[1] > (current_octo->voxel_center_[1] + current_octo->quater_length_)) { near_position.y = near_position.y + 1; }
-        else if (loc_xyz[1] < (current_octo->voxel_center_[1] - current_octo->quater_length_)) { near_position.y = near_position.y - 1; }
-        if (loc_xyz[2] > (current_octo->voxel_center_[2] + current_octo->quater_length_)) { near_position.z = near_position.z + 1; }
-        else if (loc_xyz[2] < (current_octo->voxel_center_[2] - current_octo->quater_length_)) { near_position.z = near_position.z - 1; }
+        if (pv.point_w[0] > (current_octo->voxel_center_[0] + current_octo->quater_length_)) { near_position.x = near_position.x + 1; }
+        else if (pv.point_w[0] < (current_octo->voxel_center_[0] - current_octo->quater_length_)) { near_position.x = near_position.x - 1; }
+        if (pv.point_w[1] > (current_octo->voxel_center_[1] + current_octo->quater_length_)) { near_position.y = near_position.y + 1; }
+        else if (pv.point_w[1] < (current_octo->voxel_center_[1] - current_octo->quater_length_)) { near_position.y = near_position.y - 1; }
+        if (pv.point_w[2] > (current_octo->voxel_center_[2] + current_octo->quater_length_)) { near_position.z = near_position.z + 1; }
+        else if (pv.point_w[2] < (current_octo->voxel_center_[2] - current_octo->quater_length_)) { near_position.z = near_position.z - 1; }
 
         // Find plane in adjacent voxels, build residual if found
         auto iter_near = voxel_map_.find(near_position);
@@ -1361,8 +1389,6 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
           if (std::fabs(m_int) > config_setting_.intensity_gate_k_) { return; }
         }
 
-        is_success = true;
-
         double this_prob;
         // Adaptive engage: with degeneracy_adaptive_en, fusion engages only
         // when the previous frame's observation Hessian was degenerate — weak
@@ -1387,8 +1413,16 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
           this_prob = 1.0 / (sqrt(sigma_l)) * exp(-0.5 * dis_to_plane * dis_to_plane / sigma_l);
         }
 
-        if (this_prob > prob) // When point may match multiple planes, select the one with highest probability
+        // Fill BEFORE the score comparison: the fused score can underflow to 0
+        // (tiny intensity variance × large intensity diff), and a bare
+        // `this_prob > prob` (initial prob = 0) would then leave single_ptpl
+        // unfilled while callers treat the match as valid — a zero normal/d
+        // would silently enter the residuals. The first candidate reaching
+        // this point always fills; later candidates (octree children, the
+        // neighbor-voxel fallback) replace it only on a strictly better score
+        if (!is_success || this_prob > prob)
         {
+          is_success = true;
           prob = this_prob;
           pv.normal = plane.normal_;
           single_ptpl.body_cov_ = pv.body_var;
@@ -1756,6 +1790,7 @@ bool PillarMap::scanNeighborRing(const VoxelLocation &current_pos, const std::ve
     };
 
     auto pillar_iter = pillars_.find(GetPillarLocation(adjacent_pos));
+    bool occupied_now = false;
     bool counted = false;
     if (pillar_iter != pillars_.end() && !pillar_iter->second.empty())
     {
@@ -1765,10 +1800,15 @@ bool PillarMap::scanNeighborRing(const VoxelLocation &current_pos, const std::ve
           [](const std::pair<int64_t, PillarMapVoxel> &entry, int64_t z) { return entry.first < z; });
       if (voxel_iter != voxels.end() && voxel_iter->first == adjacent_pos.z)
       {
+        occupied_now = true;
         counted = std::abs(voxel_iter->second.virtual_point_.z() - current_vp_z) <= height_threshold;
       }
     }
-    if (!counted && use_history &&
+    // History compensation only for slots ABSENT in the current frame: the
+    // window stores key occupancy without heights, so counting a slot the
+    // height gate just rejected would bypass the gate entirely (the current
+    // frame is already inside the window at this point)
+    if (!occupied_now && use_history &&
         seenInHistory(GetPillarLocation(adjacent_pos), adjacent_pos.z))
     {
       counted = true;  // empty now, but the window shows recent structure there

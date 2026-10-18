@@ -523,13 +523,13 @@ public:
   int current_frame_id_ = 0;
   ros::Publisher voxel_map_pub_;
 
-  // Degeneracy-adaptive intensity fusion state (updated per frame in
+  // Degeneracy-adaptive intensity fusion state (advanced per frame in
   // StateEstimation; intensity_fusion_active_ governs the NEXT frame's
   // residual association)
   double degeneracy_factor_ = 1.0;       // λ_min/λ_max of the last geometric observation Hessian
-  bool intensity_fusion_active_ = false; // evaluated per frame via the hysteresis state machine
-  int degenerate_streak_ = 0;            // consecutive frames below the ON threshold
-  int normal_streak_ = 0;                // consecutive frames above the OFF threshold
+  bool intensity_fusion_active_ = false; // latched: enter/exit debounced by degeneracy_min_frames_, band frames hold the state
+  int degenerate_streak_ = 0;            // consecutive frames below the ON threshold (band frames reset)
+  int normal_streak_ = 0;                // consecutive frames above the OFF threshold (band frames reset)
 
   // LRU voxel cache: voxel_map_cache_ front = most recently updated voxel.
   // voxel_map_ maps location -> list iterator for O(1) hit/splice/evict.

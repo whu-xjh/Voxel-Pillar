@@ -31,7 +31,7 @@ time_offset:
   imu_time_offset: 0.1
 
 preprocess:
-  point_filter_num: 3
+  point_filter_num: 5
   filter_size_surf: 0.1
   lidar_type: 2  # Velodyne
   scan_line: 16
@@ -84,7 +84,7 @@ lio:
   layer_init_num: [5, 5, 5, 5, 5]
   sigma_num: 3
   capacity: 0                       # LRU cache (<=1 = disable)
-  intensity_fusion_en: false
+  intensity_fusion_en: true
   intensity_fusion_weight: 0.5      # intensity trust weight in the joint association score exp(-(w_g*m_geo + w_i*m_int)); 0.5 = equal trust
   intensity_gate_en: false          # Intensity-based association gate (reject material-inconsistent matches)
   intensity_gate_k: 3.0             # Gate threshold in units of intensity sigma
@@ -100,7 +100,7 @@ lio:
   degeneracy_min_frames: 3          # consecutive frames to switch state (debounce) 
 
   # R-VoxelMap-style plane init refinements
-  plane_refine_en: false
+  plane_refine_en: true
   init_distance_threshold: 0.1      # init_plane: drop points farther than this from the first PCA fit (m)
   plane_valid_check_en: true        # coplanar-disjoint-surface guard (2D grid DFS clustering)
   valid_check_max_layer: 0          # run the guard only on layers with index <= this (0 = root voxel only)
@@ -110,7 +110,7 @@ lio:
 
 # Pillar Voxel Redundant Detection
 pillar_map:
-  pillar_map_en: false
+  pillar_map_en: true
   voxel_size: 0.5
   pillar_buffer: 1                  # n-frame pillar occupancy window; new-point detection starts at frame n+1 (n<=0: no reference kept, every point new)
   neighbor_ring_num: 1
