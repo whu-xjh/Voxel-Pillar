@@ -64,11 +64,7 @@ typedef struct VoxelMapConfig
   double degeneracy_off_threshold_;  // exit hysteresis threshold; must be > on (default: 0.2)
   int degeneracy_min_frames_;        // consecutive frames to switch state (debounce; default: 2)
 
-  // Incidence-angle compensation for the intensity channel (Intensity-SLAM-style):
-  // gain = max(|cosθ|, floor)^k with θ the angle between the laser beam and the
-  // matched plane normal; corrected intensity = raw / gain, variance / gain².
-  // Plane intensity statistics then express material (normal-incidence
-  // reflectivity) instead of viewing geometry. Bit-identical behavior when off
+  // Incidence-angle compensation for the intensity channel (Intensity-SLAM-style): gain = max(|cosθ|, floor)^k with θ the beam-vs-normal angle; corrected intensity = raw/gain, variance / gain² — plane statistics express material (normal-incidence reflectivity), not viewing geometry; bit-identical when off
   bool intensity_angle_comp_en_;      // master switch (default: false)
   double intensity_angle_exp_;        // Lambertian exponent k (default: 1.0; <= 0 also disables)
   double intensity_angle_cos_floor_;  // cosθ clip floor against grazing-angle blow-up (default: 0.2)
@@ -90,9 +86,7 @@ typedef struct PointToPlane
   bool is_valid_;
   float dis_to_plane_;
   float intensity_;
-  // Geometric incidence-angle gain (max(|cosθ|, floor)^k) of the matched
-  // association, recorded for the intensity_angle_debug_en_ validation dump
-  // regardless of whether compensation is enabled
+  // Geometric incidence-angle gain (max(|cosθ|, floor)^k) of the matched association, recorded for the intensity_angle_debug_en_ validation dump regardless of compensation
   float intensity_gain_ = 1.0f;
 } PointToPlane;
 
@@ -103,9 +97,7 @@ typedef struct VoxelPlane
   Eigen::Vector3d y_normal_;
   Eigen::Vector3d x_normal_;
   Eigen::Matrix3d covariance_;
-  // Incremental sufficient statistics (Σp·pᵀ over stored points) for the O(1)
-  // insertion trial in check_and_update; maintained by init_plane and
-  // check_and_update only while plane_refine_en_ is on
+  // Incremental sufficient statistics (Σp·pᵀ over stored points) for the O(1) insertion trial in check_and_update; maintained by init_plane/check_and_update only while plane_refine_en_ is on
   Eigen::Matrix3d sum_ppt_;
   Eigen::Matrix<double, 6, 6> plane_var_;
   float radius_ = 0;
@@ -118,27 +110,17 @@ typedef struct VoxelPlane
   bool is_init_ = false;
   int id_ = 0;
   bool is_update_ = false;
-  // Set when accepted insertions shift the incremental statistics. plane_var_
-  // is currently recomputed (eagerly) at the next refit; the flag is kept as
-  // the hook for a future lazy refresh
+  // Set when accepted insertions shift the incremental statistics; plane_var_ is currently recomputed eagerly at the next refit — the flag is the hook for a future lazy refresh
   bool cov_need_update_ = false;
   double mean_intensity_ = 0.0f;
   double intensity_std_ = 1.0f;
-  // Whether batch intensity statistics have been initialized at least once
-  // (after that, stats evolve only via EMA so re-inits never wipe history)
+  // Whether batch intensity statistics have been initialized at least once (after that, stats evolve only via EMA so re-inits never wipe history)
   bool intensity_init_ = false;
-  // Total number of observations folded into the intensity statistics
-  // (maturity condition for the intensity gate)
+  // Total number of observations folded into the intensity statistics (maturity condition for the intensity gate)
   int intensity_obs_count_ = 0;
-  // Squared per-point intensity measurement noise (sigma_meas^2), estimated online
-  // during the init window (frame-to-frame differencing on static data) when
-  // intensity_noise_est_en is on. Zero default: with the estimation off (or
-  // failed) the noise term contributes nothing. Added at use sites so the
-  // effective variance never collapses to zero (the 1e-3 floor there keeps it
-  // strictly positive)
+  // Squared per-point intensity measurement noise, estimated online during the init window (frame-to-frame differencing on static data) when intensity_noise_est_en is on; zero default = contributes nothing when the estimation is off/failed; added at use sites so the effective variance never collapses (the 1e-3 floor keeps it strictly positive)
   static double intensity_meas_var_;
-  // EMA alpha for intensity statistics update (higher = faster adaptation).
-  // Configurable via lio/intensity_ema_alpha, clamped to (0, 1]
+  // EMA alpha for intensity statistics update (higher = faster adaptation), configurable via lio/intensity_ema_alpha, clamped to (0, 1]
   static double intensity_ema_alpha_;
   VoxelPlane()
   {
@@ -169,10 +151,7 @@ public:
   bool operator==(const PillarLocation &other) const { return (axis1 == other.axis1 && axis2 == other.axis2); }
 };
 
-// Composite key of one pillar voxel: (x,y) pillar index + z voxel index.
-// Struct instead of std::pair: named members match the VoxelLocation/PillarLocation
-// style, and a custom hash is required either way (std::hash has no pair
-// specialization), so the struct costs nothing extra.
+// Composite key of one pillar voxel: (x,y) pillar index + z voxel index; struct instead of std::pair — named members match the location style and a custom hash is required either way, so it costs nothing extra
 struct PillarMapKey
 {
   PillarLocation pillar;
@@ -185,9 +164,7 @@ struct PillarMapKey
 
 namespace std
 {
-// Note: y/z are folded with a fixed modulus while x is added unmoded, so the
-// intermediate products stay within int64 only for voxel indices up to ~1e13.
-// That is far beyond any physical map extent (voxel_size 0.5 m -> 5e12 m).
+// Note: y/z are folded with a fixed modulus while x is added unmodded — int64-safe only for voxel indices up to ~1e13 (voxel_size 0.5 m -> 5e12 m, far beyond any physical map extent)
 template <> struct hash<VoxelLocation>
 {
   int64_t operator()(const VoxelLocation &s) const
@@ -214,8 +191,7 @@ template <> struct hash<PillarMapKey>
   {
     using std::hash;
     using std::size_t;
-    // Fold z with the fixed modulus, then add the existing pillar hash unmodded
-    // (same pattern as hash<VoxelLocation>)
+    // Fold z with the fixed modulus, then add the existing pillar hash unmodded (same pattern as hash<VoxelLocation>)
     return ((s.z * VOXELMAP_HASH_P) % VOXELMAP_MAX_N + hash<PillarLocation>()(s.pillar));
   }
 };
@@ -279,13 +255,9 @@ public:
   void init_plane(std::vector<pointWithVar> &points, VoxelPlane *plane);
   void init_octo_tree();
   void cut_octo_tree();
-  // R-VoxelMap check_and_update: O(1) rank-1 trial — accept the point only if
-  // the min eigenvalue of the augmented covariance stays below the planarity
-  // threshold; on acceptance the incremental statistics are updated in place
+  // R-VoxelMap check_and_update: O(1) rank-1 trial — accept the point only if the augmented min eigenvalue stays below the planarity threshold; on acceptance the incremental statistics update in place
   bool check_and_update(const pointWithVar &pv);
-  // Coplanar-disjoint-surface guard (ported from R-VoxelMap): prune points to
-  // the largest 4-connected cluster of the plane-projected 2D grid. Returns
-  // false when even the largest cluster is too small to trust the plane
+  // Coplanar-disjoint-surface guard (R-VoxelMap): prune points to the largest 4-connected cluster of the plane-projected 2D grid; returns false when even the largest cluster is too small to trust the plane
   bool plane_valid_check(std::vector<pointWithVar> &points, const Eigen::Vector3d &center,
                          const Eigen::Vector3d &x_normal, const Eigen::Vector3d &y_normal);
   void UpdateOctoTree(const pointWithVar &pv);
@@ -300,12 +272,12 @@ void loadVoxelConfig(ros::NodeHandle &nh, VoxelMapConfig &voxel_config);
 enum PointLabel
 {
   LABEL_NORMAL = 0,
-  LABEL_REDUNDANT = 1,
-  LABEL_ISOLATED = 2
+  LABEL_REDUNDANT = 1,      // horizontally redundant: flat sheet confirmed by same-layer neighbors
+  LABEL_ISOLATED = 2,
+  LABEL_REDUNDANT_V = 3     // vertically redundant: voxel sandwiched between adjacent layers above AND below, confirmed by the z±1-shifted neighborhood
 };
 
-// Lightweight voxel structure for Pillar Voxel Map (decoupled from VoxelOctoTree)
-// Designed specifically for redundant/isolated point detection without octree overhead
+// Lightweight voxel structure for the Pillar Voxel Map (decoupled from VoxelOctoTree), designed specifically for redundant/isolated point detection without octree overhead
 struct PillarMapVoxel
 {
   std::vector<size_t> point_indices_;  // Point indices in original point cloud
@@ -313,6 +285,7 @@ struct PillarMapVoxel
   Eigen::Vector3d virtual_point_ = Eigen::Vector3d::Zero();  // Average XYZ of inserted points
   size_t point_count_ = 0;            // Number of accumulated points for running average
   bool is_redundant_voxel_ = false;
+  bool is_vertical_redundant_voxel_ = false;  // vertically redundant (sandwich confirmation); mutually exclusive with is_redundant_voxel_
   bool is_isolated_voxel_ = false;
   bool is_new_voxel_ = false;          // set by DetectNewPoints: voxel unseen in the last pillar_buffer frames
 
@@ -334,6 +307,7 @@ struct PillarMapVoxel
   {
     point_indices_.clear();
     is_redundant_voxel_ = false;
+    is_vertical_redundant_voxel_ = false;
     is_isolated_voxel_ = false;
     is_new_voxel_ = false;
     virtual_point_.setZero();
@@ -345,11 +319,16 @@ typedef struct PillarMapConfig
 {
   bool pillar_map_en_;
   double voxel_size_;
-  int adjacent_redundant_threshold_;
-  bool delete_redundant_;    // true=delete redundant points before they enter the voxel map, false=keep them (default: false)
+  int horizontal_redundant_threshold_;  // same-layer horizontal neighbors a redundant candidate needs (flat-sheet confirmation)
+  int vertical_redundant_threshold_;    // z±1-shifted neighborhood slots a vertically redundant candidate needs (sandwich confirmation)
+  bool redundant_GFH_sample_en_;        // master switch: GFH-equivalent intra-voxel sampling of redundant voxels; on = redundant keep/drop decided by the sampler, delete_redundant bypassed
+  double redundant_GFH_sample_ratio_;   // alpha: per-voxel keep ratio (default: 0.5)
+  int redundant_GFH_sample_min_pts_;    // per-voxel floor (default: 10; >= valid_check_min_points_size keeps the plane coplanar guard active)
+  double redundant_GFH_sample_bin_;     // radial shell width in meters (default: 0.05)
+  bool delete_redundant_;    // true=delete redundant points before they enter the voxel map, false=keep them (default: false; covers BOTH redundant categories)
   bool delete_isolated_;     // true=delete isolated points before they enter the voxel map, false=keep them (default: false)
   int adjacent_isolated_threshold_;
-  int neighbor_ring_num_;        // max ring probed by hasAdjacentVoxel (horizontal-only): 1 = ring 1 only (4 face neighbors at distance 1), 2 = + ring 2 (4 diagonals at sqrt(2); together the horizontal 8-neighborhood) (default: 1)
+  int neighbor_ring_num_;        // max ring probed by hasAdjacentVoxel AND hasVerticalAdjacentVoxel: 1 = ring 1 only (4 face neighbors at distance 1), 2 = + ring 2 (4 diagonals at sqrt(2); together the horizontal 8-neighborhood, whose z±1 shifts form the vertical neighborhood) (default: 1)
   bool dyn_bridge_display_;      // display-only bridge: re-publish stale points of intermittently detected targets, red (default: false; needs dyn_buffer_max_age_ > 0; the buffer stores points only when this is on)
   int dyn_buffer_max_age_;       // dyn_buffer_ freshness window: buffer aging/prune AND the rescue-sweep pooling horizon (default: 3; <=0: buffer off)
   int min_num_;                  // redundant voxel needs point_count_ > this, isolated voxel needs < this (default: 5)
@@ -361,7 +340,9 @@ typedef struct PillarMapConfig
   int dyn_cluster_min_num_;  // min points per cluster to confirm as new (default: 5)
   bool dyn_cluster_expansion_;  // rescue sweep: pool current-frame points sitting in recent dyn_buffer_ voxels into the cluster (default: false; needs dyn_cluster_en_ + dyn_buffer_max_age_ > 0)
 
-  PillarMapConfig() : pillar_map_en_(false), voxel_size_(1.0), adjacent_redundant_threshold_(3),
+  PillarMapConfig() : pillar_map_en_(false), voxel_size_(1.0), horizontal_redundant_threshold_(3),
+                       vertical_redundant_threshold_(4),
+                       redundant_GFH_sample_en_(false), redundant_GFH_sample_ratio_(0.5), redundant_GFH_sample_min_pts_(10), redundant_GFH_sample_bin_(0.05),
                        delete_redundant_(false), delete_isolated_(false),
                        adjacent_isolated_threshold_(3), neighbor_ring_num_(1),
                        dyn_bridge_display_(false), dyn_buffer_max_age_(3),
@@ -373,10 +354,7 @@ typedef struct PillarMapConfig
 
 void loadPillarMapConfig(ros::NodeHandle &nh, PillarMapConfig &config);
 
-// Per-pillar voxel array sorted by z key (built once per frame in BuildPillarMap).
-// Flat vector instead of std::map: most pillars hold only a few z voxels and the
-// whole structure is rebuilt every frame, so cache locality and allocation count
-// beat tree lookups.
+// Per-pillar voxel array sorted by z key (built once per frame in BuildPillarMap): flat vector instead of std::map — most pillars hold only a few z voxels and the whole structure is rebuilt every frame, so cache locality and allocation count beat tree lookups
 typedef std::vector<std::pair<int64_t, PillarMapVoxel>> PillarMapArray;
 
 class PillarMap
@@ -386,61 +364,58 @@ public:
   PillarMapConfig config_;
   double voxel_size_;
   std::unordered_map<PillarLocation, PillarMapArray> pillars_;
-  // Two-ring horizontal neighborhood (fixed geometry): ring 1 = 4 face
-  // neighbors at distance 1; ring 2 = 4 horizontal diagonals at distance
-  // sqrt(2) — together the horizontal 8-neighborhood. Vertical continuity is
-  // judged in updatePillarFlag, so all offsets are same-layer (dz = 0).
-  // Ring 1 is always probed first, ring 2 only when the threshold is not yet met
+  // Two-ring horizontal neighborhood (fixed geometry): ring 1 = 4 face neighbors at distance 1, ring 2 = 4 diagonals at sqrt(2) — together the horizontal 8-neighborhood, same-layer offsets (dz = 0); ring 1 always probed first, ring 2 only when the threshold is not yet met
   std::vector<VoxelLocation> ring1_offsets_;
   std::vector<VoxelLocation> ring2_offsets_;
+  // Vertical neighborhood (fixed geometry): the horizontal rings shifted one layer down/up (dz = ±1) — vring1 = 4 face neighbors x 2 levels (8 slots), vring2 = 4 diagonals x 2 levels (8 slots, 16 total); built by initNeighborOffsets, gated by the same neighbor_ring_num_
+  std::vector<VoxelLocation> vring1_offsets_;
+  std::vector<VoxelLocation> vring2_offsets_;
 
   std::vector<int8_t> point_labels_;
   PointCloudXYZI::Ptr point_cloud_ptr_;
 
-  // Count of voxels flagged as redundant/isolated candidate during Step 1 of pillarDetection.
-  // Used for early-exit: if 0 after Step 1, skip the remaining steps entirely.
+  // Count of voxels flagged as redundant/isolated candidate during Step 1 of pillarDetection; used for early-exit — 0 after Step 1 skips the remaining steps entirely
   size_t voxel_label_count_ = 0;
 
-  // --- Pillar map history (n-frame occupancy reference window) ---
-  // Occupied voxel keys per frame, newest at back; at most pillar_buffer_
-  // frames retained. Maintained by UpdateHistory() every frame; deliberately
-  // survives ClearPillarMapVoxels(). Consumed by new-point detection AND the
-  // redundant/isolated vertical-continuity checks
+  // --- Pillar map history (n-frame occupancy reference window): occupied voxel keys per frame, newest at back, at most pillar_buffer_ frames retained; maintained by UpdateHistory() every frame, deliberately survives ClearPillarMapVoxels(); consumed by new-point detection AND the redundant/isolated checks
   std::deque<std::vector<PillarMapKey>> history_frames_;
-  // Voxel key -> number of frames of the current window containing it.
-  // "New" <=> key absent here (checked before the current frame is inserted)
+  // Voxel key -> number of frames of the current window containing it; "new" <=> key absent here (checked before the current frame is inserted)
   std::unordered_map<PillarMapKey, int> history_counts_;
-  // Per-point new flag, index-aligned with point_cloud_ptr_, reset each frame in
-  // DetectNewPoints(). Kept separate from point_labels_: a point can be new AND
-  // redundant/isolated; deletion is decided per delete_dyn in
-  // DefineSkipPoints()
+  // Per-point new flag, index-aligned with point_cloud_ptr_, reset each frame in DetectNewPoints(); kept separate from point_labels_ (a point can be new AND redundant/isolated); deletion decided per delete_dyn in DefineSkipPoints()
   std::vector<int8_t> point_is_new_;
-  // Frames processed since startup; the new-point gate uses it so detection
-  // output starts at frame pillar_buffer_ + 1 (earlier frames only
-  // accumulate the history window)
+  // Per-point sampling verdict written by sampleRedundantVoxels(): 1 = kept (default), 0 = sampled away; empty when sampling is off
+  std::vector<int8_t> point_sample_keep_;
+  // Confirmed redundant voxels collected at the end of pillarDetection Step 2 — the sampler walks this list instead of rescanning all pillars; pointers valid only within the frame (cleared in ClearPillarMapVoxels)
+  std::vector<PillarMapVoxel*> redundant_sample_list_;
+
+  // Scratch workspace for sampleRedundantVoxels: reused across voxels and frames (assign/resize keeps capacity, avoiding per-voxel allocations)
+  struct SampleWorkspace
+  {
+    std::vector<int> bin_id;            // per-point radial bin (counting-sort pass 1)
+    std::vector<int> bin_count;         // points per bin
+    std::vector<int> bin_start;         // exclusive prefix offsets per bin
+    std::vector<int> bin_fill;          // placement cursor per bin
+    std::vector<int> quota;             // granted keep count per bin
+    std::vector<size_t> order;          // local point positions grouped by ascending bin
+    std::vector<Eigen::Vector3d> pts;   // voxel point positions, same order as point_indices_
+    std::vector<char> selected;         // FPS selection flags within the current shell
+    std::vector<double> min_d;          // FPS min squared distance to the selected set
+  };
+  SampleWorkspace sample_ws_;
+  // Frames processed since startup; the new-point gate uses it so detection output starts at frame pillar_buffer_ + 1 (earlier frames only accumulate the window)
   size_t history_frame_count_ = 0;
 
-  // --- Dynamic-point buffer (M-Detector umap-style) ---
-  // Confirmed new-point voxels persist across frames; maintained only when a
-  // consumer exists (dyn_cluster_expansion_ rescue sweep or dyn_bridge_display_
-  // bridge). Voxels stale beyond dyn_buffer_max_age_ frames are dropped.
-  // Survives ClearPillarMapVoxels()
+  // --- Dynamic-point buffer (M-Detector umap-style): confirmed new-point voxels persist across frames; maintained only when a consumer exists (rescue sweep or display bridge); voxels stale beyond dyn_buffer_max_age_ frames are dropped; survives ClearPillarMapVoxels()
   struct DynVoxelEntry
   {
-    // world-frame points stored at last detection — populated ONLY when
-    // dyn_bridge_display_ is on (the stale-point re-publish needs the
-    // coordinates; the rescue sweep consumes key membership only)
+    // World-frame points stored at last detection — populated ONLY when dyn_bridge_display_ is on (the stale-point re-publish needs coordinates; the rescue sweep consumes key membership only)
     std::vector<Eigen::Vector3d> points;
     int last_frame = 0;
   };
   std::unordered_map<PillarMapKey, DynVoxelEntry> dyn_buffer_;
   int dyn_bridge_frame_ = 0;  // frame stamp of the current detection pass
 
-  // Long-term per-voxel evidence (ERASOR-style): dyn_count = frames the voxel
-  // appeared window-absent (dynamic candidate), static_count = frames it was
-  // seen within the window or as supported structure (bottom voxels).
-  // Persists across ClearPillarMapVoxels; the dyn_count > static_count gate
-  // separates real dynamic entries from sampling flicker on static surfaces
+  // Long-term per-voxel evidence (ERASOR-style): dyn_count = frames the voxel appeared window-absent (dynamic candidate), static_count = frames seen within the window or as supported structure (bottom voxels); persists across ClearPillarMapVoxels; the dyn_count > static_count gate separates real dynamic entries from sampling flicker on static surfaces
   struct PillarEvidence
   {
     int dyn_count = 0;
@@ -448,9 +423,7 @@ public:
   };
   std::unordered_map<PillarMapKey, PillarEvidence> pillar_evidence_;
 
-  // Connected component of the dynamic-point buffer (26-adjacency): all
-  // member voxel points, its stale subset (voxels not confirmed this frame),
-  // the centroid, and its live flag
+  // Connected component of the dynamic-point buffer (26-adjacency): all member voxel points, its stale subset (voxels not confirmed this frame), the centroid, and its live flag
   struct DynComponent
   {
     std::vector<Eigen::Vector3d> points;         // all member voxel points
@@ -465,10 +438,10 @@ public:
   void DetectNewPoints();
   void UpdateHistory();
   void pillarDetection();
+  void sampleRedundantVoxels();
   size_t removeFlaggedPoints(const PointCloudXYZI::Ptr &body_cloud, const PointCloudXYZI::Ptr &world_cloud,
                              std::vector<uint8_t> &skip_flags);
-  // Unified pillar map output: redundant (purple), isolated (blue) and new
-  // (red, priority on overlap) points in one RGB cloud
+  // Unified pillar map output: redundant (purple), isolated (blue) and new (red, priority on overlap) points in one RGB cloud
   void PublishPillarMapCloud(const ros::Publisher &pub);
 
   inline int8_t GetPointLabel(size_t index) const {
@@ -479,40 +452,31 @@ public:
     return (index < point_is_new_.size()) ? point_is_new_[index] : 0;
   }
 
+  inline int8_t GetPointSampleKeep(size_t index) const {
+    return (index < point_sample_keep_.size()) ? point_sample_keep_[index] : 1;  // default: keep
+  }
+
 private:
   void setVoxelPointLabels(PillarMapVoxel* voxel, int8_t label);
   void initNeighborOffsets();
   PillarLocation GetPillarLocation(const VoxelLocation &position) const;
   void updatePillarFlag(const PillarLocation &pillar_key, PillarMapArray &pillar_maps);
-  // Scan one neighbor ring (same-layer offsets around current_pos): count
-  // occupied voxels, gating every neighbor with the height-consistency test.
-  // With use_history, slots empty in the current frame still count when the
-  // history window shows recent occupancy there (sampling flicker must not
-  // read as isolation). Returns true as soon as adjacent_count reaches
-  // threshold (early exit)
+  // Scan one neighbor ring (offsets around current_pos): count occupied voxels, height-gated against current_vp_z; with use_history, slots empty now but recently occupied still count (sampling flicker must not read as isolation); early exit at threshold. The INFINITY height_threshold sentinel disables the gate — used by the vertical scan, whose slots are z±1 by construction
   bool scanNeighborRing(const VoxelLocation &current_pos, const std::vector<VoxelLocation> &offsets,
                         int threshold, double current_vp_z, double height_threshold, int &adjacent_count,
                         bool use_history);
   bool hasAdjacentVoxel(const VoxelLocation &current_pos, int threshold, double current_vp_z, bool use_history);
-  // History-window occupancy oracle: was (pillar, z) occupied in any of the
-  // last pillar_buffer frames?
+  // Vertical neighborhood test: the horizontal rings probed at z-1 and z+1 (ring_num=1: 8 slots, ring_num=2: 16); occupancy is exact-key lookup in the neighbor pillar's z-sorted array, so top/bottom column ends and isolated gaps are naturally empty; no height gate applies (sentinel above disables it); counts shared across levels and rings, early exit at threshold
+  bool hasVerticalAdjacentVoxel(const VoxelLocation &current_pos, int threshold, bool use_history);
+  // History-window occupancy oracle: was (pillar, z) occupied in any of the last pillar_buffer frames?
   bool seenInHistory(const PillarLocation &pillar, int64_t z_key) const;
-  // True when any z layer strictly between low_key and high_key was occupied
-  // within the history window (vertical gap is a transient sampling hole)
+  // True when any z layer strictly between low_key and high_key was occupied within the history window (the vertical gap is a transient sampling hole)
   bool gapSeenInHistory(const PillarLocation &pillar, int64_t low_key, int64_t high_key) const;
-  // Cross-frame bridge: insert this frame's confirmed voxels into dyn_buffer_,
-  // advance the frame stamp, prune voxels stale beyond dyn_buffer_max_age_
+  // Cross-frame bridge: insert this frame's confirmed voxels into dyn_buffer_, advance the frame stamp, prune voxels stale beyond dyn_buffer_max_age_
   void dyn_bridge_insert();
-  // Extract connected components (26-adjacency) of the dynamic-point buffer:
-  // each carries all member points, its stale subset, the current-cloud
-  // indices of fresh points, the centroid, and its live flag
+  // Extract connected components (26-adjacency) of the dynamic-point buffer: each carries all member points, its stale subset, the centroid, and its live flag
   std::vector<DynComponent> dyn_bridge_components();
-  // Clustering confirmation for candidate new points: candidates must form a
-  // cluster of >= dyn_cluster_min_num points to stay flagged. Scattered
-  // candidates (quantization hops of static surfaces near voxel boundaries)
-  // are downgraded to normal points — neither published nor deleted downstream;
-  // surviving voxels re-mark all their points, fully-downgraded ones lose
-  // is_new_voxel_
+  // Clustering confirmation for candidate new points: candidates must form a cluster of >= dyn_cluster_min_num points to stay flagged; scattered candidates (quantization hops near voxel boundaries) are downgraded — neither published nor deleted downstream; surviving voxels re-mark all their points, fully-downgraded ones lose is_new_voxel_
   void confirmClusteredNewPoints();
 };
 
@@ -523,18 +487,13 @@ public:
   int current_frame_id_ = 0;
   ros::Publisher voxel_map_pub_;
 
-  // Degeneracy-adaptive intensity fusion state (advanced per frame in
-  // StateEstimation; intensity_fusion_active_ governs the NEXT frame's
-  // residual association)
+  // Degeneracy-adaptive intensity fusion state (advanced per frame in StateEstimation; intensity_fusion_active_ governs the NEXT frame's residual association)
   double degeneracy_factor_ = 1.0;       // λ_min/λ_max of the last geometric observation Hessian
   bool intensity_fusion_active_ = false; // latched: enter/exit debounced by degeneracy_min_frames_, band frames hold the state
   int degenerate_streak_ = 0;            // consecutive frames below the ON threshold (band frames reset)
   int normal_streak_ = 0;                // consecutive frames above the OFF threshold (band frames reset)
 
-  // LRU voxel cache: voxel_map_cache_ front = most recently updated voxel.
-  // voxel_map_ maps location -> list iterator for O(1) hit/splice/evict.
-  // No lock is needed: all writes happen on the sequential per-frame pipeline
-  // and the OpenMP section (BuildResidualListOMP) only reads the containers.
+  // LRU voxel cache: voxel_map_cache_ front = most recently updated voxel, voxel_map_ maps location -> list iterator for O(1) hit/splice/evict; no lock needed — all writes happen on the sequential per-frame pipeline, the OpenMP section (BuildResidualListOMP) only reads
   std::list<std::pair<VoxelLocation, VoxelOctoTree*>> voxel_map_cache_;
   std::unordered_map<VoxelLocation, std::list<std::pair<VoxelLocation, VoxelOctoTree*>>::iterator> voxel_map_;
 
@@ -555,8 +514,7 @@ public:
   std::vector<M3D> body_cov_list_;
   std::vector<pointWithVar> pv_list_;
   std::vector<PointToPlane> ptpl_list_;
-  // NOT vector<bool>: its bit-packed proxy writes are non-atomic read-modify-
-  // write on the whole word, which races with the parallel skip passes
+  // NOT vector<bool>: its bit-packed proxy writes are non-atomic read-modify-write on the whole word, which races with the parallel skip passes
   std::vector<uint8_t> skip_list_;
 
   // Skip point statistics
@@ -564,9 +522,7 @@ public:
   int total_skip_count_ = 0;
   int total_point_count_ = 0;
 
-  // Incidence-angle validation dump (intensity_angle_debug_en_): per-frame
-  // matched (raw intensity, geometric gain) pairs, filled in the sequential
-  // consolidation pass of BuildResidualListOMP, written out by StateEstimation
+  // Incidence-angle validation dump (intensity_angle_debug_en_): per-frame matched (raw intensity, geometric gain) pairs, filled in the sequential consolidation pass of BuildResidualListOMP, written out by StateEstimation
   std::vector<float> angle_dbg_intensity_;
   std::vector<float> angle_dbg_gain_;
 
@@ -607,10 +563,7 @@ public:
   void ClearPillarMapVoxels();
 
 private:
-  // Evict least-recently-updated voxels from the LRU tail until the cache is
-  // within capacity. No-op when capacity is disabled (<= 1: 0 means off, and 1
-  // would degenerate into evicting the entry right after inserting it).
-  // Returns the number of voxels evicted by this call.
+  // Evict least-recently-updated voxels from the LRU tail until within capacity; no-op when capacity is disabled (<= 1); returns the number of voxels evicted by this call
   size_t enforceCapacity();
 
   void GetUpdatePlane(const VoxelOctoTree *current_octo, const int pub_max_voxel_layer, std::vector<VoxelPlane> &plane_list);

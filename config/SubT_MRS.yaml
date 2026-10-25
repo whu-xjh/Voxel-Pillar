@@ -31,7 +31,7 @@ time_offset:
   imu_time_offset: 0.1
 
 preprocess:
-  point_filter_num: 5
+  point_filter_num: 3
   filter_size_surf: 0.1
   lidar_type: 2  # Velodyne
   scan_line: 16
@@ -43,13 +43,13 @@ imu:
   imu_int_frame: 30
 
   # standard setting
-  acc_cov: 0.1
-  gyr_cov: 0.1
+  acc_cov: 0.5
+  gyr_cov: 0.3
   b_acc_cov: 0.0001
   b_gyr_cov: 0.0001
 
   # Long_Corridor
-  # acc_cov: 0.1
+  # acc_cov: 1.0
   # gyr_cov: 0.1
   # b_acc_cov: 0.0001
   # b_gyr_cov: 0.0001
@@ -84,7 +84,7 @@ lio:
   layer_init_num: [5, 5, 5, 5, 5]
   sigma_num: 3
   capacity: 0                       # LRU cache (<=1 = disable)
-  intensity_fusion_en: true
+  intensity_fusion_en: false
   intensity_fusion_weight: 0.5      # intensity trust weight in the joint association score exp(-(w_g*m_geo + w_i*m_int)); 0.5 = equal trust
   intensity_gate_en: false          # Intensity-based association gate (reject material-inconsistent matches)
   intensity_gate_k: 3.0             # Gate threshold in units of intensity sigma
@@ -114,10 +114,15 @@ pillar_map:
   voxel_size: 0.5
   pillar_buffer: 1                  # n-frame pillar occupancy window; new-point detection starts at frame n+1 (n<=0: no reference kept, every point new)
   neighbor_ring_num: 1
-  min_num: 5                        # redundant voxel needs > this many points to confirm, isolated voxel needs < this
-  height_consistency_ratio: 0.25    # ratio of voxel_size for height consistency check
+  min_num: 10                        # redundant voxel needs > this many points to confirm, isolated voxel needs < this
+  height_consistency_ratio: 0.5    # ratio of voxel_size for height consistency check
 
-  adjacent_redundant_threshold: 4
+  horizontal_redundant_threshold: 4
+  vertical_redundant_threshold: 4        # z±1-shifted neighborhood slots for vertically-extended (sandwich) confirmation (ring_num=1: 8 slots)
+  redundant_GFH_sample_en: true          # GFH-equivalent intra-voxel sampling of redundant voxels; overrides delete_redundant when on
+  redundant_GFH_sample_ratio: 0.2        # per-voxel keep ratio (alpha)
+  redundant_GFH_sample_min_pts: 10       # per-voxel floor; >= valid_check_min_points_size keeps the coplanar guard active
+  redundant_GFH_sample_bin: 0.05         # radial shell width (m); shells get entropy-balanced quotas
   delete_redundant: false
 
   adjacent_isolated_threshold: 3
@@ -149,7 +154,7 @@ publish:
 evo:
   seq_name: "result"
   pose_output_en: true
-  pose_output_dir: "/home/wsl-4080/code/traj_evo/pred/voxel-pillar/"
+  pose_output_dir: "/home/wsl-2004-5090/code/traj_evo/pred/voxel-pillar"
 
 lidar_save:
   save_en: false

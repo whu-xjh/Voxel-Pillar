@@ -171,8 +171,7 @@ void Preprocess::avia_handler(const livox_ros_driver::CustomMsg::ConstPtr &msg)
           if (pl_full[i].x * pl_full[i].x + pl_full[i].y * pl_full[i].y + pl_full[i].z * pl_full[i].z >= blind_sqr)
           {
             pl_surf.push_back(pl_full[i]);
-            // if (i % 100 == 0 || i == 0) printf("pl_full[i].curvature: %f \n",
-            // pl_full[i].curvature);
+            // (commented-out) debug: curvature print
           }
         }
       }
@@ -193,8 +192,7 @@ void Preprocess::l515_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
   pl_surf.reserve(plsize);
 
   double time_stamp = msg->header.stamp.toSec();
-  // cout << "===================================" << endl;
-  // printf("Pt size = %d, N_SCANS = %d\r\n", plsize, N_SCANS);
+  // (commented-out) debug: point count / scan count print
   for (int i = 0; i < pl_orig.points.size(); i++)
   {
     if (i % point_filter_num != 0) continue;
@@ -282,8 +280,7 @@ void Preprocess::oust64_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
   else
   {
     double time_stamp = msg->header.stamp.toSec();
-    // cout << "===================================" << endl;
-    // printf("Pt size = %d, N_SCANS = %d\r\n", plsize, N_SCANS);
+    // (commented-out) debug: point count / scan count print
     for (int i = 0; i < pl_orig.points.size(); i++)
     {
       if (i % point_filter_num != 0) continue;
@@ -469,16 +466,13 @@ void Preprocess::velodyne_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
         time_last[layer] = added_pt.curvature;
       }
 
-      // if(i==(plsize-1))  printf("index: %d layer: %d, yaw: %lf, offset-time:
-      // %lf, condition: %d\n", i, layer, yaw_angle, added_pt.curvature,
-      // prints);
+      // (commented-out) debug: per-point index/layer/yaw/offset-time print
       if (i % point_filter_num == 0)
       {
         if (added_pt.x * added_pt.x + added_pt.y * added_pt.y + added_pt.z * added_pt.z > blind_sqr)
         {
           pl_surf.points.push_back(added_pt);
-          // printf("time mode: %d time: %d \n", given_offset_time,
-          // pl_orig.points[i].t);
+          // (commented-out) debug: time-mode print
         }
       }
     }
@@ -513,8 +507,7 @@ void Preprocess::pandar128_handler(const sensor_msgs::PointCloud2::ConstPtr &msg
       if (added_pt.x * added_pt.x + added_pt.y * added_pt.y + added_pt.z * added_pt.z > blind_sqr)
       {
         pl_surf.points.push_back(added_pt);
-        // printf("time mode: %d time: %d \n", given_offset_time,
-        // pl_orig.points[i].t);
+        // (commented-out) debug: time-mode print
       }
     }
   }
@@ -528,13 +521,7 @@ void Preprocess::pandar128_handler(const sensor_msgs::PointCloud2::ConstPtr &msg
   // sort the points using the comparison function
   std::sort(pl_surf.points.begin(), pl_surf.points.end(), comparePoints);
   
-  // cout << GREEN << "pl_surf.points[0].timestamp: " << pl_surf.points[0].curvature << RESET << endl;
-  // cout << GREEN << "pl_surf.points[1000].timestamp: " << pl_surf.points[1000].curvature << RESET << endl;
-  // cout << GREEN << "pl_surf.points[5000].timestamp: " << pl_surf.points[5000].curvature << RESET << endl;
-  // cout << GREEN << "pl_surf.points[10000].timestamp: " << pl_surf.points[10000].curvature << RESET << endl;
-  // cout << GREEN << "pl_surf.points[20000].timestamp: " << pl_surf.points[20000].curvature << RESET << endl;
-  // cout << GREEN << "pl_surf.points[30000].timestamp: " << pl_surf.points[30000].curvature << RESET << endl;
-  // cout << GREEN << "pl_surf.points[31000].timestamp: " << pl_surf.points[31000].curvature << RESET << endl;
+  // (commented-out) debug: pl_surf point timestamps at fixed indices
 }
 
 void Preprocess::xt32_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
@@ -659,19 +646,15 @@ void Preprocess::xt32_handler(const sensor_msgs::PointCloud2::ConstPtr &msg)
       added_pt.intensity = pl_orig.points[i].intensity;
       added_pt.curvature = (pl_orig.points[i].timestamp - time_head) * 1000.f;
 
-      // printf("added_pt.curvature: %lf %lf \n", added_pt.curvature,
-      // pl_orig.points[i].timestamp);
+      // (commented-out) debug: curvature/timestamp print
 
-      // if(i==(plsize-1))  printf("index: %d layer: %d, yaw: %lf, offset-time:
-      // %lf, condition: %d\n", i, layer, yaw_angle, added_pt.curvature,
-      // prints);
+      // (commented-out) debug: per-point index/layer/yaw/offset-time print
       if (i % point_filter_num == 0)
       {
         if (added_pt.x * added_pt.x + added_pt.y * added_pt.y + added_pt.z * added_pt.z > blind_sqr)
         {
           pl_surf.points.push_back(added_pt);
-          // printf("time mode: %d time: %d \n", given_offset_time,
-          // pl_orig.points[i].t);
+          // (commented-out) debug: time-mode print
         }
       }
     }
@@ -774,52 +757,7 @@ void Preprocess::give_feature(pcl::PointCloud<PointType> &pl, vector<orgtype> &t
       i = i_nex;
       last_state = 0;
     }
-    // else if(plane_type == 0)
-    // {
-    //   if(last_state == 1)
-    //   {
-    //     uint i_nex_tem;
-    //     uint j;
-    //     for(j=last_i+1; j<=last_i_nex; j++)
-    //     {
-    //       uint i_nex_tem2 = i_nex_tem;
-    //       Eigen::Vector3d curr_direct2;
-
-    //       uint ttem = plane_judge(pl, types, j, i_nex_tem, curr_direct2);
-
-    //       if(ttem != 1)
-    //       {
-    //         i_nex_tem = i_nex_tem2;
-    //         break;
-    //       }
-    //       curr_direct = curr_direct2;
-    //     }
-
-    //     if(j == last_i+1)
-    //     {
-    //       last_state = 0;
-    //     }
-    //     else
-    //     {
-    //       for(uint k=last_i_nex; k<=i_nex_tem; k++)
-    //       {
-    //         if(k != i_nex_tem)
-    //         {
-    //           types[k].ftype = Real_Plane;
-    //         }
-    //         else
-    //         {
-    //           types[k].ftype = Poss_Plane;
-    //         }
-    //       }
-    //       i = i_nex_tem-1;
-    //       i_nex = i_nex_tem;
-    //       i2 = j-1;
-    //       last_state = 1;
-    //     }
-
-    //   }
-    // }
+    // (commented-out) legacy plane_type == 0 branch — removed, see git history
 
     last_i = i2;
     last_i_nex = i_nex;

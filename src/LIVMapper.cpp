@@ -139,8 +139,7 @@ void LIVMapper::initializeFiles()
   ss << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S");
   session_timestamp_ = ss.str();
 
-  // Create PCD timestamp subdirectory (under Log/PCD/)
-  // pcd_session_dir_ = "/media/xjh/Extreme SSD/data/shanxi/car/output/" + session_timestamp_;
+  // Create PCD timestamp subdirectory under Log/PCD/
   pcd_session_dir_ = root_dir + "Log/PCD/" + session_timestamp_;
   if (save_en) {
     int result = mkdir(pcd_session_dir_.c_str(), 0777);
@@ -243,9 +242,7 @@ void LIVMapper::processImu()
 
   // double t_prop = omp_get_wtime();
 
-  // std::cout << "[ Mapping ] feats_undistort: " << feats_undistort->size() << std::endl;
-  // std::cout << "[ Mapping ] predict cov: " << state_.cov.diagonal().transpose() << std::endl;
-  // std::cout << "[ Mapping ] predict sta: " << state_propagat.pos_end.transpose() << state_propagat.vel_end.transpose() << std::endl;
+  // (commented-out) debug prints: feats_undistort size, predicted covariance/state
 }
 
 void LIVMapper::stateEstimationAndMapping()
@@ -276,14 +273,7 @@ static double medianOf(std::vector<float> &v)
   return m;
 }
 
-// Estimate the per-point intensity measurement noise during the init window,
-// where the platform is expected to be stationary: consecutive scans observe
-// the same surfaces, so frame-to-frame nearest-neighbor intensity differences
-// reflect pure repeat-measurement noise. For two independent measurements of
-// the same true value var(diff) = 2*sigma^2, hence the sqrt(2) divisor, and
-// the robust MAD-to-sigma factor 1.4826. The result replaces the zero default
-// of VoxelPlane::intensity_meas_var_ and takes effect immediately in
-// the intensity fusion scoring and association gate.
+// Estimate the per-point intensity measurement noise during the init window (stationary platform): consecutive scans observe the same surfaces, so frame-to-frame nearest-neighbor intensity differences reflect pure repeat-measurement noise; var(diff) = 2·sigma² hence the sqrt(2) divisor, robust MAD-to-sigma factor 1.4826; the result replaces the zero default of VoxelPlane::intensity_meas_var_ and takes effect immediately
 void LIVMapper::estimateIntensityNoise()
 {
   if (!intensity_noise_est_en_ || intensity_noise_done_ || feats_down_world->empty()) { return; }
@@ -347,9 +337,7 @@ void LIVMapper::estimateIntensityNoise()
   intensity_noise_done_ = true;
   if (!enough)
   {
-    // Estimation failed: do NOT model the intensity measurement noise for this
-    // run (sigma_meas = 0). Intensity fusion/gate stay enabled and rely only on
-    // the per-plane intensity statistics.
+    // Estimation failed: do NOT model the intensity measurement noise this run (sigma_meas = 0) — fusion/gate stay enabled, relying only on the per-plane intensity statistics
     std::cout << "[ IntensityNoise ]: FAILED (insufficient pairs: " << intensity_noise_diffs_.size()
               << " < " << min_pairs << ") - intensity measurement noise NOT considered (set to 0)" << std::endl;
     VoxelPlane::intensity_meas_var_ = 0.0;
@@ -384,8 +372,7 @@ void LIVMapper::estimateIntensityNoise()
 // Execute LiDAR-Inertial Odometry (LIO) processing
 void LIVMapper::handleLIO()
 {
-  // Record the propagated state before the update: relative timestamp, Euler
-  // angles (deg), position, velocity, gyro bias, accel bias
+  // Record the propagated state before the update: relative timestamp, Euler angles (deg), position, velocity, gyro/accel biases
   euler_cur = RotMtoEuler(state_.rot_end);
   fout_pre << setw(20) << LidarMeasures.last_lio_update_time - first_lidar_time_ << " " << euler_cur.transpose() * 57.3 << " "
            << state_.pos_end.transpose() << " " << state_.vel_end.transpose() << " " << state_.bias_g.transpose() << " "
@@ -426,13 +413,12 @@ void LIVMapper::handleLIO()
     voxelmap_manager->pillar_map_.DetectNewPoints();  // mark new points (no-op unless enabled)
     voxelmap_manager->pillar_map_.UpdateHistory();    // advance the n-frame window (every frame; also feeds redundant/isolated checks)
     voxelmap_manager->pillar_map_.pillarDetection();
+    voxelmap_manager->pillar_map_.sampleRedundantVoxels();  // GFH-equivalent intra-voxel sampling of redundant voxels (no-op unless enabled)
     voxelmap_manager->DefineSkipPoints(feats_down_world);
     voxelmap_manager->pillar_map_.PublishPillarMapCloud(pubPillarMapCloud);
     voxelmap_manager->ClearPillarMapVoxels();
 
-    // Delete flagged points from the frame outright: they neither contribute
-    // ICP residuals nor enter the voxel map (pv_list_ is rebuilt from
-    // feats_down_body_). Body/world clouds are compacted together inside.
+    // Delete flagged points from the frame outright: they neither contribute ICP residuals nor enter the voxel map (pv_list_ is rebuilt from feats_down_body_); body/world clouds are compacted together inside
     const size_t removed = voxelmap_manager->pillar_map_.removeFlaggedPoints(
         feats_down_body, feats_down_world, voxelmap_manager->skip_list_);
     if (removed > 0)
@@ -444,8 +430,7 @@ void LIVMapper::handleLIO()
     t_pillar2 = omp_get_wtime();
   }
 
-  // Build voxel map on first run, based on octree structure. Runs after the
-  // pillar pass so that first-frame flagged points are excluded as well.
+  // Build voxel map on first run, after the pillar pass so first-frame flagged points are excluded as well
   if (!lidar_map_inited)
   {
     lidar_map_inited = true;
@@ -474,10 +459,7 @@ void LIVMapper::handleLIO()
   geoQuat = tf::createQuaternionMsgFromRollPitchYaw(euler_cur(0), euler_cur(1), euler_cur(2));
   publish_odometry(pubOdomAftMapped);
 
-  // Insert current frame point cloud into voxel map, update voxel map.
-  // Per-point covariance combines measurement noise (rotated to world), pose
-  // rotation uncertainty (via the point cross matrix) and pose translation
-  // uncertainty; it weights each point in the next ICP update.
+  // Insert current frame into the voxel map; per-point covariance combines measurement noise (rotated to world), pose rotation uncertainty (via the point cross matrix) and translation uncertainty, weighting each point in the next ICP update
   double t3 = omp_get_wtime();
   PointCloudXYZI::Ptr world_lidar(new PointCloudXYZI());
   voxelmap_manager->TransformLidar(state_.rot_end, state_.pos_end, feats_down_body, world_lidar);
@@ -501,8 +483,7 @@ void LIVMapper::handleLIO()
     voxelmap_manager->mapSliding();
   }
 
-  // Select whether to publish dense or downsampled point cloud, then
-  // transform it to the world frame for publishing
+  // Publish the dense or downsampled cloud, transformed to the world frame
   PointCloudXYZI::Ptr laserCloudFullRes(dense_map_en ? feats_undistort : feats_down_body);
   int size = laserCloudFullRes->points.size();
   PointCloudXYZI::Ptr laserCloudWorld(new PointCloudXYZI(size, 1));
@@ -886,9 +867,7 @@ void LIVMapper::odom_cbk(const nav_msgs::Odometry::ConstPtr &msg_in)
                                    msg_in->twist.twist.linear.y,
                                    msg_in->twist.twist.linear.z;
 
-    // Extract linear velocity covariance information
-    // nav_msgs Odometry twist.covariance is a 36-element array in row-major order
-    // Linear velocity covariance at positions [0], [7], [14]
+    // Linear velocity covariance: nav_msgs twist.covariance is 36 elements row-major; x/y/z variances at positions [0], [7], [14]
     external_data.velocity_covariance << msg_in->twist.covariance[0],    // x velocity variance
                                           msg_in->twist.covariance[7],    // y velocity variance
                                           msg_in->twist.covariance[14];   // z velocity variance
@@ -899,13 +878,10 @@ void LIVMapper::odom_cbk(const nav_msgs::Odometry::ConstPtr &msg_in)
                          msg_in->pose.pose.orientation.y,
                          msg_in->pose.pose.orientation.z);
 
-    // Use extrinsic parameters from config file for coordinate transformation
-    // First apply rotation transform from external IMU to internal IMU
+    // Extrinsic transform: rotate external-IMU velocity into the internal IMU frame
     external_data.linear_velocity = external_imu_R * external_data.linear_velocity;
 
-    // Transform velocity covariance
-    // Covariance transformation formula: C_internal = R * C_external * R^T
-    // For diagonal covariance matrix, full 3x3 transformation needed
+    // Transform velocity covariance: C_internal = R · C_external · Rᵀ (full 3x3 even though only the diagonal is consumed)
     Eigen::Matrix3d external_cov_matrix = Eigen::Matrix3d::Zero();
     external_cov_matrix.diagonal() = external_data.velocity_covariance;
     Eigen::Matrix3d internal_cov_matrix = external_imu_R * external_cov_matrix * external_imu_R.transpose();
@@ -945,9 +921,7 @@ bool LIVMapper::sync_packages(LidarMeasureGroup &meas)
 
     if (imu_en && last_timestamp_imu < meas.lidar_frame_end_time)
     { // waiting imu message needs to be
-      // larger than _lidar_frame_end_time,
-      // make sure complete propagate.
-      // ROS_ERROR("out sync");
+      // Wait until the buffered IMU messages cover the lidar frame end time so propagation is complete
       return false;
     }
 
