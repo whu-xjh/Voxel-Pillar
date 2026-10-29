@@ -413,7 +413,7 @@ void LIVMapper::handleLIO()
     voxelmap_manager->pillar_map_.DetectNewPoints();  // mark new points (no-op unless enabled)
     voxelmap_manager->pillar_map_.UpdateHistory();    // advance the n-frame window (every frame; also feeds redundant/isolated checks)
     voxelmap_manager->pillar_map_.pillarDetection();
-    voxelmap_manager->pillar_map_.sampleRedundantVoxels();  // GFH-equivalent intra-voxel sampling of redundant voxels (no-op unless enabled)
+    voxelmap_manager->pillar_map_.sampleRedundantVoxels();  // PRISM intra-voxel sampling of redundant voxels (no-op unless enabled)
     voxelmap_manager->DefineSkipPoints(feats_down_world);
     voxelmap_manager->pillar_map_.PublishPillarMapCloud(pubPillarMapCloud);
     voxelmap_manager->ClearPillarMapVoxels();

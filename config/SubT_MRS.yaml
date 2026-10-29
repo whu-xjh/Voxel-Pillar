@@ -84,7 +84,7 @@ lio:
   layer_init_num: [5, 5, 5, 5, 5]
   sigma_num: 3
   capacity: 0                       # LRU cache (<=1 = disable)
-  intensity_fusion_en: false
+  intensity_fusion_en: true
   intensity_fusion_weight: 0.5      # intensity trust weight in the joint association score exp(-(w_g*m_geo + w_i*m_int)); 0.5 = equal trust
   intensity_gate_en: false          # Intensity-based association gate (reject material-inconsistent matches)
   intensity_gate_k: 3.0             # Gate threshold in units of intensity sigma
@@ -97,7 +97,7 @@ lio:
   degeneracy_adaptive_en: true      # engage intensity fusion only in degenerate scenes (requires intensity_fusion_en)
   degeneracy_on_threshold: 0.005      # enter degenerate mode when lambda_min/lambda_max < this
   degeneracy_off_threshold: 0.1     # exit hysteresis threshold; must be > on
-  degeneracy_min_frames: 3          # consecutive frames to switch state (debounce) 
+  degeneracy_min_frames: 1          # consecutive frames to switch state (debounce) 
 
   # R-VoxelMap-style plane init refinements
   plane_refine_en: true
@@ -118,11 +118,11 @@ pillar_map:
   height_consistency_ratio: 0.5    # ratio of voxel_size for height consistency check
 
   horizontal_redundant_threshold: 4
-  vertical_redundant_threshold: 4        # z±1-shifted neighborhood slots for vertically-extended (sandwich) confirmation (ring_num=1: 8 slots)
-  redundant_GFH_sample_en: true          # GFH-equivalent intra-voxel sampling of redundant voxels; overrides delete_redundant when on
-  redundant_GFH_sample_ratio: 0.2        # per-voxel keep ratio (alpha)
-  redundant_GFH_sample_min_pts: 10       # per-voxel floor; >= valid_check_min_points_size keeps the coplanar guard active
-  redundant_GFH_sample_bin: 0.05         # radial shell width (m); shells get entropy-balanced quotas
+  vertical_redundant_threshold: 2        # z±1-shifted neighborhood slots for vertically-extended (sandwich) confirmation (ring_num=1: 8 slots)
+  redundant_sample_en: true          # PRISM intra-voxel sampling of redundant voxels; overrides delete_redundant when on
+  redundant_sample_ratio: 0.2        # per-voxel keep ratio (alpha)
+  redundant_sample_min_pts: 10       # per-voxel floor; >= valid_check_min_points_size keeps the coplanar guard active
+  redundant_sample_bin: 0.1         # radial shell width (m); shells get entropy-balanced quotas
   delete_redundant: false
 
   adjacent_isolated_threshold: 3

@@ -321,10 +321,10 @@ typedef struct PillarMapConfig
   double voxel_size_;
   int horizontal_redundant_threshold_;  // same-layer horizontal neighbors a redundant candidate needs (flat-sheet confirmation)
   int vertical_redundant_threshold_;    // z±1-shifted neighborhood slots a vertically redundant candidate needs (sandwich confirmation)
-  bool redundant_GFH_sample_en_;        // master switch: GFH-equivalent intra-voxel sampling of redundant voxels; on = redundant keep/drop decided by the sampler, delete_redundant bypassed
-  double redundant_GFH_sample_ratio_;   // alpha: per-voxel keep ratio (default: 0.5)
-  int redundant_GFH_sample_min_pts_;    // per-voxel floor (default: 10; >= valid_check_min_points_size keeps the plane coplanar guard active)
-  double redundant_GFH_sample_bin_;     // radial shell width in meters (default: 0.05)
+  bool redundant_sample_en_;        // PRISM sampler master switch: intra-voxel sampling of confirmed redundant voxels; on = redundant keep/drop decided by the sampler, delete_redundant bypassed
+  double redundant_sample_ratio_;   // alpha: per-voxel keep ratio (default: 0.5)
+  int redundant_sample_min_pts_;    // per-voxel floor (default: 10; >= valid_check_min_points_size keeps the plane coplanar guard active)
+  double redundant_sample_bin_;     // radial shell width in meters (default: 0.05)
   bool delete_redundant_;    // true=delete redundant points before they enter the voxel map, false=keep them (default: false; covers BOTH redundant categories)
   bool delete_isolated_;     // true=delete isolated points before they enter the voxel map, false=keep them (default: false)
   int adjacent_isolated_threshold_;
@@ -342,7 +342,7 @@ typedef struct PillarMapConfig
 
   PillarMapConfig() : pillar_map_en_(false), voxel_size_(1.0), horizontal_redundant_threshold_(3),
                        vertical_redundant_threshold_(4),
-                       redundant_GFH_sample_en_(false), redundant_GFH_sample_ratio_(0.5), redundant_GFH_sample_min_pts_(10), redundant_GFH_sample_bin_(0.05),
+                       redundant_sample_en_(false), redundant_sample_ratio_(0.5), redundant_sample_min_pts_(10), redundant_sample_bin_(0.05),
                        delete_redundant_(false), delete_isolated_(false),
                        adjacent_isolated_threshold_(3), neighbor_ring_num_(1),
                        dyn_bridge_display_(false), dyn_buffer_max_age_(3),

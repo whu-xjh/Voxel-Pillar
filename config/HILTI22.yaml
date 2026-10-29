@@ -94,10 +94,10 @@ pillar_map:
 
   horizontal_redundant_threshold: 4
   vertical_redundant_threshold: 4   # z±1-shifted neighborhood slots for vertically-extended (sandwich) confirmation (ring_num=1: 8 slots)
-  redundant_GFH_sample_en: false         # GFH-equivalent intra-voxel sampling of redundant voxels; overrides delete_redundant when on
-  redundant_GFH_sample_ratio: 0.5        # per-voxel keep ratio (alpha)
-  redundant_GFH_sample_min_pts: 10       # per-voxel floor; >= valid_check_min_points_size keeps the coplanar guard active
-  redundant_GFH_sample_bin: 0.05         # radial shell width (m); shells get entropy-balanced quotas
+  redundant_sample_en: false         # PRISM intra-voxel sampling of redundant voxels; overrides delete_redundant when on
+  redundant_sample_ratio: 0.5        # per-voxel keep ratio (alpha)
+  redundant_sample_min_pts: 10       # per-voxel floor; >= valid_check_min_points_size keeps the coplanar guard active
+  redundant_sample_bin: 0.05         # radial shell width (m); shells get entropy-balanced quotas
   delete_redundant: true  # true=delete redundant points before they enter the voxel map, false=keep them
 
   adjacent_isolated_threshold: 2

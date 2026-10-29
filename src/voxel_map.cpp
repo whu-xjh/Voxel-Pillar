@@ -93,12 +93,12 @@ void loadPillarMapConfig(ros::NodeHandle &nh, PillarMapConfig &config)
   nh.param<double>("pillar_map/voxel_size", config.voxel_size_, 1.0);
   nh.param<int>("pillar_map/horizontal_redundant_threshold", config.horizontal_redundant_threshold_, 3);
   nh.param<int>("pillar_map/vertical_redundant_threshold", config.vertical_redundant_threshold_, 4);
-  nh.param<bool>("pillar_map/redundant_GFH_sample_en", config.redundant_GFH_sample_en_, false);
-  nh.param<double>("pillar_map/redundant_GFH_sample_ratio", config.redundant_GFH_sample_ratio_, 0.5);
-  nh.param<int>("pillar_map/redundant_GFH_sample_min_pts", config.redundant_GFH_sample_min_pts_, 10);
-  nh.param<double>("pillar_map/redundant_GFH_sample_bin", config.redundant_GFH_sample_bin_, 0.05);
-  if (config.redundant_GFH_sample_bin_ <= 0.0) config.redundant_GFH_sample_bin_ = 0.05;  // non-positive shell width would divide by zero
-  config.redundant_GFH_sample_ratio_ = std::min(std::max(config.redundant_GFH_sample_ratio_, 1e-3), 1.0);  // keep alpha in (0, 1]
+  nh.param<bool>("pillar_map/redundant_sample_en", config.redundant_sample_en_, false);
+  nh.param<double>("pillar_map/redundant_sample_ratio", config.redundant_sample_ratio_, 0.5);
+  nh.param<int>("pillar_map/redundant_sample_min_pts", config.redundant_sample_min_pts_, 10);
+  nh.param<double>("pillar_map/redundant_sample_bin", config.redundant_sample_bin_, 0.05);
+  if (config.redundant_sample_bin_ <= 0.0) config.redundant_sample_bin_ = 0.05;  // non-positive shell width would divide by zero
+  config.redundant_sample_ratio_ = std::min(std::max(config.redundant_sample_ratio_, 1e-3), 1.0);  // keep alpha in (0, 1]
   nh.param<bool>("pillar_map/delete_redundant", config.delete_redundant_, false);
   nh.param<bool>("pillar_map/delete_isolated", config.delete_isolated_, false);
   nh.param<int>("pillar_map/adjacent_isolated_threshold", config.adjacent_isolated_threshold_, 3);
@@ -2178,12 +2178,11 @@ void PillarMap::pillarDetection()
   }
 }
 
-// GFH-equivalent intra-voxel sampling of confirmed redundant voxels (H + V): per-point centroid radius r_i = ||p_i - virtual_point_||, fixed-width radial binning, entropy-balanced round-robin quotas across non-empty shells (integer water-filling, counts differ by <= 1), FPS within each shell (seed = farthest from centroid, deterministic); writes point_sample_keep_ (default 1 = keep); no-op unless redundant_GFH_sample_en
-// GFH-equivalent intra-voxel sampling of confirmed redundant voxels (H + V), walking the list collected by pillarDetection: per-point centroid radius r_i = ||p_i - virtual_point_||, counting-sort radial binning (no per-bin containers or copies), entropy-balanced round-robin quotas across non-empty shells (integer water-filling), standard FPS within each shell (seed = farthest from centroid, min distances tracked against the selected set, deterministic); writes point_sample_keep_ (default 1 = keep); no-op unless redundant_GFH_sample_en
+// PRISM intra-voxel sampling of confirmed redundant voxels (H + V), walking the list collected by pillarDetection: per-point centroid radius r_i = ||p_i - virtual_point_|| (the GFH gradient-flow feature degenerates to centroid distance under voxel-restricted neighborhoods), counting-sort radial binning (no per-bin containers or copies), entropy-balanced round-robin quotas across non-empty shells (integer water-filling, counts differ by <= 1), standard FPS within each shell (seed = farthest from centroid, min distances tracked against the selected set, deterministic); writes point_sample_keep_ (default 1 = keep); no-op unless redundant_sample_en
 void PillarMap::sampleRedundantVoxels()
 {
   point_sample_keep_.clear();
-  if (!config_.redundant_GFH_sample_en_) return;
+  if (!config_.redundant_sample_en_) return;
   point_sample_keep_.assign(point_cloud_ptr_ ? point_cloud_ptr_->points.size() : 0, 1);
   if (voxel_label_count_ == 0 || redundant_sample_list_.empty()) return;  // no confirmed survivors this frame
 
@@ -2196,12 +2195,12 @@ void PillarMap::sampleRedundantVoxels()
     if (N == 0) continue;
 
     // Budget: M = min(N, max(M_min, ceil(alpha*N))); N <= M_min keeps the voxel intact
-    const int M = std::min<int>((int)N, std::max(config_.redundant_GFH_sample_min_pts_,
-                                                 (int)std::ceil(config_.redundant_GFH_sample_ratio_ * (double)N)));
+    const int M = std::min<int>((int)N, std::max(config_.redundant_sample_min_pts_,
+                                                 (int)std::ceil(config_.redundant_sample_ratio_ * (double)N)));
     if (M >= (int)N) continue;
 
     const Eigen::Vector3d c = voxel.virtual_point_;  // this frame's centroid, fixed during sampling
-    const double inv_bin = 1.0 / config_.redundant_GFH_sample_bin_;
+    const double inv_bin = 1.0 / config_.redundant_sample_bin_;
 
     // Pass 1: radial bin id + shell positions per point, single linear sweep
     ws.bin_id.resize(N);
@@ -2328,9 +2327,9 @@ void VoxelMapManager::DefineSkipPoints(const PointCloudXYZI::Ptr &feats_down_wor
   int new_count = 0;
   int final_skip_count = 0;
   const bool new_detect_on = cfg.dyn_detect_en_;
-  const bool sample_on = cfg.redundant_GFH_sample_en_;
+  const bool sample_on = cfg.redundant_sample_en_;
 
-  // Binary per-category deletion: a point is deleted when ANY of its categories' delete switches says so; with redundant_GFH_sample_en on, redundant points are instead dropped when not kept by the sampler (delete_redundant bypassed)
+  // Binary per-category deletion: a point is deleted when ANY of its categories' delete switches says so; with redundant_sample_en on, redundant points are instead dropped when not kept by the sampler (delete_redundant bypassed)
   for (size_t i = 0; i < point_num; ++i)
   {
     const int8_t label = pillar_map_.GetPointLabel(i);
