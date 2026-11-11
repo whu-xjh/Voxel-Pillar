@@ -87,6 +87,8 @@ evo:
 
 lidar_save:
   save_en: false
+  save_dir: ""  # PCD output dir; per-run <timestamp>/ subdir is created inside; empty = Log/PCD/<timestamp> under package root
+  save_laz: false  # false = save .las, true = save compressed .laz; replaces the .pcd output
   filter_size_pcd: 0.15
   interval: -1  # -1 = save all in one file (memory risk)
 

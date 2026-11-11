@@ -83,6 +83,17 @@ else()
   message(STATUS "mimalloc not found, proceeding without it")
 endif()
 
+# Optional LASzip for LAS/LAZ point cloud export (lidar_save/save_laz)
+find_library(LASZIP_LIBRARY NAMES laszip)
+find_path(LASZIP_INCLUDE_DIR NAMES laszip/laszip_api.h)
+if(LASZIP_LIBRARY AND LASZIP_INCLUDE_DIR)
+  message(STATUS "liblaszip found: ${LASZIP_LIBRARY} (LAS/LAZ export enabled)")
+  add_definitions(-DHAS_LASZIP)
+  include_directories(${LASZIP_INCLUDE_DIR})
+else()
+  message(STATUS "liblaszip not found, LAS/LAZ export disabled; lidar_save/save_laz falls back to PCD (install with: sudo apt install liblaszip-dev)")
+endif()
+
 # Required dependencies and catkin exports
 find_package(catkin REQUIRED COMPONENTS
   geometry_msgs
@@ -136,6 +147,10 @@ target_link_libraries(laser_mapping
   ${PCL_LIBRARIES}
   ${Boost_LIBRARIES}
 )
+
+if(LASZIP_LIBRARY)
+  target_link_libraries(laser_mapping ${LASZIP_LIBRARY})
+endif()
 
 target_link_libraries(voxelpillar_mapping
   laser_mapping

@@ -3,6 +3,7 @@
 #include <chrono>
 #include <iomanip>
 #include <sys/stat.h>
+#include <filesystem>
 #include <fstream>
 #include <type_traits>
 #include <pcl/point_types.h>
@@ -11,6 +12,96 @@
 #include <unordered_set>
 #include <algorithm>
 #include <cmath>
+
+#ifdef HAS_LASZIP
+#include <laszip/laszip_api.h>
+
+// Write cloud as LAS (compress=false) or LAZ (compress=true); intensity is clamped to LAS uint16
+static bool writeLasLaz(const std::string &file, const PointCloudXYZI &cloud, bool compress)
+{
+  if (cloud.empty()) return false;
+
+  laszip_POINTER writer = nullptr;
+  if (laszip_create(&writer))
+  {
+    ROS_ERROR("laszip_create failed for %s", file.c_str());
+    return false;
+  }
+
+  // offset at the min corner keeps quantized int32 coordinates in range for any map size
+  double min_x = cloud.points.front().x, max_x = min_x;
+  double min_y = cloud.points.front().y, max_y = min_y;
+  double min_z = cloud.points.front().z, max_z = min_z;
+  for (const auto &p : cloud.points)
+  {
+    min_x = std::min(min_x, (double)p.x); max_x = std::max(max_x, (double)p.x);
+    min_y = std::min(min_y, (double)p.y); max_y = std::max(max_y, (double)p.y);
+    min_z = std::min(min_z, (double)p.z); max_z = std::max(max_z, (double)p.z);
+  }
+
+  laszip_header *header = nullptr;
+  if (laszip_get_header_pointer(writer, &header))
+  {
+    ROS_ERROR("laszip_get_header_pointer failed for %s", file.c_str());
+    laszip_destroy(writer);
+    return false;
+  }
+
+  auto now_t = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+  std::tm *lt = std::localtime(&now_t);
+
+  header->file_source_ID = 1;
+  header->global_encoding = 0;
+  header->version_major = 1;
+  header->version_minor = 2;
+  header->file_creation_day = lt->tm_yday + 1;
+  header->file_creation_year = lt->tm_year + 1900;
+  header->header_size = 227;
+  header->offset_to_point_data = 227;
+  header->number_of_variable_length_records = 0;
+  header->point_data_format = 0; // x, y, z, intensity
+  header->point_data_record_length = 20;
+  header->number_of_point_records = (laszip_U32)cloud.size();
+  header->x_scale_factor = header->y_scale_factor = header->z_scale_factor = 0.0001;
+  header->x_offset = min_x;
+  header->y_offset = min_y;
+  header->z_offset = min_z;
+  header->max_x = max_x; header->min_x = min_x;
+  header->max_y = max_y; header->min_y = min_y;
+  header->max_z = max_z; header->min_z = min_z;
+  snprintf(header->system_identifier, sizeof(header->system_identifier), "%s", "voxel-pillar");
+
+  if (laszip_set_header(writer, header) || laszip_open_writer(writer, file.c_str(), compress ? 1 : 0))
+  {
+    laszip_CHAR *err = nullptr;
+    laszip_get_error(writer, &err);
+    ROS_ERROR("Failed to open LAS writer for %s: %s", file.c_str(), err ? err : "unknown");
+    laszip_destroy(writer);
+    return false;
+  }
+
+  laszip_point *point = nullptr;
+  laszip_get_point_pointer(writer, &point);
+  for (const auto &p : cloud.points)
+  {
+    point->intensity = (laszip_U16)std::lround(std::min(std::max(p.intensity, 0.0f), 65535.0f));
+    const laszip_F64 c[3] = {p.x, p.y, p.z};
+    laszip_set_coordinates(writer, c);
+    laszip_write_point(writer);
+  }
+
+  bool ok = true;
+  if (laszip_close_writer(writer))
+  {
+    laszip_CHAR *err = nullptr;
+    laszip_get_error(writer, &err);
+    ROS_ERROR("Failed to close LAS writer for %s: %s", file.c_str(), err ? err : "unknown");
+    ok = false;
+  }
+  laszip_destroy(writer);
+  return ok;
+}
+#endif
 
 LIVMapper::LIVMapper(ros::NodeHandle &nh)
     : extT(0, 0, 0),
@@ -82,6 +173,8 @@ void LIVMapper::readParameters(ros::NodeHandle &nh)
   nh.param<int>("lidar_save/interval", save_interval, -1);
   nh.param<bool>("lidar_save/save_en", save_en, false);
   nh.param<double>("lidar_save/filter_size_pcd", filter_size_pcd, 0.5);
+  nh.param<string>("lidar_save/save_dir", save_dir, "");
+  nh.param<bool>("lidar_save/save_laz", save_laz, false);
   nh.param<vector<double>>("extrin_calib/extrinsic_T", extrinT, vector<double>());
   nh.param<vector<double>>("extrin_calib/extrinsic_R", extrinR, vector<double>());
 
@@ -139,14 +232,21 @@ void LIVMapper::initializeFiles()
   ss << std::put_time(std::localtime(&time_t), "%Y%m%d_%H%M%S");
   session_timestamp_ = ss.str();
 
-  // Create PCD timestamp subdirectory under Log/PCD/
-  pcd_session_dir_ = root_dir + "Log/PCD/" + session_timestamp_;
+  // Create PCD timestamp subdirectory: <save_dir>/<timestamp>/, or Log/PCD/<timestamp>/ under package root if save_dir is empty
+  if (save_dir.empty()) {
+    pcd_session_dir_ = root_dir + "Log/PCD/" + session_timestamp_;
+  } else {
+    pcd_session_dir_ = save_dir;
+    if (pcd_session_dir_.back() != '/') pcd_session_dir_ += '/';
+    pcd_session_dir_ += session_timestamp_;
+  }
   if (save_en) {
-    int result = mkdir(pcd_session_dir_.c_str(), 0777);
-    if (result == 0) {
+    std::error_code ec;
+    std::filesystem::create_directories(pcd_session_dir_, ec);
+    if (!ec) {
       ROS_INFO("PCD session directory created: %s", pcd_session_dir_.c_str());
     } else {
-      ROS_ERROR("Failed to create PCD session directory: %s (error: %d)", pcd_session_dir_.c_str(), errno);
+      ROS_ERROR("Failed to create PCD session directory: %s (error: %s)", pcd_session_dir_.c_str(), ec.message().c_str());
     }
     printf("ROOT_DIR: %s, pcd_session_dir_: %s\n", root_dir.c_str(), pcd_session_dir_.c_str());
   }
@@ -609,12 +709,20 @@ void LIVMapper::savePCD()
 {
   if (save_en && pcl_wait_save_intensity->points.size() > 0 && save_interval < 0)
   {
+#ifdef HAS_LASZIP
+    std::string raw_points_dir = pcd_session_dir_ + "/all_raw_points." + (save_laz ? "laz" : "las");
+    if (writeLasLaz(raw_points_dir, *pcl_wait_save_intensity, save_laz))
+      std::cout << GREEN << "Raw point cloud data saved to: " << raw_points_dir
+                << " with point count: " << pcl_wait_save_intensity->points.size() << RESET << std::endl;
+#else
+    if (save_laz) ROS_WARN_ONCE("lidar_save/save_laz requested but built without liblaszip; saving PCD instead");
     std::string raw_points_dir = pcd_session_dir_ + "/all_raw_points.pcd";
 
     pcl::PCDWriter pcd_writer;
     pcd_writer.writeBinary(raw_points_dir, *pcl_wait_save_intensity);
     std::cout << GREEN << "Raw point cloud data saved to: " << raw_points_dir
               << " with point count: " << pcl_wait_save_intensity->points.size() << RESET << std::endl;
+#endif
   }
 }
 
@@ -1021,10 +1129,16 @@ void LIVMapper::save_frame_world(const std::vector<PointToPlane> &ptpl_list)
     if (pcl_wait_save_intensity->size() > 0 && save_interval > 0 && scan_wait_num >= save_interval)
     {
       pcd_index++;
+#ifdef HAS_LASZIP
+      string all_points_dir(pcd_session_dir_ + "/" + to_string(pcd_index) + (save_laz ? ".laz" : ".las"));
+      writeLasLaz(all_points_dir, *pcl_wait_save_intensity, save_laz);
+#else
+      if (save_laz) ROS_WARN_ONCE("lidar_save/save_laz requested but built without liblaszip; saving PCD instead");
       string all_points_dir(pcd_session_dir_ + "/" + to_string(pcd_index) + ".pcd");
 
       pcl::PCDWriter pcd_writer;
       pcd_writer.writeBinary(all_points_dir, *pcl_wait_save_intensity);
+#endif
       PointCloudXYZI().swap(*pcl_wait_save_intensity);
       Eigen::Quaterniond q(state_.rot_end);
       fout_pcd_pos << state_.pos_end[0] << " " << state_.pos_end[1] << " " << state_.pos_end[2] << " " << q.w() << " " << q.x() << " " << q.y()

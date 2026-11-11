@@ -84,6 +84,8 @@ private:
   double last_timestamp_lidar = -1.0, last_timestamp_imu = -1.0;
   double filter_size_surf_min = 0;
   double filter_size_pcd = 0;
+  std::string save_dir;
+  bool save_laz = false;
   double first_lidar_time_ = 0.0;
 
   bool lidar_map_inited = false, save_en = false, pub_effect_en = false, pub_body_en = false, pose_output_en = false, ros_driver_fix_en = false;

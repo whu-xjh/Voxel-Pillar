@@ -158,8 +158,11 @@ evo:
 
 lidar_save:
   save_en: false
-  filter_size_pcd: 0.15
+  save_dir: "/mnt/g/JunhaoXu/voxel-pillar/output/"  # PCD output dir; per-run <timestamp>/ subdir is created inside; empty = Log/PCD/<timestamp> under package root
+  save_laz: true  # false = save .las, true = save compressed .laz; replaces the .pcd output
+  filter_size_pcd: 0.1
   interval: -1  # -1 = save all in one file (memory risk)
+
 
 external_imu:
   enable: false
