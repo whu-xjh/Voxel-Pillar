@@ -33,6 +33,8 @@ typedef struct VoxelMapConfig
   int max_iterations_;
   std::vector<int> layer_init_num_;
   int max_points_num_;
+  // Number of newly accepted points that triggers one batch plane re-fit in UpdateOctoTree (lio/update_size_threshold); R-VoxelMap has the same knob fixed at 5 and never re-fits — its planes evolve purely incrementally
+  int update_size_threshold_;
   double planner_threshold_;
   double beam_err_;
   double dept_err_;
@@ -56,19 +58,17 @@ typedef struct VoxelMapConfig
   bool intensity_fusion_en_;
   bool intensity_gate_en_;
   double intensity_gate_k_;
-  double intensity_fusion_weight_;  // intensity weight in the joint association score (0.5 = equal trust; default: 0.8)
+  double intensity_fusion_weight_;  // constant intensity trust weight in the joint score exp(-(w_g*m_geo + w_i*m_int)) when degeneracy_adaptive_en is off (default: 0.8)
 
-  // Degeneracy-adaptive intensity fusion (requires intensity_fusion_en)
-  bool degeneracy_adaptive_en_;      // engage intensity fusion only in degenerate scenes (default: false)
-  double degeneracy_on_threshold_;   // enter degenerate mode when λ_min/λ_max < this (default: 0.1)
-  double degeneracy_off_threshold_;  // exit hysteresis threshold; must be > on (default: 0.2)
-  int degeneracy_min_frames_;        // consecutive frames to switch state (debounce; default: 2)
-
-  // Incidence-angle compensation for the intensity channel (Intensity-SLAM-style): gain = max(|cosθ|, floor)^k with θ the beam-vs-normal angle; corrected intensity = raw/gain, variance / gain² — plane statistics express material (normal-incidence reflectivity), not viewing geometry; bit-identical when off
-  bool intensity_angle_comp_en_;      // master switch (default: false)
-  double intensity_angle_exp_;        // Lambertian exponent k (default: 1.0; <= 0 also disables)
-  double intensity_angle_cos_floor_;  // cosθ clip floor against grazing-angle blow-up (default: 0.2)
-  bool intensity_angle_debug_en_;     // dump matched (intensity, gain) pairs to Log/intensity_angle.txt (default: false)
+  // Degeneracy-aware fusion (requires intensity_fusion_en): off → w_i = intensity_fusion_weight constant;
+  // on → w_i = w_min + (w_max - w_min) * d, with d a linear ramp on the on/off thresholds
+  // (d = 1 fully degenerate, d = 0 healthy geometry), EMA-smoothed across frames
+  bool degeneracy_adaptive_en_;         // master degeneracy-awareness switch (default: false)
+  double degeneracy_on_threshold_;      // ramp lower endpoint on λ_min/λ_max: at or below this d = 1 (default: 0.1)
+  double degeneracy_off_threshold_;     // ramp upper endpoint: at or above this d = 0; must be > on (default: 0.2)
+  double degeneracy_weight_min_;        // intensity trust floor when geometry is healthy (default: 0.0 = geometry-only scoring)
+  double degeneracy_weight_max_;        // intensity trust ceiling when fully degenerate (default: intensity_fusion_weight)
+  double degeneracy_weight_ema_alpha_;  // EMA rate of the degeneracy ramp d, in (0,1]; higher = faster tracking (default: 0.5)
 
 } VoxelMapConfig;
 
@@ -86,8 +86,6 @@ typedef struct PointToPlane
   bool is_valid_;
   float dis_to_plane_;
   float intensity_;
-  // Geometric incidence-angle gain (max(|cosθ|, floor)^k) of the matched association, recorded for the intensity_angle_debug_en_ validation dump regardless of compensation
-  float intensity_gain_ = 1.0f;
 } PointToPlane;
 
 typedef struct VoxelPlane
@@ -118,8 +116,6 @@ typedef struct VoxelPlane
   bool intensity_init_ = false;
   // Total number of observations folded into the intensity statistics (maturity condition for the intensity gate)
   int intensity_obs_count_ = 0;
-  // Squared per-point intensity measurement noise, estimated online during the init window (frame-to-frame differencing on static data) when intensity_noise_est_en is on; zero default = contributes nothing when the estimation is off/failed; added at use sites so the effective variance never collapses (the 1e-3 floor keeps it strictly positive)
-  static double intensity_meas_var_;
   // EMA alpha for intensity statistics update (higher = faster adaptation), configurable via lio/intensity_ema_alpha, clamped to (0, 1]
   static double intensity_ema_alpha_;
   VoxelPlane()
@@ -232,7 +228,7 @@ public:
     temp_points_.clear();
     octo_state_ = 0;
     new_points_ = 0;
-    update_size_threshold_ = 5;
+    update_size_threshold_ = config_ptr_->update_size_threshold_;
     init_octo_ = false;
     update_enable_ = true;
     for (int i = 0; i < 8; i++)
@@ -487,11 +483,9 @@ public:
   int current_frame_id_ = 0;
   ros::Publisher voxel_map_pub_;
 
-  // Degeneracy-adaptive intensity fusion state (advanced per frame in StateEstimation; intensity_fusion_active_ governs the NEXT frame's residual association)
-  double degeneracy_factor_ = 1.0;       // λ_min/λ_max of the last geometric observation Hessian
-  bool intensity_fusion_active_ = false; // latched: enter/exit debounced by degeneracy_min_frames_, band frames hold the state
-  int degenerate_streak_ = 0;            // consecutive frames below the ON threshold (band frames reset)
-  int normal_streak_ = 0;                // consecutive frames above the OFF threshold (band frames reset)
+  // Degeneracy-aware fusion state (advanced per frame in StateEstimation; degeneracy_weight_smoothed_ governs the NEXT frame's residual association)
+  double degeneracy_factor_ = 1.0;          // λ_min/λ_max of the last geometric observation Hessian
+  double degeneracy_weight_smoothed_ = 0.0; // EMA of the ramp d, consumed by the NEXT frame's association; 0 start = first frames fuse at w_min
 
   // LRU voxel cache: voxel_map_cache_ front = most recently updated voxel, voxel_map_ maps location -> list iterator for O(1) hit/splice/evict; no lock needed — all writes happen on the sequential per-frame pipeline, the OpenMP section (BuildResidualListOMP) only reads
   std::list<std::pair<VoxelLocation, VoxelOctoTree*>> voxel_map_cache_;
@@ -521,10 +515,6 @@ public:
   int current_skip_count_ = 0;
   int total_skip_count_ = 0;
   int total_point_count_ = 0;
-
-  // Incidence-angle validation dump (intensity_angle_debug_en_): per-frame matched (raw intensity, geometric gain) pairs, filled in the sequential consolidation pass of BuildResidualListOMP, written out by StateEstimation
-  std::vector<float> angle_dbg_intensity_;
-  std::vector<float> angle_dbg_gain_;
 
   PillarMap pillar_map_;
 

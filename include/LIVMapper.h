@@ -41,7 +41,6 @@ public:
   void handleLIO();
   void savePCD();
   void processImu();
-  void estimateIntensityNoise();
 
   bool sync_packages(LidarMeasureGroup &meas);
   void prop_imu_once(StatesGroup &imu_prop_state, const double dt, V3D acc_avr, V3D angvel_avr);
@@ -108,20 +107,6 @@ private:
   bool lidar_pushed = false, imu_en, gravity_est_en, ba_bg_est_en = true;
   bool dense_map_en = false;
   int imu_int_frame = 3, external_imu_int_frame = 3;
-
-  // ---- Online intensity noise estimation (init window, static platform) ----
-  // Frame-to-frame NN intensity differencing estimates sigma_meas, which is
-  // stored in VoxelPlane::intensity_meas_var_ and used by the intensity
-  // fusion scoring and association gate in the voxel map.
-  bool intensity_noise_est_en_ = true;  // lio/intensity_noise_est_en: enable online estimation
-  bool intensity_noise_done_ = false;
-  bool intensity_noise_has_prev_ = false;
-  int intensity_noise_frames_ = 0;
-  float intensity_noise_min_ = 0.0f, intensity_noise_max_ = 0.0f;
-  std::vector<float> intensity_noise_diffs_;
-  PointCloudXYZI::Ptr intensity_noise_prev_cloud_ = nullptr;
-  V3D intensity_noise_prev_pos_ = V3D::Zero();
-  M3D intensity_noise_prev_rot_ = M3D::Identity();
   int lidar_en = 1;
   bool is_first_frame = false;
   deque<PointCloudXYZI::Ptr> lid_raw_data_buffer;

@@ -7,9 +7,6 @@
 // Sequential id generator for voxel planes (file-local, was a header static)
 static int voxel_plane_id = 0;
 
-// Squared intensity measurement noise (sigma_meas^2): zero default = not modeled unless the online estimator (LIVMapper::estimateIntensityNoise) runs and succeeds; resets to 0 on failure
-double VoxelPlane::intensity_meas_var_ = 0.0;
-
 // EMA alpha for intensity statistics; overwritten from lio/intensity_ema_alpha
 double VoxelPlane::intensity_ema_alpha_ = 0.5;
 
@@ -55,32 +52,38 @@ void loadVoxelConfig(ros::NodeHandle &nh, VoxelMapConfig &voxel_config)
   nh.param<double>("lio/dept_err", voxel_config.dept_err_, 0.05);
   nh.param<vector<int>>("lio/layer_init_num", voxel_config.layer_init_num_, vector<int>{5,5,5,5,5});
   nh.param<int>("lio/max_points_num", voxel_config.max_points_num_, 50);
-  nh.param<bool>("lio/plane_refine_en", voxel_config.plane_refine_en_, true);
-  nh.param<double>("lio/init_distance_threshold", voxel_config.init_distance_threshold_, 0.1);
-  nh.param<bool>("lio/plane_valid_check_en", voxel_config.plane_valid_check_en_, true);
-  nh.param<int>("lio/valid_check_max_layer", voxel_config.valid_check_max_layer_, 0);
-  nh.param<int>("lio/valid_check_min_points_size", voxel_config.valid_check_min_points_size_, 10);
-  nh.param<int>("lio/valid_check_resolution", voxel_config.valid_check_resolution_, 5);
-  nh.param<double>("lio/valid_check_p_threshold", voxel_config.valid_check_p_threshold_, 0.8);
+  // Batch plane re-fit trigger in UpdateOctoTree (hardcoded 5 before); kept >= 1 — 0 would re-fit on every inserted point
+  nh.param<int>("plane_refine_en/update_size_threshold", voxel_config.update_size_threshold_, 10);
+  if (voxel_config.update_size_threshold_ < 1) voxel_config.update_size_threshold_ = 1;
+  // Method master-switch families live in dedicated TOP-LEVEL yaml sections (intensity_fusion / degeneracy_adaptive / plane_refine_en), so ablation experiments toggle a whole section instead of picking keys out of the lio tuning block
+  nh.param<bool>("plane_refine_en/plane_refine_en", voxel_config.plane_refine_en_, true);
+  nh.param<double>("plane_refine_en/init_distance_threshold", voxel_config.init_distance_threshold_, 0.1);
+  nh.param<bool>("plane_refine_en/plane_valid_check_en", voxel_config.plane_valid_check_en_, true);
+  nh.param<int>("plane_refine_en/valid_check_max_layer", voxel_config.valid_check_max_layer_, 0);
+  nh.param<int>("plane_refine_en/valid_check_min_points_size", voxel_config.valid_check_min_points_size_, 10);
+  nh.param<int>("plane_refine_en/valid_check_resolution", voxel_config.valid_check_resolution_, 5);
+  nh.param<double>("plane_refine_en/valid_check_p_threshold", voxel_config.valid_check_p_threshold_, 0.8);
   if (voxel_config.valid_check_resolution_ < 1) voxel_config.valid_check_resolution_ = 1;  // 0 would degenerate the projection grid
   nh.param<int>("lio/max_iterations", voxel_config.max_iterations_, 5);
   nh.param<int>("lio/capacity", voxel_config.capacity_, 0);  // key missing -> LRU disabled (<=1 = off), matching the unbounded baseline map
-  nh.param<bool>("lio/intensity_fusion_en", voxel_config.intensity_fusion_en_, false);
-  nh.param<bool>("lio/intensity_gate_en", voxel_config.intensity_gate_en_, false);
-  nh.param<double>("lio/intensity_gate_k", voxel_config.intensity_gate_k_, 3.0);
-  nh.param<double>("lio/intensity_fusion_weight", voxel_config.intensity_fusion_weight_, 0.8);
-  nh.param<bool>("lio/degeneracy_adaptive_en", voxel_config.degeneracy_adaptive_en_, false);
-  nh.param<double>("lio/degeneracy_on_threshold", voxel_config.degeneracy_on_threshold_, 0.1);
-  nh.param<double>("lio/degeneracy_off_threshold", voxel_config.degeneracy_off_threshold_, 0.2);
-  nh.param<int>("lio/degeneracy_min_frames", voxel_config.degeneracy_min_frames_, 2);
+  nh.param<bool>("intensity_fusion/intensity_fusion_en", voxel_config.intensity_fusion_en_, false);
+  nh.param<bool>("intensity_fusion/intensity_gate_en", voxel_config.intensity_gate_en_, false);
+  nh.param<double>("intensity_fusion/intensity_gate_k", voxel_config.intensity_gate_k_, 3.0);
+  nh.param<double>("intensity_fusion/intensity_fusion_weight", voxel_config.intensity_fusion_weight_, 0.8);
+  nh.param<bool>("degeneracy_adaptive/degeneracy_adaptive_en", voxel_config.degeneracy_adaptive_en_, false);
+  nh.param<double>("degeneracy_adaptive/degeneracy_on_threshold", voxel_config.degeneracy_on_threshold_, 0.1);
+  nh.param<double>("degeneracy_adaptive/degeneracy_off_threshold", voxel_config.degeneracy_off_threshold_, 0.2);
+  nh.param<double>("degeneracy_adaptive/degeneracy_weight_min", voxel_config.degeneracy_weight_min_, 0.0);
+  // w_max defaults to the configured intensity_fusion_weight, so configs without the key keep the old ceiling
+  nh.param<double>("degeneracy_adaptive/degeneracy_weight_max", voxel_config.degeneracy_weight_max_, voxel_config.intensity_fusion_weight_);
+  double degeneracy_weight_ema_alpha = 0.5;
+  nh.param<double>("degeneracy_adaptive/degeneracy_weight_ema_alpha", degeneracy_weight_ema_alpha, 0.5);
+  // Keep alpha in (0, 1]: 0 would freeze the schedule, >1 diverges
+  voxel_config.degeneracy_weight_ema_alpha_ = std::min(std::max(degeneracy_weight_ema_alpha, 1e-3), 1.0);
   double intensity_ema_alpha = 0.5;
-  nh.param<double>("lio/intensity_ema_alpha", intensity_ema_alpha, 0.5);
+  nh.param<double>("intensity_fusion/intensity_ema_alpha", intensity_ema_alpha, 0.5);
   // Keep alpha in (0, 1]: 0 would freeze the statistics, >1 diverges
   VoxelPlane::intensity_ema_alpha_ = std::min(std::max(intensity_ema_alpha, 1e-3), 1.0);
-  nh.param<bool>("lio/intensity_angle_comp_en", voxel_config.intensity_angle_comp_en_, false);
-  nh.param<double>("lio/intensity_angle_exp", voxel_config.intensity_angle_exp_, 1.0);
-  nh.param<double>("lio/intensity_angle_cos_floor", voxel_config.intensity_angle_cos_floor_, 0.2);
-  nh.param<bool>("lio/intensity_angle_debug_en", voxel_config.intensity_angle_debug_en_, false);
 
   nh.param<bool>("local_map/map_sliding_en", voxel_config.map_sliding_en_, false);
   nh.param<int>("local_map/half_map_size", voxel_config.half_map_size_, 100);
@@ -120,23 +123,6 @@ void loadPillarMapConfig(ros::NodeHandle &nh, PillarMapConfig &config)
 
 namespace
 {
-// Rotation snapshot consumed by the map-side incidence-angle gain (init_plane batch stats and the UpdateOctoTree EMA): refreshed at BuildVoxelMap/UpdateVoxelMap entry from the manager state; the residual side (build_single_residual) passes the live iteration rotation instead. Map-side paths run only on the sequential per-frame pipeline, so no synchronization is needed
-Eigen::Matrix3d g_intensity_rot = Eigen::Matrix3d::Identity();
-
-// Incidence-angle gain of the intensity channel: gain = max(|cosθ|, floor)^k with θ the beam-vs-normal angle; corrected intensity = raw / gain, corrected variance = raw variance / gain² — plane statistics express material (normal-incidence reflectivity) instead of viewing geometry. Deliberately not gated by the comp switch (callers gate on intensity_angle_comp_en_ so the debug dump can record the raw gain); returns 1.0 when the exponent <= 0, the normal is unset (non-plane voxel), or the beam direction is degenerate
-double intensityIncGain(const Eigen::Vector3d &point_b, const Eigen::Vector3d &normal_w,
-                        const Eigen::Matrix3d &rot_w, const VoxelMapConfig &config)
-{
-  const double k = config.intensity_angle_exp_;
-  if (k <= 0.0) return 1.0;
-  if (normal_w.squaredNorm() < 0.5) return 1.0;  // normal not set (non-plane voxel)
-  const double norm_b = point_b.norm();
-  if (norm_b < 1e-6) return 1.0;                 // beam direction unavailable
-  const Eigen::Vector3d n_b = rot_w.transpose() * normal_w;
-  const double cos_inc = std::fabs(n_b.dot(point_b) / norm_b);
-  return std::pow(std::max(cos_inc, config.intensity_angle_cos_floor_), k);
-}
-
 // Plain PCA over a point set: centroid, covariance, ascending-eigenvalue decomposition (col(0) = min-eigenvalue direction); shared by the multi-pass plane fitting in init_plane
 void pcaFit(const std::vector<pointWithVar> &points, Eigen::Vector3d &center, Eigen::Matrix3d &cov,
             Eigen::Matrix3d &evecs, Eigen::Vector3d &evals)
@@ -240,26 +226,19 @@ void VoxelOctoTree::init_plane(std::vector<pointWithVar> &points, VoxelPlane *pl
   plane->covariance_ = cov;
   plane->points_size_ = points.size();
 
-  // Batch-initialize intensity statistics on the FIRST init only — periodic re-inits must not overwrite the EMA-accumulated history; folded in as angle-corrected reflectivity (raw/gain) to match EMA and residual-side semantics; normal found by value (minCoeff) so it is independent of solver column ordering; no hard std floor (measurement noise added at use sites)
+  // Batch-initialize intensity statistics on the FIRST init only — periodic re-inits must not overwrite the EMA-accumulated history; no hard std floor (the 1e-3 floor at use sites keeps the effective variance strictly positive)
   if (!points.empty() && !plane->intensity_init_)
   {
-    const bool batch_comp = config_ptr_->intensity_angle_comp_en_;
-    Eigen::Matrix3f::Index fit_min_idx = 0;
-    evals.minCoeff(&fit_min_idx);
-    const Eigen::Vector3d fit_normal = evecs.col(fit_min_idx);
-
     double intensity_sum = 0.0;
     for (auto pv : points)
     {
-      const double gain = batch_comp ? intensityIncGain(pv.point_b, fit_normal, g_intensity_rot, *config_ptr_) : 1.0;
-      intensity_sum += static_cast<double>(pv.intensity) / gain;
+      intensity_sum += static_cast<double>(pv.intensity);
     }
     double intensity_mean = intensity_sum / static_cast<double>(plane->points_size_);
     double intensity_variance = 0.0;
     for (auto pv : points)
     {
-      const double gain = batch_comp ? intensityIncGain(pv.point_b, fit_normal, g_intensity_rot, *config_ptr_) : 1.0;
-      double diff = static_cast<double>(pv.intensity) / gain - intensity_mean;
+      double diff = static_cast<double>(pv.intensity) - intensity_mean;
       intensity_variance += diff * diff;
     }
     plane->mean_intensity_ = intensity_mean;
@@ -591,14 +570,10 @@ void VoxelOctoTree::UpdateOctoTree(const pointWithVar &pv)
         if (config_ptr_->plane_refine_en_ && !check_and_update(pv)) return;
       }
 
-      // EMA intensity update (runs for gate-accepted points and frozen voxels alike): folded value is the angle-corrected reflectivity (raw/gain, gain = 1 when compensation off) so statistics stay viewing-geometry-invariant and consistent with init_plane/residuals; no hard std floor — the measurement noise at use sites keeps the effective variance from collapsing
+      // EMA intensity update (runs for gate-accepted points and frozen voxels alike); no hard std floor — the 1e-3 floor at use sites keeps the effective variance from collapsing
       {
         const double alpha = VoxelPlane::intensity_ema_alpha_;
-        const double gain = config_ptr_->intensity_angle_comp_en_
-                                ? intensityIncGain(pv.point_b, plane_ptr_->normal_, g_intensity_rot, *config_ptr_)
-                                : 1.0;
-        double val = static_cast<double>(pv.intensity) / gain;
-        double delta = val - plane_ptr_->mean_intensity_;
+        double delta = static_cast<double>(pv.intensity) - plane_ptr_->mean_intensity_;
         plane_ptr_->mean_intensity_ += alpha * delta;
         double variance = (1.0 - alpha) * plane_ptr_->intensity_std_ * plane_ptr_->intensity_std_ + alpha * delta * delta;
         plane_ptr_->intensity_std_ = sqrt(variance);
@@ -645,14 +620,10 @@ void VoxelOctoTree::UpdateOctoTree(const pointWithVar &pv)
       }
       else // Reached max layer, treat as leaf node
       {
-        // EMA intensity update (always runs), same as the plane branch — angle-corrected reflectivity, non-plane voxels have an unset normal → gain 1; no hard std floor (measurement noise at use sites prevents collapse)
+        // EMA intensity update (always runs), same as the plane branch; no hard std floor (the 1e-3 floor at use sites prevents collapse)
         {
           const double alpha = VoxelPlane::intensity_ema_alpha_;
-          const double gain = config_ptr_->intensity_angle_comp_en_
-                                  ? intensityIncGain(pv.point_b, plane_ptr_->normal_, g_intensity_rot, *config_ptr_)
-                                  : 1.0;
-          double val = static_cast<double>(pv.intensity) / gain;
-          double delta = val - plane_ptr_->mean_intensity_;
+          double delta = static_cast<double>(pv.intensity) - plane_ptr_->mean_intensity_;
           plane_ptr_->mean_intensity_ += alpha * delta;
           double variance = (1.0 - alpha) * plane_ptr_->intensity_std_ * plane_ptr_->intensity_std_ + alpha * delta * delta;
           plane_ptr_->intensity_std_ = sqrt(variance);
@@ -901,42 +872,17 @@ void VoxelMapManager::StateEstimation(StatesGroup &state_propagat)
     if (EKF_stop_flg) break;
   }
 
-  // Incidence-angle validation dump: per-frame matched (raw intensity, geometric gain) pairs from the last iteration — scatter intensity vs gain: slope ≈ 0 → sensor already angle-calibrated (keep comp off), slope ≈ I·k → Lambertian (enable comp); written after the loop so earlier iterations don't duplicate rows
-  if (config_setting_.intensity_angle_debug_en_ && !angle_dbg_gain_.empty())
-  {
-    std::ofstream fout(DEBUG_FILE_DIR("intensity_angle.txt"), std::ios::app);
-    for (size_t i = 0; i < angle_dbg_gain_.size(); ++i)
-    {
-      fout << angle_dbg_intensity_[i] << " " << angle_dbg_gain_[i] << "\n";
-    }
-  }
-
-  // Degeneracy-adaptive intensity fusion: frame-end hysteresis state machine on the last iteration's degeneracy factor; the resulting intensity_fusion_active_ governs the NEXT frame's residual association (one-frame lag; degeneracy is a spatially continuous state)
+  // Degeneracy-aware fusion weight update: a linear ramp d on the on/off thresholds is EMA-smoothed across frames
+  // and scales the intensity trust weight consumed by the NEXT frame's association (one-frame lag;
+  // d = 1 fully degenerate → w_i = degeneracy_weight_max, d = 0 healthy geometry → w_i = degeneracy_weight_min)
   if (config_setting_.degeneracy_adaptive_en_)
   {
-    // cout << degeneracy_factor_ << endl;
-    if (degeneracy_factor_ < config_setting_.degeneracy_on_threshold_)
-    {
-      degenerate_streak_++;
-      normal_streak_ = 0;
-    }
-    else if (degeneracy_factor_ > config_setting_.degeneracy_off_threshold_)
-    {
-      normal_streak_++;
-      degenerate_streak_ = 0;
-    }
-    else
-    {
-      // Hysteresis band: no evidence in either direction, so both consecutive runs break — an alternating on-threshold/band sequence must not creep into the degenerate state
-      degenerate_streak_ = 0;
-      normal_streak_ = 0;
-    }
-    // Latched transitions, both edges debounced by degeneracy_min_frames: enter after min_frames consecutive degenerate frames, exit after min_frames consecutive normal frames; band frames hold the state
-    if (!intensity_fusion_active_)
-    {
-      if (degenerate_streak_ >= config_setting_.degeneracy_min_frames_) { intensity_fusion_active_ = true; }
-    }
-    else if (normal_streak_ >= config_setting_.degeneracy_min_frames_) { intensity_fusion_active_ = false; }
+    const double ramp_span = config_setting_.degeneracy_off_threshold_ - config_setting_.degeneracy_on_threshold_;
+    double d_raw = 1.0;
+    if (ramp_span > 1e-12)  // guard: degenerate config (off <= on) pins d at full intensity trust
+      d_raw = std::min(std::max((config_setting_.degeneracy_off_threshold_ - degeneracy_factor_) / ramp_span, 0.0), 1.0);
+    degeneracy_weight_smoothed_ =
+        config_setting_.degeneracy_weight_ema_alpha_ * d_raw + (1.0 - config_setting_.degeneracy_weight_ema_alpha_) * degeneracy_weight_smoothed_;
   }
 }
 
@@ -968,7 +914,6 @@ void VoxelMapManager::BuildVoxelMap()
   int max_layer = config_setting_.max_layer_; // Maximum number of layers
   int max_points_num = config_setting_.max_points_num_; // Maximum points per voxel
   std::vector<int> layer_init_num = config_setting_.layer_init_num_; // Initial point threshold for each layer subdivision
-  g_intensity_rot = state_.rot_end; // refresh the map-side incidence-angle rotation snapshot
 
   // Data preparation: pre-allocate input_points capacity to avoid runtime reallocation
   std::vector<pointWithVar> input_points;
@@ -1048,7 +993,6 @@ void VoxelMapManager::UpdateVoxelMap(const std::vector<pointWithVar> &input_poin
   int max_layer = config_setting_.max_layer_;
   int max_points_num = config_setting_.max_points_num_;
   std::vector<int> layer_init_num = config_setting_.layer_init_num_;
-  g_intensity_rot = state_.rot_end; // refresh the map-side incidence-angle rotation snapshot
 
   uint plsize = input_points.size();
   for (uint i = 0; i < plsize; i++)
@@ -1119,11 +1063,6 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
   double sigma_num = config_setting_.sigma_num_;
   // std::mutex mylock;
   ptpl_list.clear();
-  if (config_setting_.intensity_angle_debug_en_)
-  {
-    angle_dbg_intensity_.clear();
-    angle_dbg_gain_.clear();
-  }
   std::vector<PointToPlane> all_ptpl_list(pv_list.size());
   // NOT vector<bool>: per-index proxy writes inside the parallel loop below would be non-atomic word-level RMW races
   std::vector<uint8_t> useful_ptpl(pv_list.size());
@@ -1205,11 +1144,6 @@ void VoxelMapManager::BuildResidualListOMP(std::vector<pointWithVar> &pv_list, s
     if (useful_ptpl[i])
     {
       ptpl_list.push_back(all_ptpl_list[i]);
-      if (config_setting_.intensity_angle_debug_en_)
-      {
-        angle_dbg_intensity_.push_back(all_ptpl_list[i].intensity_);
-        angle_dbg_gain_.push_back(all_ptpl_list[i].intensity_gain_);
-      }
     }
   }
 }
@@ -1240,13 +1174,9 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
       sigma_l += plane.normal_.transpose() * pv.var * plane.normal_;
       if (dis_to_plane < sigma_num * sqrt(sigma_l))
       {
-        // Effective intensity variance: plane spread + measurement noise (auto-estimated when enabled, else 0), floored at 1e-3 so every candidate is scored with the same likelihood form; query intensity enters as normal-incidence-equivalent reflectivity (raw/gain, live iteration rotation) and the variance is scaled by 1/gain² to match
-        const bool angle_needed = config_setting_.intensity_angle_comp_en_ || config_setting_.intensity_angle_debug_en_;
-        const double raw_gain = angle_needed ? intensityIncGain(pv.point_b, plane.normal_, state_.rot_end, config_setting_) : 1.0;
-        const double intensity_gain = config_setting_.intensity_angle_comp_en_ ? raw_gain : 1.0;
-        double intensity_diff = static_cast<double>(pv.intensity) / intensity_gain - plane.mean_intensity_;
-        double sigma_int_sq = std::max(plane.intensity_std_ * plane.intensity_std_ + VoxelPlane::intensity_meas_var_, 1e-3) /
-                              (intensity_gain * intensity_gain);
+        // Effective intensity variance: plane spread, floored at 1e-3 so every candidate is scored with the same likelihood form
+        double intensity_diff = static_cast<double>(pv.intensity) - plane.mean_intensity_;
+        double sigma_int_sq = std::max(plane.intensity_std_ * plane.intensity_std_, 1e-3);
 
         // Intensity gate: reject associations whose intensity profile is inconsistent with the plane (e.g. dynamics in front of static surfaces); requires mature statistics (obs_count >= 20); on rejection is_success stays false so the caller falls back to neighbor voxels
         if (config_setting_.intensity_gate_en_ && plane.intensity_obs_count_ >= 20)
@@ -1256,15 +1186,18 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
         }
 
         double this_prob;
-        // Adaptive engage: with degeneracy_adaptive_en, fusion engages only when the previous frame's observation Hessian was degenerate — weak geometry is where independent intensity evidence pays off
-        const bool fusion_on = config_setting_.intensity_fusion_en_ &&
-                               (!config_setting_.degeneracy_adaptive_en_ || intensity_fusion_active_);
+        const bool fusion_on = config_setting_.intensity_fusion_en_;
         if (fusion_on)
         {
           // Weighted Mahalanobis scoring: squared normalized distances of the two modalities with an explicit trust weight — no 1/√σ prefactor, so tight planes no longer win by construction
           double m_geo = dis_to_plane * dis_to_plane / sigma_l;
           double m_int = intensity_diff * intensity_diff / sigma_int_sq;
-          const double w_i = config_setting_.intensity_fusion_weight_;
+          // Degeneracy-aware trust: degeneracy_adaptive_en ramps w_i between degeneracy_weight_min (healthy geometry)
+          // and degeneracy_weight_max (fully degenerate, EMA-smoothed, one-frame lag); off → constant intensity_fusion_weight
+          const double w_i = config_setting_.degeneracy_adaptive_en_
+                                 ? config_setting_.degeneracy_weight_min_ +
+                                       (config_setting_.degeneracy_weight_max_ - config_setting_.degeneracy_weight_min_) * degeneracy_weight_smoothed_
+                                 : config_setting_.intensity_fusion_weight_;
           const double w_g = 1.0 - w_i;
           this_prob = exp(-(w_g * m_geo + w_i * m_int));
         }
@@ -1284,7 +1217,6 @@ void VoxelMapManager::build_single_residual(pointWithVar &pv, const VoxelOctoTre
           single_ptpl.point_b_ = pv.point_b;
           single_ptpl.point_w_ = pv.point_w;
           single_ptpl.intensity_ = pv.intensity;  // Pass intensity information
-          single_ptpl.intensity_gain_ = raw_gain; // geometric gain, for the validation dump
           single_ptpl.plane_var_ = plane.plane_var_;
           single_ptpl.normal_ = plane.normal_;
           single_ptpl.center_ = plane.center_;

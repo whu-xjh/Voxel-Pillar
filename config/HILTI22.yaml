@@ -58,31 +58,36 @@ lio:
   capacity: 0  # LRU cache (0 = disable)
 
   # plane refinements
-  plane_refine_en: true
-  init_distance_threshold: 0.1
-  plane_valid_check_en: true
-  valid_check_max_layer: 1
-  valid_check_min_points_size: 10
-  valid_check_resolution: 4
-  valid_check_p_threshold: 0.5
   
-  # intensity fusion
+
+intensity_fusion:
   intensity_fusion_en: true
-  intensity_gate_en: false
-  intensity_gate_k: 3.0     # Gate threshold in units of intensity sigma
-  intensity_fusion_weight: 0.8  # intensity weight in the joint score (0.5 = equal trust; requires intensity_fusion_en)
-  intensity_noise_est_en: false  # Online estimation of intensity measurement noise (init window)
-  intensity_ema_alpha: 0.5      # EMA adaptation rate of plane intensity stats, in (0,1]; higher = faster
-  intensity_angle_comp_en: true
-  intensity_angle_exp: 1.0      # Lambertian exponent k (<=0 also disables)
-  intensity_angle_cos_floor: 0.2  # cos clip floor vs grazing-angle blow-up
-  intensity_angle_debug_en: false # dump matched (intensity, gain) pairs for validation
-  degeneracy_adaptive_en: true   # engage intensity fusion only in degenerate scenes (requires intensity_fusion_en)
-  degeneracy_on_threshold: 0.1   # enter degenerate mode when lambda_min/lambda_max < this
-  degeneracy_off_threshold: 0.3  # exit hysteresis threshold; must be > on
-  degeneracy_min_frames: 2       # consecutive frames to switch state (debounce)
+  intensity_fusion_weight: 0.8      # constant intensity trust weight in the joint score exp(-(w_g*m_geo + w_i*m_int)) when degeneracy_adaptive_en is false
+  intensity_ema_alpha: 0.5          # EMA adaptation rate of plane intensity stats, in (0,1]; higher = faster
+  intensity_gate_en: false          # Intensity-based association gate (reject material-inconsistent matches)
+  intensity_gate_k: 3.0             # Gate threshold in units of intensity sigma
+
+degeneracy_adaptive:
+  degeneracy_adaptive_en: true
+  degeneracy_on_threshold: 0.1      # ramp lower endpoint on lambda_min/lambda_max: at or below this w_i = w_max
+  degeneracy_off_threshold: 0.3     # ramp upper endpoint: at or above this w_i = w_min; must be > on
+  degeneracy_weight_min: 0.0        # intensity trust floor when geometry is healthy (0 = geometry-only scoring)
+  degeneracy_weight_max: 0.8        # intensity trust ceiling when fully degenerate
+  degeneracy_weight_ema_alpha: 0.5  # EMA rate of the degeneracy ramp d, in (0,1]; higher = faster tracking
+
+plane_refine_en:
+  plane_refine_en: true
+  init_distance_threshold: 0.1      # init_plane: drop points farther than this from the first PCA fit (m)
+  plane_valid_check_en: true        # coplanar-disjoint-surface guard (2D grid DFS clustering)
+  valid_check_max_layer: 1          # run the guard only on layers with index <= this (0 = root voxel only)
+  valid_check_min_points_size: 10   # min retained points to run the guard
+  valid_check_resolution: 4         # projection grid resolution factor
+  valid_check_p_threshold: 0.5      # largest-cluster point-ratio threshold
+  update_size_threshold: 10  # batch plane re-fit trigger (new points per voxel); R-VoxelMap hardcodes 5 and never re-fits
+
 
 # Pillar Voxel Redundant Detection
+
 pillar_map:
   pillar_map_en: true
 

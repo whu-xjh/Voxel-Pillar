@@ -1,4 +1,4 @@
-下面按**当前代码的实际执行顺序、输入输出和核心判据**整理。范围是静态 PillarMap、plane refinement 和 intensity fusion；不包含 dyn，也不包含当前实验配置未启用的强度关联门、在线强度噪声估计与入射角补偿。
+下面按**当前代码的实际执行顺序、输入输出和核心判据**整理。范围是静态 PillarMap、plane refinement 和 intensity fusion；不包含 dyn，也不包含当前实验配置未启用的强度关联门。
 
 首先需要区分：**PillarMap 在配准前筛选观测；intensity fusion 在配准中选择对应；plane refinement 在建图与地图更新时维护平面。** 三者通过跨帧地图连接起来。
 
@@ -11,12 +11,12 @@ flowchart TD
     C --> D["保留点云"]
     D --> E["在已有 RI-VoxelMap 中选择候选平面"]
     M["已有地图：几何平面 + 强度统计"] --> E
-    S["本帧融合模式"] --> E
+    S["本帧强度信任权重"] --> E
     E --> F["几何点面残差 + 惯性先验<br/>迭代状态估计"]
     F --> G["更新位姿"]
     G --> H["保留点入图<br/>平面精化与强度统计更新"]
     H --> M
-    F --> I["计算几何条件指标<br/>决定下一帧融合模式"]
+    F --> I["计算几何条件指标<br/>更新下一帧强度权重"]
 ```
 
 首帧是特例：PillarMap 筛选后，先初始化地图，再进入状态估计。总体入口见 [LIVMapper::handleLIO](/home/wsl-2004-5090/code/voxel-pillar/catkin_ws/src/Voxel-Pillar/src/LIVMapper.cpp:373)。
@@ -281,7 +281,21 @@ p^\star=
 - 几何更新冻结后，强度 EMA 仍可继续更新。
 - 接受的新点会立即更新中心、法向等平面参数，但 \(\Sigma_\pi\) 的刷新被**推迟到下一次重拟合**；因此两次重拟合之间，下游关联使用的平面不确定性略滞后于当前平面参数。
 
+被接受的点同时进入支撑点缓冲，缓冲每累积 \(T_u\)（plane_refine_en/update_size_threshold，默认 10，下限 1）个新点就触发一次整批重拟合（对缓冲内全部支撑点重跑流程 A 的拟合链，随后重建增量统计 \(\mathbf Q\)，保证其与缓冲内容严格一致）。支撑点数达到上限（lio/max_points_num）后体素冻结：缓冲释放、几何更新停止，只保留平面参数与强度 EMA。
+
 几何更新开启时，被拒绝的点会在强度更新之前返回。这是 refine 与 intensity 的直接联系。实现见 [check_and_update](/home/wsl-2004-5090/code/voxel-pillar/catkin_ws/src/Voxel-Pillar/src/voxel_map.cpp:374) 和 [UpdateOctoTree](/home/wsl-2004-5090/code/voxel-pillar/catkin_ws/src/Voxel-Pillar/src/voxel_map.cpp:576)。
+
+**与 R-VoxelMap 平面维护的差异**（本模块在其 check_and_update 与投影连通性检查之外的部分均为独立实现）：
+
+| 方面 | 本项目 | R-VoxelMap |
+|---|---|---|
+| 平面初始化 | 确定性多轮 PCA：初始拟合 → 法向距离剔除离群（\(\tau_d\)）→ 连通性守卫 → 重拟合；无随机性 | RANSAC 随机采样拟合，划分内点/外点链表 |
+| 增量维护 | `check_and_update` 仅作**准入闸门**，通过的点进缓冲，每 \(T_u\) 个新点**整批重拟合** | `check_and_update` 是**唯一**更新通道，平面参数只随秩一更新演化，从不重拟合 |
+| 结构重建 | 八叉树结构初始化后不再重建；体素冻结后不可逆 | 根体素总点数跨过 `reinit_size_vec` 阈值表时**整树重建**（收拢全部点重新 RANSAC），走完阈值表后永久停止 |
+| 支撑点保留 | 上限 `max_points_num`（默认 50/100），冻结即释放缓冲——平面参数已固化，无需原始点 | 保留至 1000 点/体素（另有根体素 2000 上限），原始点是整树重建的前提 |
+| 内存控制 | LRU 可选（默认关闭 = 无界），另有位置驱动的空间滑窗清除远处体素 | LRU 常开（默认容量 120000），无空间滑窗 |
+| 观测预过滤 | PillarMap 在入图前剔除冗余/孤立/动态点 | 无，所有点直接入图 |
+| 强度通道 | 平面级强度统计（EMA 均值/方差、观测计数）随几何维护同步演化，供关联评分 | 不保留强度信息 |
 
 **论文中可概括为：**
 
@@ -293,8 +307,8 @@ p^\star=
 
 **四、Intensity fusion：退化感知的几何—强度联合平面选择**
 
-**输入：** 当前迭代位姿下的保留点、已有概率平面及强度统计、本帧融合模式。  
-**输出：** 每个有效点的对应平面，以及用于下一帧的融合状态。
+**输入：** 当前迭代位姿下的保留点、已有概率平面及强度统计、本帧强度信任权重 \(w_I\)。  
+**输出：** 每个有效点的对应平面，以及用于下一帧的权重状态。
 
 可以拆成**统计维护、候选生成与选择、条件反馈**三个子流程。
 
@@ -353,9 +367,9 @@ s_I^2=\max(v_I,\,\epsilon_I),
 
 其中 \(\epsilon_I\) 为防止方差塌缩的下限。
 
-**步骤 B3：按本帧模式评分**
+**步骤 B3：按本帧权重评分**
 
-融合启用时：
+强度融合启用时（\(w_I\) 按流程 C 确定：退化感知关闭时取固定配置值，开启时取连续调度后的本帧权重）：
 
 \[
 S_{GI}=
@@ -383,7 +397,7 @@ S_G=
 
 实现见 [BuildResidualListOMP](/home/wsl-2004-5090/code/voxel-pillar/catkin_ws/src/Voxel-Pillar/src/voxel_map.cpp:1115) 和 [build_single_residual](/home/wsl-2004-5090/code/voxel-pillar/catkin_ws/src/Voxel-Pillar/src/voxel_map.cpp:1217)。
 
-**流程 C：计算几何条件并更新下一帧模式**
+**流程 C：计算几何条件并更新下一帧强度权重**
 
 由本次匹配的几何观测构造观测信息矩阵的 \(6\times6\) 位姿块：
 
@@ -394,21 +408,31 @@ S_G=
 {\lambda_{\max}(\Lambda)} .
 \]
 
-这里 \(V_i\) 是滤波器观测方差，在 \(s_g^2\) 的两项之外附加 \(10^{-3}\) 的正则底噪，与关联评分使用的 \(s_g^2\) 不同。\(\Lambda\) 在每次迭代都计算（含 \(\lambda_{\max}\) 过小的保护），状态机只消费**最后一次迭代**留下的条件指标。
+这里 \(V_i\) 是滤波器观测方差，在 \(s_g^2\) 的两项之外附加 \(10^{-3}\) 的正则底噪，与关联评分使用的 \(s_g^2\) 不同。\(\Lambda\) 在每次迭代都计算（含 \(\lambda_{\max}\) 过小的保护），权重更新只消费**最后一次迭代**留下的条件指标。
 
-帧末推进状态机：
+**退化感知权重调度（degeneracy_adaptive_en，一级参数，SubT 配置中开启）：** 在 on/off 阈值上定义线性 ramp
 
-- 连续 \(K\) 帧低于启用阈值：启用融合。
-- 连续 \(K\) 帧高于退出阈值：关闭融合。
-- 位于两个阈值之间：保持模式，并清零连续计数。
+\[
+d=\mathrm{clamp}\!\left(\frac{\mathrm{off}-\eta}{\mathrm{off}-\mathrm{on}},\,0,\,1\right),
+\qquad
+\bar d^+=\alpha_d d+(1-\alpha_d)\bar d,
+\qquad
+w_I=w_{\min}+\bigl(w_{\max}-w_{\min}\bigr)\bar d,
+\]
 
-**结果作用于下一帧，本帧内的融合模式保持不变。** 若关闭自适应机制而开启强度融合，则始终使用融合评分。
+其中 \(w_{\min}\)（degeneracy_weight_min）是几何健康时的强度信任下限，\(w_{\max}\)（degeneracy_weight_max）是完全退化（\(\eta\le\mathrm{on}\)）时的信任上限，\(\alpha_d\)（degeneracy_weight_ema_alpha）为跨帧 EMA 步长，抑制走廊进出时权重跳变。\(\bar d\) 初始化为 0，首帧按 \(w_{\min}\) 融合。
+
+- \(\eta\le\mathrm{on}\)：\(d=1\)，\(w_I\to w_{\max}\)——几何约束最弱的方向上，独立于几何的强度证据获得最大信任；
+- \(\eta\ge\mathrm{off}\)：\(d=0\)，\(w_I\to w_{\min}\)（\(w_{\min}=0\) 时退化为纯几何评分）；
+- 介于两者之间：权重随几何条件线性过渡。
+
+**结果作用于下一帧，本帧内的权重保持不变**（一帧滞后；退化是空间连续状态）。若关闭退化感知而开启强度融合，则 \(w_I\) 恒为配置值 \(w_I\)（intensity_fusion_weight）。
 
 该指标反映固定姿态—平移参数化下的几何条件，不是完整系统可观测性证明。实现见 [StateEstimation](/home/wsl-2004-5090/code/voxel-pillar/catkin_ws/src/Voxel-Pillar/src/voxel_map.cpp:729)。
 
 **论文中可概括为：**
 
-> 在几何有效候选中，以平面级强度统计辅助对应判别，并通过几何条件反馈与滞回机制控制融合模式，使候选选择策略随场景几何条件调整。
+> 在几何有效候选中，以平面级强度统计辅助对应判别，并以几何观测信息矩阵的条件数指标连续调度强度信任权重——几何退化越严重，强度证据权重越高，使候选选择策略随场景几何条件连续调整。
 
 ---
 
@@ -424,11 +448,14 @@ S_G=
 | \(\theta_h\) / \(\theta_v\) | 水平/垂直确认阈值 | horizontal/vertical_redundant_threshold | 4 / 2 |
 | \(\alpha\) / \(M_{\min}\) / \(\Delta r\) | 采样比例 / 下限 / 壳层宽 | redundant_sample_ratio、min_pts、bin | 0.2 / 10 / 0.1 |
 | \(n_{\mathrm{buf}}\) | 占据历史窗口 | pillar_map/pillar_buffer | 1 |
-| \(\tau_d\) | 首拟合离群距离 | lio/init_distance_threshold | 0.1 |
+| \(\tau_d\) | 首拟合离群距离 | plane_refine_en/init_distance_threshold | 0.1 |
 | \(\tau_p\) | 平面性特征值阈值 | lio/min_eigen_value | 0.0025 |
-| 守卫参数组 | 层级/点数/分辨率/占比 | plane_valid_check_en、valid_check_* | on / 0 / 10 / 4 / 0.6 |
+| \(T_u\) | 周期重拟合触发点数 | plane_refine_en/update_size_threshold | 10 |
+| — | 体素冻结点数上限 | lio/max_points_num | 100 |
+| 守卫参数组 | 层级/点数/分辨率/占比 | plane_refine_en/plane_valid_check_en、valid_check_* | on / 0 / 10 / 4 / 0.6 |
 | \(k_g\) | 几何门 | lio/sigma_num | 3 |
-| \(w_I\) | 强度融合权重 | lio/intensity_fusion_weight | 0.5 |
-| \(\alpha_I\) | 强度 EMA 步长 | lio/intensity_ema_alpha | 0.05 |
-| on / off / \(K\) | 退化状态机 | degeneracy_on/off_threshold、min_frames | 0.005 / 0.1 / 1 |
+| \(w_I\) | 强度融合权重（退化感知关闭时的固定信任权重） | intensity_fusion/intensity_fusion_weight | 0.5 |
+| \(\alpha_I\) | 强度 EMA 步长 | intensity_fusion/intensity_ema_alpha | 0.05 |
+| on / off | 退化 ramp 端点：\(\eta\le\) on 时 \(w_I=w_{\max}\)，\(\eta\ge\) off 时 \(w_I=w_{\min}\) | degeneracy_adaptive/degeneracy_on/off_threshold | 0.005 / 0.1 |
+| \(w_{\min}\) / \(w_{\max}\) / \(\alpha_d\) | 退化感知调度：几何健康权重下限 / 完全退化权重上限 / ramp EMA 步长 | degeneracy_adaptive/degeneracy_weight_min、max、ema_alpha | 0 / 0.5 / 0.5 |
 | — | 迭代次数 | lio/max_iterations | 5 |
