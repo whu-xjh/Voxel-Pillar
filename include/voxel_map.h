@@ -50,6 +50,12 @@ typedef struct VoxelMapConfig
   int valid_check_resolution_;        // projection grid resolution factor
   double valid_check_p_threshold_;    // largest-cluster point-ratio threshold
 
+  // MAD intensity gating (intensity_filter_en): two phases of one mechanism — first-init
+  // self-calibration (init_plane) feeds the statistics the runtime insertion gate consumes
+  bool intensity_filter_en_;          // master switch: false = no intensity filtering anywhere (bit-identical to refine-only)
+  double intensity_filter_sigma_k_;   // outlier threshold in σ units, shared by both phases
+  int intensity_filter_min_points_;   // first-init MAD gate skipped below this many retained points; also reused as the insertion-gate maturity threshold on intensity_obs_count_ (avoids a 4th knob)
+
   double sliding_thresh_;
   bool map_sliding_en_;
   int half_map_size_;
@@ -253,6 +259,8 @@ public:
   void cut_octo_tree();
   // R-VoxelMap check_and_update: O(1) rank-1 trial — accept the point only if the augmented min eigenvalue stays below the planarity threshold; on acceptance the incremental statistics update in place
   bool check_and_update(const pointWithVar &pv);
+  // Insertion-time intensity gate: O(1) σ check against the plane's EMA intensity statistics — runtime counterpart of the first-init MAD gate, whose retained set calibrates those statistics
+  bool intensity_sigma_check(const pointWithVar &pv);
   // Coplanar-disjoint-surface guard (R-VoxelMap): prune points to the largest 4-connected cluster of the plane-projected 2D grid; returns false when even the largest cluster is too small to trust the plane
   bool plane_valid_check(std::vector<pointWithVar> &points, const Eigen::Vector3d &center,
                          const Eigen::Vector3d &x_normal, const Eigen::Vector3d &y_normal);

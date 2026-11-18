@@ -58,6 +58,13 @@ void loadVoxelConfig(ros::NodeHandle &nh, VoxelMapConfig &voxel_config)
   // Method master-switch families live in dedicated TOP-LEVEL yaml sections (intensity_fusion / degeneracy_adaptive / plane_refine_en), so ablation experiments toggle a whole section instead of picking keys out of the lio tuning block
   nh.param<bool>("plane_refine_en/plane_refine_en", voxel_config.plane_refine_en_, true);
   nh.param<double>("plane_refine_en/init_distance_threshold", voxel_config.init_distance_threshold_, 0.1);
+  // Key missing -> false: configs without the block keep bit-identical behavior (no intensity filtering anywhere)
+  nh.param<bool>("plane_refine_en/intensity_filter_en", voxel_config.intensity_filter_en_, false);
+  nh.param<double>("plane_refine_en/intensity_filter_sigma_k", voxel_config.intensity_filter_sigma_k_, 3.0);
+  // sigma_k <= 0 would flag every point as an outlier (both gates reject everything), and < 0.5 is over-aggressive; reset to the 3.0 default
+  if (voxel_config.intensity_filter_sigma_k_ < 0.5) voxel_config.intensity_filter_sigma_k_ = 3.0;
+  nh.param<int>("plane_refine_en/intensity_filter_min_points", voxel_config.intensity_filter_min_points_, 5);
+  if (voxel_config.intensity_filter_min_points_ < 1) voxel_config.intensity_filter_min_points_ = 1;  // 0 would bypass the maturity guard entirely
   nh.param<bool>("plane_refine_en/plane_valid_check_en", voxel_config.plane_valid_check_en_, true);
   nh.param<int>("plane_refine_en/valid_check_max_layer", voxel_config.valid_check_max_layer_, 0);
   nh.param<int>("plane_refine_en/valid_check_min_points_size", voxel_config.valid_check_min_points_size_, 10);
@@ -154,7 +161,6 @@ void VoxelOctoTree::init_plane(std::vector<pointWithVar> &points, VoxelPlane *pl
   plane->points_size_ = points.size();
   plane->radius_ = 0;
 
-  // Pass 1: PCA over ALL points for a first plane estimate (ascending eigenvalues; col(0) is the plane normal)
   Eigen::Vector3d center;
   Eigen::Matrix3d cov, evecs;
   Eigen::Vector3d evals;
@@ -180,7 +186,48 @@ void VoxelOctoTree::init_plane(std::vector<pointWithVar> &points, VoxelPlane *pl
       return;
     }
 
-    // 4. Pass 2: PCA over the retained points
+    // MAD intensity gating (first init only): one-dimensional analogue of the geometric distance filter —
+    // robust median/MAD instead of mean/σ so intensity outliers don't inflate their own threshold.
+    // Runs only while !intensity_init_ (periodic re-fits rely on the EMA statistics that this gate
+    // calibrates) and BEFORE Pass-2 PCA, so the geometric re-fit and the batch intensity statistics
+    // below both operate on the doubly-filtered set.
+    if (config_ptr_->intensity_filter_en_ && !plane->intensity_init_ &&
+        static_cast<int>(points.size()) >= config_ptr_->intensity_filter_min_points_)
+    {
+      std::vector<float> intensities;
+      intensities.reserve(points.size());
+      for (const auto &pv : points)
+      {
+        intensities.push_back(pv.intensity);
+      }
+      const size_t mid = intensities.size() / 2;
+      std::nth_element(intensities.begin(), intensities.begin() + mid, intensities.end());
+      const double intensity_median = intensities[mid];
+      for (auto &v : intensities)
+      {
+        v = std::abs(v - intensity_median);
+      }
+      std::nth_element(intensities.begin(), intensities.begin() + mid, intensities.end());
+      const double sigma = 1.4826 * intensities[mid];  // MAD → σ (consistency factor for Gaussian data)
+      if (sigma > 1e-3)  // uniform-surface guard: MAD ≈ 0 would flag any variation as an outlier
+      {
+        const double thresh = config_ptr_->intensity_filter_sigma_k_ * sigma;
+        points.erase(std::remove_if(points.begin(), points.end(),
+                                    [&](const pointWithVar &pv) {
+                                      return std::abs(static_cast<double>(pv.intensity) - intensity_median) > thresh;
+                                    }),
+                     points.end());
+        plane->points_size_ = points.size();
+        // Over-pruning guard, same contract as the geometric filter above
+        if (points.size() < 3)
+        {
+          plane->is_plane_ = false;
+          return;
+        }
+      }
+    }
+
+    // Pass 2: PCA over the retained points
     pcaFit(points, center, cov, evecs, evals);
     Eigen::Matrix3f::Index first_evals_min, first_evals_max;
     evals.rowwise().sum().minCoeff(&first_evals_min);
@@ -381,6 +428,19 @@ bool VoxelOctoTree::check_and_update(const pointWithVar &pv)
   return true;
 }
 
+// Insertion-time intensity gate: reject points deviating > k·σ from the plane's EMA intensity
+// statistics — runtime counterpart of the first-init MAD gate, which calibrates the statistics
+// this check consumes. Callers must invoke before the EMA update so a rejected point never
+// enters any statistic. Immaturity guard: the EMA needs a few observations before its σ is trustworthy;
+// uniform-surface guard: σ ≈ 0 would flag any variation as an outlier. O(1).
+bool VoxelOctoTree::intensity_sigma_check(const pointWithVar &pv)
+{
+  if (plane_ptr_->intensity_obs_count_ < config_ptr_->intensity_filter_min_points_) return true;
+  if (plane_ptr_->intensity_std_ <= 1e-3) return true;
+  return std::abs(static_cast<double>(pv.intensity) - plane_ptr_->mean_intensity_) <=
+         config_ptr_->intensity_filter_sigma_k_ * plane_ptr_->intensity_std_;
+}
+
 // Coplanar-disjoint-surface guard (ported from R-VoxelMap): project retained points onto the fitted plane, rasterize into a 2D grid of resolution = quater_length * 4 / valid_check_resolution, 4-connected DFS clustering, keep only the largest cluster (by point count) — smaller clusters belong to different physical surfaces that happen to be coplanar; returns false when even the largest cluster holds less than valid_check_p_threshold_ of the points
 bool VoxelOctoTree::plane_valid_check(std::vector<pointWithVar> &points, const Eigen::Vector3d &center,
                                       const Eigen::Vector3d &x_normal, const Eigen::Vector3d &y_normal)
@@ -564,9 +624,11 @@ void VoxelOctoTree::UpdateOctoTree(const pointWithVar &pv)
   {
     if (plane_ptr_->is_plane_) // Current voxel is already a plane, incremental update, periodically update plane parameters
     {
-      // R-VoxelMap check_and_update gate FIRST: reject points whose insertion would push the min eigenvalue past the planarity threshold (O(1) rank-1 trial) — a rejected point returns before touching ANY statistics, so the intensity EMA below never folds in geometry-rejected points; skipped when plane_refine_en_ is off (original behavior) and for frozen voxels (update_enable_ = false, whose intensity EMA keeps running per the freeze contract)
+      // Insertion gates run for active (non-frozen) plane voxels only — frozen voxels keep their EMA running per the freeze contract. Intensity σ pre-check FIRST (read-only, O(1)): a rejected point must not touch the incremental geometry statistics, so it returns before check_and_update mutates center_/sum_ppt_/points_size_ — otherwise the rank-1 trial would have folded a never-stored "ghost point" into the incremental statistics.
       if (update_enable_)
       {
+        // Requires plane_refine_en_: without the refine branch there is no first-init MAD calibration, so the EMA statistics this gate consumes would be polluted by never-filtered outliers — the intensity gate is strictly a sub-feature of the plane_refine_en family
+        if (config_ptr_->plane_refine_en_ && config_ptr_->intensity_filter_en_ && !intensity_sigma_check(pv)) return;
         if (config_ptr_->plane_refine_en_ && !check_and_update(pv)) return;
       }
 
@@ -621,6 +683,7 @@ void VoxelOctoTree::UpdateOctoTree(const pointWithVar &pv)
       else // Reached max layer, treat as leaf node
       {
         // EMA intensity update (always runs), same as the plane branch; no hard std floor (the 1e-3 floor at use sites prevents collapse)
+        // Scope note: non-plane leaf voxels are DELIBERATELY outside the intensity gate — no insertion gates here (nothing planar to protect). Known limitation: intensity_init_ is set by the FIRST init_plane even when it judges the voxel non-planar, so if a later re-fit flips this voxel to a plane, the insertion gate immediately consumes statistics batch-initialized on that pre-flip (non-planar, un-MAD-filtered) set instead of a fresh calibration; a stale wide σ makes the gate too permissive, a stale narrow σ over-rejects — both wash out as the EMA re-converges. Considered acceptable because the flip case is rare.
         {
           const double alpha = VoxelPlane::intensity_ema_alpha_;
           double delta = static_cast<double>(pv.intensity) - plane_ptr_->mean_intensity_;

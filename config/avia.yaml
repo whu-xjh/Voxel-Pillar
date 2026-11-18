@@ -55,6 +55,9 @@ degeneracy_adaptive:
 plane_refine_en:
   plane_refine_en: true
   init_distance_threshold: 0.1      # init_plane: drop points farther than this from the first PCA fit (m)
+  intensity_filter_en: false        # MAD gate at first init + EMA σ gate at insertion (requires plane_refine_en: true)
+  intensity_filter_sigma_k: 3.0     # outlier threshold in σ units, shared by both phases
+  intensity_filter_min_points: 5    # gate skipped below this many points (small-sample stats noisy)
   plane_valid_check_en: true        # coplanar-disjoint-surface guard (2D grid DFS clustering)
   valid_check_max_layer: 0          # run the guard only on layers with index <= this (0 = root voxel only)
   valid_check_min_points_size: 10   # min retained points to run the guard
